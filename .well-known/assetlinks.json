@@ -3,6 +3,6 @@
       "target": {
         "namespace": "android_app",
         "package_name": "io.github.mxstormbreaker.idlemmalegends",
-        "sha256_cert_fingerprints": ["FE:F2:15:D3:64:41:A6:20:E7:21:BA:BE:AC:90:2A:F0:E7:B6:A2:78:DC:73:20:9E:0F:82:11:36:62:87:76:74"]
+        "sha256_cert_fingerprints": ["03:27:AE:98:6B:22:12:98:1F:6C:98:50:9F:BA:EB:FE:06:3F:C2:6B:4B:DF:45:3A:D2:4A:E4:77:0C:C9:C0:F5"]
       }
     }]
