@@ -173,15 +173,19 @@
   }
   .fight-scene:active{ filter:brightness(1.08); }
   .hype-meter{
-    position:absolute; bottom:8px; left:8px; right:8px; z-index:6;
-    display:flex; align-items:center; gap:6px;
+    position:absolute; right:10px; top:34%; z-index:6;
+    display:flex; flex-direction:column; align-items:center; gap:4px;
+    height:38%; /* clear of the opponent's top-right name/HP card and the bottom fighter sprites */
   }
   .hype-icon{ font-size:13px; filter:drop-shadow(0 1px 2px rgba(0,0,0,0.8)); }
   .hype-track{
-    flex:1; height:6px; background:rgba(0,0,0,0.5); border-radius:4px; overflow:hidden;
+    position:relative; flex:1; width:8px; background:rgba(0,0,0,0.5); border-radius:4px; overflow:hidden;
     border:1px solid rgba(255,255,255,0.1);
   }
-  .hype-fill{ height:100%; background:linear-gradient(90deg, var(--belt-gold), var(--corner-red)); transition:width 0.2s ease; }
+  .hype-fill{
+    position:absolute; bottom:0; left:0; width:100%;
+    background:linear-gradient(0deg, var(--belt-gold), var(--corner-red)); transition:height 0.2s ease;
+  }
   .tap-hint{
     text-align:center; font-size:10px; color:var(--text-muted); margin-top:6px;
   }
@@ -1821,11 +1825,12 @@ function startBout(){
   const opponent = generateOpponent();
   // "Smash-click" hype: tapping the fight scene builds charge (0-20) that grants up to +15%
   // crit chance on the next bout, rewarding active engagement with genuinely higher win odds
-  // (crits both hit harder and can trigger bonus Teeth). Charge is partially spent per bout
-  // rather than fully drained, so a burst of clicking pays off across a few fights, not just one.
+  // (crits both hit harder and can trigger bonus Teeth). Charge now persists fully across bouts
+  // (previously cut to 40% after each win) — an actively-tapping player keeps their crit bonus
+  // built up fight after fight instead of it resetting; it only fades via the idle-decay below
+  // if they actually stop tapping for a few seconds.
   const clickBonusCrit = Math.min(0.15, (state.clickCombat.charge||0) * 0.0075);
   const result = simulateFight(effectiveStats(), opponent.stats, 12, Math.random, homePerkBonus('critPct') + clickBonusCrit);
-  if(state.clickCombat.charge > 0) state.clickCombat.charge = Math.round(state.clickCombat.charge * 0.4);
   const win = result.winner === 'a';
 
   const animBeats = buildAnimBeatsFromSim(result);
@@ -2452,7 +2457,7 @@ function renderFighterTab(){
       ` : ''}
       <div class="hype-meter" title="Tap the ring to build Hype for bonus crit chance next fight">
         <span class="hype-icon">🔥</span>
-        <div class="hype-track"><div class="hype-fill" style="width:${(hypeCharge/20)*100}%"></div></div>
+        <div class="hype-track"><div class="hype-fill" style="height:${(hypeCharge/20)*100}%"></div></div>
       </div>
     </div>
     <div class="tap-hint">👊 Tap the ring to speed up exchanges & build Hype for bonus crits</div>
@@ -5913,7 +5918,7 @@ function attachContentHandlers(){
       // Don't eat clicks meant for the result banner or other interactive elements layered on top.
       handleFightSceneClick();
       const hypeFill = fightScene.querySelector('.hype-fill');
-      if(hypeFill) hypeFill.style.width = ((state.clickCombat.charge||0)/20*100) + '%';
+      if(hypeFill) hypeFill.style.height = ((state.clickCombat.charge||0)/20*100) + '%';
     });
   }
   const rouletteFab = document.querySelector('[data-open-roulette]');
