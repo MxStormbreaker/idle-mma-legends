@@ -1,0 +1,25 @@
+{
+  "name": "Idle MMA Legends",
+  "short_name": "MMA Legends",
+  "description": "An idle MMA career sim — train, fight, gear up, and climb from Amateur to Hall of Fame.",
+  "start_url": "./index.html",
+  "scope": "./",
+  "display": "standalone",
+  "orientation": "portrait",
+  "background_color": "#0D0D12",
+  "theme_color": "#0D0D12",
+  "icons": [
+    {
+      "src": "icon-192.png",
+      "sizes": "192x192",
+      "type": "image/png",
+      "purpose": "any maskable"
+    },
+    {
+      "src": "icon-512.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "any maskable"
+    }
+  ]
+}
