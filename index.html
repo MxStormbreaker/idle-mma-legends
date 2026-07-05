@@ -8,6 +8,15 @@
 <meta name="theme-color" content="#0D0D12">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link href="https://fonts.googleapis.com/css2?family=Oswald:wght@400;500;600;700&family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+
+<!-- FIREBASE (Anonymous Auth + Firestore) — replaces the Claude.ai-only window.storage API so
+     saves/leagues/leaderboards work once this is hosted outside Claude.ai. Using the "compat"
+     build specifically because it works as plain <script> tags — no bundler/build step needed
+     for a single-file game like this. -->
+<script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-app-compat.js"></script>
+<script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-auth-compat.js"></script>
+<script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-firestore-compat.js"></script>
+
 <style>
   :root{
     --bg-floor:#0D0D12;
@@ -754,6 +763,80 @@
 </div>
 
 <script>
+/* =========================================================================
+   FIREBASE INTEGRATION — replaces window.storage (Claude.ai-only API) with a
+   Firestore-backed equivalent, matching the EXACT same get/set/list/delete
+   signature the rest of this file already calls. This means none of the
+   ~6,700 lines of game logic below need to change — they already call
+   window.storage the same way, just against a real backend now.
+
+   >>> REPLACE firebaseConfig BELOW with YOUR project's config from
+   >>> Firebase Console → Project Settings → Your apps <<<
+   ========================================================================= */
+const firebaseConfig = {
+  apiKey: "AIzaSyCmIWWiAflusbTig9oC6xGx6dMbmFUDb4g",
+  authDomain: "idle-mma-legends.firebaseapp.com",
+  projectId: "idle-mma-legends",
+  storageBucket: "idle-mma-legends.firebasestorage.app",
+  messagingSenderId: "211560350553",
+  appId: "1:211560350553:web:e54531218abff14f010248",
+};
+
+firebase.initializeApp(firebaseConfig);
+const _auth = firebase.auth();
+const _db = firebase.firestore();
+
+// Resolves once anonymous sign-in completes. bootGame() at the bottom of this file waits on
+// this before doing anything — otherwise the very first window.storage call would fire before
+// we have a uid to scope it to.
+const _authReady = new Promise((resolve, reject) => {
+  _auth.onAuthStateChanged((user) => {
+    if(user){ window._uid = user.uid; resolve(user.uid); }
+  }, reject);
+  _auth.signInAnonymously().catch(reject);
+});
+
+function _kvRef(key, shared){
+  return shared
+    ? _db.collection('shared_kv').doc(key)
+    : _db.collection('users').doc(window._uid).collection('kv').doc(key);
+}
+
+window.storage = {
+  async get(key, shared){
+    await _authReady;
+    const snap = await _kvRef(key, shared).get();
+    if(!snap.exists) throw new Error('Storage get failed: key not found');
+    return { key, value: snap.data().value, shared: !!shared };
+  },
+  async set(key, value, shared){
+    await _authReady;
+    await _kvRef(key, shared).set({ value, updatedAt: firebase.firestore.FieldValue.serverTimestamp() });
+    return { key, value, shared: !!shared };
+  },
+  async delete(key, shared){
+    await _authReady;
+    const ref = _kvRef(key, shared);
+    const snap = await ref.get();
+    const existed = snap.exists;
+    await ref.delete();
+    return { key, deleted: existed, shared: !!shared };
+  },
+  async list(prefix, shared){
+    await _authReady;
+    const coll = shared ? _db.collection('shared_kv') : _db.collection('users').doc(window._uid).collection('kv');
+    let query = coll;
+    if(prefix){
+      // Firestore has no native "starts with" query — this range trick (documented Firestore
+      // pattern) achieves the same prefix-match behavior the game's list() calls rely on.
+      query = coll.where(firebase.firestore.FieldPath.documentId(), '>=', prefix)
+                  .where(firebase.firestore.FieldPath.documentId(), '<', prefix + '\uf8ff');
+    }
+    const snap = await query.get();
+    return { keys: snap.docs.map(d => d.id), prefix, shared: !!shared };
+  },
+};
+
 /* =========================================================================
    IDLE MMA LEGENDS — CORE ENGINE (Layer 1)
    Sections: STATE -> UTIL -> GAME LOOP -> ACTIONS -> RENDER -> INIT
@@ -6679,7 +6762,12 @@ async function bootGame(){
   init();
 }
 
-bootGame();
+// Wait for Firebase Anonymous Auth before booting — otherwise loadGame()'s very first
+// window.storage.get() call would fire before we have a uid to scope the save to.
+_authReady.then(() => bootGame()).catch((e) => {
+  console.error('Firebase auth failed, cannot load save:', e);
+  bootGame(); // still boot so onboarding is at least reachable, even though saves won't work
+});
 
 // Registers sw.js for offline caching + installability (part of the path toward a Trusted Web
 // Activity Play Store listing — see the accompanying manifest.json/sw.js). Wrapped defensively:
