@@ -1684,11 +1684,11 @@ function prestigeCombatEdge(){
   return (p / PRESTIGE_WINRATE_CAP_AT) * PRESTIGE_EDGE_AT_CAP;
 }
 
-// SUPER PRESTIGE — a bigger milestone every 100 prestiges (which is also a multiple of 10, so it
+// SUPER PRESTIGE — a bigger milestone every 50 prestiges (which is also a multiple of 10, so it
 // stacks ON TOP of the regular vehicle/partner slot bonus rather than replacing it). Grants a
 // permanent, ever-growing flat stat bonus — the endgame answer to "what's still worth grinding
-// toward once gear and tiers stop feeling like the main goal." Tier N = N*100 prestiges reached.
-const SUPER_PRESTIGE_INTERVAL = 100;
+// toward once gear and tiers stop feeling like the main goal." Tier N = N*50 prestiges reached.
+const SUPER_PRESTIGE_INTERVAL = 50;
 const SUPER_PRESTIGE_STAT_BONUS_PER_TIER = 10; // +10 to ALL 8 stats per tier, permanently
 
 function superPrestigeTier(){
@@ -3117,8 +3117,8 @@ function executePrestige(){
     state.prestige.vehicleSlots++;
     state.prestige.partnerSlots++;
     if(state.prestige.count % SUPER_PRESTIGE_INTERVAL === 0){
-      // Century milestone: stacks an EXTRA slot on top of the regular every-10th bonus, plus the
-      // permanent +10-all-stats bump (applied automatically via effectiveStats/superPrestigeStatBonus).
+      // Super Prestige milestone: stacks an EXTRA slot on top of the regular every-10th bonus,
+      // plus the permanent +10-all-stats bump (applied automatically via effectiveStats/superPrestigeStatBonus).
       state.prestige.vehicleSlots++;
       state.prestige.partnerSlots++;
       const tier = superPrestigeTier();
