@@ -812,6 +812,24 @@ const firebaseConfig = {
   appId: "1:211560350553:web:e54531218abff14f010248",
 };
 
+// If the Firebase CDN scripts failed to load (blocked network, ad-blocker, no internet, or
+// viewing this file in a sandboxed preview with no external network access at all), `firebase`
+// won't exist — without this guard, the next line throws immediately and leaves the player
+// stuck on the "Loading…" screen forever with zero explanation.
+if(typeof firebase === 'undefined'){
+  const loadingEl = document.getElementById('boot-loading');
+  if(loadingEl){
+    loadingEl.innerHTML = `
+      <div class="boot-icon">⚠️</div>
+      <div style="max-width:280px; text-align:center; padding:0 16px;">
+        Couldn't reach Firebase — check your internet connection and reload.
+        <div style="font-size:11px; margin-top:10px; opacity:0.7;">(Viewing this inside a sandboxed preview instead of the live hosted site? External scripts can't load there — this is expected, not a bug in the real game.)</div>
+      </div>
+    `;
+  }
+  throw new Error('Firebase SDK failed to load — check network connectivity or ad-blocker settings for gstatic.com');
+}
+
 firebase.initializeApp(firebaseConfig);
 const _auth = firebase.auth();
 const _db = firebase.firestore();
@@ -819,12 +837,78 @@ const _db = firebase.firestore();
 // Resolves once anonymous sign-in completes. bootGame() at the bottom of this file waits on
 // this before doing anything — otherwise the very first window.storage call would fire before
 // we have a uid to scope it to.
+//
+// IMPORTANT: explicitly setting LOCAL persistence here (rather than relying on the SDK's
+// implicit default, which SHOULD already be LOCAL but wasn't being stated outright) — a TWA's
+// underlying WebView/Chrome Custom Tab can behave subtly differently around storage partitioning
+// than a normal desktop browser tab, so being explicit removes that ambiguity entirely.
 const _authReady = new Promise((resolve, reject) => {
-  _auth.onAuthStateChanged((user) => {
-    if(user){ window._uid = user.uid; resolve(user.uid); }
-  }, reject);
-  _auth.signInAnonymously().catch(reject);
+  _auth.setPersistence(firebase.auth.Auth.Persistence.LOCAL)
+    .then(() => {
+      _auth.onAuthStateChanged((user) => {
+        if(user){ window._uid = user.uid; resolve(user.uid); }
+      }, reject);
+      _auth.signInAnonymously().catch(reject);
+    })
+    .catch(reject);
 });
+
+/* ------------------------------------------------------------------------
+   GOOGLE SIGN-IN — optional upgrade from anonymous auth. Players start
+   anonymously (zero-friction, no signup wall before their first fight) and
+   can optionally LINK a Google account later for a durable identity that
+   survives reinstalls and works across devices — this does NOT replace
+   anonymous auth, both stay enabled; linking just adds a second credential
+   to the SAME uid, so existing progress carries over automatically.
+
+   Uses redirect (not popup) — popups don't have a reliable window-management
+   model inside a TWA's Custom Tab, redirect is the recommended pattern here.
+   ------------------------------------------------------------------------ */
+function isGoogleLinked(){
+  return !!(_auth.currentUser && _auth.currentUser.providerData.some(p => p.providerId === 'google.com'));
+}
+
+function linkGoogleAccount(){
+  const provider = new firebase.auth.GoogleAuthProvider();
+  _auth.currentUser.linkWithRedirect(provider).catch((e) => {
+    showToast('Could not start Google sign-in: ' + e.message);
+  });
+  // Page navigates away to Google's consent screen here — handleGoogleRedirectResult() picks up
+  // the result on the next boot, after the browser returns to this page.
+}
+
+async function handleGoogleRedirectResult(){
+  try {
+    const result = await _auth.getRedirectResult();
+    if(result && result.user){
+      showToast(`✅ Google account linked! Your progress now backs up to ${result.user.email || 'your Google account'}.`);
+      render();
+    }
+  } catch(e){
+    if(e.code === 'auth/credential-already-in-use'){
+      // This Google account already has a DIFFERENT, older linked identity with its own progress
+      // (e.g. they played on another device first). The right move is offering to switch to
+      // THAT account — restoring their real progress — rather than just failing silently.
+      const proceed = confirm(
+        "This Google account already has saved progress from another device. Sign in and use THAT progress instead? (This device's current save will be replaced.)"
+      );
+      if(proceed && e.credential){
+        try {
+          await _auth.signInWithCredential(e.credential);
+          window._uid = _auth.currentUser.uid;
+          await loadGame();
+          render();
+          showToast('✅ Restored progress from your Google account!');
+        } catch(err){
+          showToast('Could not restore progress: ' + err.message);
+        }
+      }
+    } else if(e.code && e.code !== 'auth/no-auth-event'){
+      // 'auth/no-auth-event' just means this boot wasn't a return from a redirect — not a real error.
+      showToast('Google sign-in failed: ' + e.message);
+    }
+  }
+}
 
 function _kvRef(key, shared){
   return shared
@@ -1078,6 +1162,7 @@ let state = {
     joinedAt: 0,
     weekKey: '',           // local week bucket (see getWeekKey) — resets weeklyXp when it changes
     weeklyXp: 0,           // XP earned toward the CURRENT league this week — basis for the weekly leaderboard
+    weeklyWins: 0,         // wins earned THIS WEEK, immune to prestige resets — see addWeeklyWins()
     recoveryCode: null,    // shared-storage sync code for cross-device restore (see pushRecoverySnapshot)
     role: 'member',         // this player's role in their CURRENT league: head_coach|coach|trainer|member
     gymXpContributed: 0,    // lifetime Gym XP contributed to the CURRENT league (resets on switch)
@@ -1554,8 +1639,8 @@ function effectiveStats(){
   }
   const cornerPct = cornerBonusPct();
   if(cornerPct > 0) STAT_KEYS_ALL.forEach(key => { result[key] = Math.round((result[key] || 0) * (1 + cornerPct)); });
-  const superBonus = superPrestigeStatBonus();
-  if(superBonus > 0) STAT_KEYS_ALL.forEach(key => { result[key] = (result[key] || 0) + superBonus; });
+  const prestigeBonus = prestigeStatBonus();
+  if(prestigeBonus > 0) STAT_KEYS_ALL.forEach(key => { result[key] = (result[key] || 0) + prestigeBonus; });
   return result;
 }
 
@@ -1684,27 +1769,24 @@ function prestigeCombatEdge(){
   return (p / PRESTIGE_WINRATE_CAP_AT) * PRESTIGE_EDGE_AT_CAP;
 }
 
-// SUPER PRESTIGE — a bigger milestone every 50 prestiges (which is also a multiple of 10, so it
-// stacks ON TOP of the regular vehicle/partner slot bonus rather than replacing it). Grants a
-// permanent, ever-growing flat stat bonus — the endgame answer to "what's still worth grinding
-// toward once gear and tiers stop feeling like the main goal." Tier N = N*50 prestiges reached.
-const SUPER_PRESTIGE_INTERVAL = 50;
-const SUPER_PRESTIGE_STAT_BONUS_PER_TIER = 10; // +10 to ALL 8 stats per tier, permanently
+// PRESTIGE STAT BONUS — every single prestige now grants a permanent +10 to all 8 stats,
+// stacking forever. This replaced an earlier design where only every-50th "Super Prestige"
+// milestones granted this — now it's a guaranteed baseline reward for every prestige, with
+// retention (1-3% of current stats) as a smaller bonus layered on top rather than the main event.
+const PRESTIGE_STAT_BONUS_PER_PRESTIGE = 10;
+function prestigeStatBonus(){
+  return state.prestige.count * PRESTIGE_STAT_BONUS_PER_PRESTIGE;
+}
 
-function superPrestigeTier(){
-  return Math.floor(state.prestige.count / SUPER_PRESTIGE_INTERVAL);
-}
-function superPrestigeStatBonus(){
-  return superPrestigeTier() * SUPER_PRESTIGE_STAT_BONUS_PER_TIER;
-}
-function prestigesToNextSuperTier(){
-  const next = (superPrestigeTier()+1) * SUPER_PRESTIGE_INTERVAL;
-  return next - state.prestige.count;
-}
+// SUPER PRESTIGE — now specifically the every-25th-prestige PvE-easing milestone (the stat bonus
+// above is no longer tied to this; it's a separate, always-on reward every single prestige).
+// Deliberately NOT a multiple of 10, so it no longer stacks an extra vehicle/partner slot on top
+// of the regular every-10th bonus — slots stay strictly on their own 10-prestige cadence.
+const SUPER_PRESTIGE_INTERVAL = 25;
 
 // PvE gets a little gentler with every Super Prestige tier EARNED AFTER the regular prestige
 // win-rate ramp caps out (at PRESTIGE_WINRATE_CAP_AT, currently 250) — deliberately NOT counting
-// tiers reached before that. Without this gate, prestiges 100-250 would get eased by BOTH systems
+// tiers reached before that. Without this gate, prestiges 25-250 would get eased by BOTH systems
 // at once (the win-rate ramp above AND this range compression), making that whole stretch
 // noticeably too easy. This way it's purely a post-cap, deep-endgame bonus.
 const SUPER_PRESTIGE_OPPONENT_REDUCTION_PER_TIER = 0.01;
@@ -1712,6 +1794,10 @@ const SUPER_PRESTIGE_OPPONENT_LOW_FLOOR = 0.20;
 const SUPER_PRESTIGE_OPPONENT_HIGH_FLOOR = 0.50;
 function superPrestigeDifficultyTier(){
   return Math.max(0, Math.floor((state.prestige.count - PRESTIGE_WINRATE_CAP_AT) / SUPER_PRESTIGE_INTERVAL));
+}
+function prestigesToNextSuperTier(){
+  const next = (superPrestigeDifficultyTier()+1) * SUPER_PRESTIGE_INTERVAL + PRESTIGE_WINRATE_CAP_AT;
+  return Math.max(0, next - state.prestige.count);
 }
 function superPrestigeOpponentRange(){
   const reduction = superPrestigeDifficultyTier() * SUPER_PRESTIGE_OPPONENT_REDUCTION_PER_TIER;
@@ -1788,6 +1874,7 @@ function processFightingOffline(deltaMs){
 
     if(win){
       state.fighter.wins++;
+      addWeeklyWins(1);
       ensureDailyReset();
       state.daily.winsToday++;
       const cashGain = applyCashGain((8 + state.fighter.level*2) * tier.cashMult * (isCrit?1.5:1));
@@ -1969,6 +2056,7 @@ function resolveBoutOutcome(){
 
   if(bout.outcome === 'win'){
     state.fighter.wins++;
+    addWeeklyWins(1);
     ensureDailyReset();
     state.daily.winsToday++;
     const cashGain = applyCashGain((8 + state.fighter.level*2) * tier.cashMult * (bout.isCrit?1.5:1));
@@ -2412,16 +2500,17 @@ function renderPreFightCard(fighter, opponent){
   `;
 }
 
-// Any companion who's reached Close (or Dating) stage joins the corner crew visually during
-// fights — not just a single "best" one. Capped at 3 so the left edge of the fight scene doesn't
-// get overcrowded; sorted by affection so your most invested relationships take the inner spots
-// closest to the ring, with newer Close-stage companions stacking further out toward the edge.
+// Any companion who's reached Close or better (stage 7+ out of the 10-stage arc) joins the
+// corner crew visually during fights — not just a single "best" one. Capped at 3 so the left
+// edge of the fight scene doesn't get overcrowded; sorted by affection so your most invested
+// relationships take the inner spots closest to the ring, with newer Close-stage companions
+// stacking further out toward the edge.
 const CORNER_TEAM_MAX_VISIBLE = 3;
 function getCornerTeamMembers(){
   return Object.entries(state.companions)
     .filter(([id, c]) => !c.isPartner && COMPANION_DEFS[id])
     .map(([id, c]) => ({ def: COMPANION_DEFS[id], progress: c }))
-    .filter(({def, progress}) => companionCurrentStageIndex(def, progress) >= 3) // Close or Dating
+    .filter(({def, progress}) => companionCurrentStageIndex(def, progress) >= 7) // Close or better
     .sort((a,b) => b.progress.affection - a.progress.affection)
     .slice(0, CORNER_TEAM_MAX_VISIBLE)
     .map(({def}) => def);
@@ -2548,11 +2637,11 @@ function renderFighterTab(){
       </button>
       <button class="progress-stat-btn" data-jump-tab="career">
         <div style="font-size:10px; color:var(--text-muted); text-transform:uppercase; letter-spacing:0.5px;">🔁 Prestiges</div>
-        <div style="font-family:'Oswald',sans-serif; font-weight:700; font-size:14px;">${state.prestige.count > 0 ? `★ ${state.prestige.count}` : '—'}</div>
+        <div style="font-family:'Oswald',sans-serif; font-weight:700; font-size:14px;">${state.prestige.count > 0 ? `★ ${state.prestige.count} (+${prestigeStatBonus()} stats)` : '—'}</div>
       </button>
       <button class="progress-stat-btn" data-jump-tab="career">
         <div style="font-size:10px; color:var(--text-muted); text-transform:uppercase; letter-spacing:0.5px;">🌟 Super Prestige</div>
-        <div style="font-family:'Oswald',sans-serif; font-weight:700; font-size:14px; color:var(--champ-teal);">${superPrestigeTier() > 0 ? `Tier ${superPrestigeTier()}` : '—'}</div>
+        <div style="font-family:'Oswald',sans-serif; font-weight:700; font-size:14px; color:var(--champ-teal);">${superPrestigeDifficultyTier() > 0 ? `Tier ${superPrestigeDifficultyTier()}` : '—'}</div>
       </button>
       <button class="progress-stat-btn" data-jump-tab="league">
         <div style="font-size:10px; color:var(--text-muted); text-transform:uppercase; letter-spacing:0.5px;">🏋️ Gym Level</div>
@@ -2670,22 +2759,31 @@ function renderCareerTab(){
         </div>
       </div>
     ` : ''}
-    ${superPrestigeTier() > 0 ? `
+    ${state.prestige.count > 0 ? `
+      <div class="card" style="border-color:var(--belt-gold); margin-bottom:8px;">
+        <div style="display:flex; justify-content:space-between; align-items:center;">
+          <div style="font-family:'Oswald',sans-serif; font-weight:700; font-size:14px; color:var(--belt-gold);">💪 Prestige Stat Bonus</div>
+          <div style="font-size:11px; color:var(--champ-teal);">+${prestigeStatBonus()} all stats</div>
+        </div>
+        <div style="font-size:11px; color:var(--text-muted); margin-top:4px;">Every prestige permanently adds +${PRESTIGE_STAT_BONUS_PER_PRESTIGE} to all 8 stats — this stacks forever, no cap.</div>
+      </div>
+    ` : ''}
+    ${superPrestigeDifficultyTier() > 0 ? `
       <div class="card" style="border-color:var(--champ-teal); margin-bottom:8px;">
         <div style="display:flex; justify-content:space-between; align-items:center;">
-          <div style="font-family:'Oswald',sans-serif; font-weight:700; font-size:14px; color:var(--champ-teal);">🌟 Super Prestige Tier ${superPrestigeTier()}</div>
-          <div style="font-size:11px; color:var(--belt-gold);">+${superPrestigeStatBonus()} all stats</div>
+          <div style="font-family:'Oswald',sans-serif; font-weight:700; font-size:14px; color:var(--champ-teal);">🌟 Super Prestige Tier ${superPrestigeDifficultyTier()}</div>
+          <div style="font-size:11px; color:var(--belt-gold);">PvE range ±${(superPrestigeDifficultyTier()*SUPER_PRESTIGE_OPPONENT_REDUCTION_PER_TIER*100).toFixed(0)}% tighter</div>
         </div>
-        <div style="font-size:11px; color:var(--text-muted); margin-top:4px;">${prestigesToNextSuperTier()} more prestige${prestigesToNextSuperTier()===1?'':'s'} to Tier ${superPrestigeTier()+1}</div>
+        <div style="font-size:11px; color:var(--text-muted); margin-top:4px;">${prestigesToNextSuperTier()} more prestige${prestigesToNextSuperTier()===1?'':'s'} to Tier ${superPrestigeDifficultyTier()+1}</div>
         <div style="display:flex; flex-wrap:wrap; align-items:center; gap:5px; margin-top:8px;">
-          ${superPrestigeTier() > 10 ? `<span style="font-size:10px; color:var(--text-muted);">+${superPrestigeTier()-10} earlier •</span>` : ''}
-          ${Array.from({length: Math.min(10, superPrestigeTier())}, (_, i) => superPrestigeTier() - Math.min(10, superPrestigeTier()) + i + 1).map(n => `
+          ${superPrestigeDifficultyTier() > 10 ? `<span style="font-size:10px; color:var(--text-muted);">+${superPrestigeDifficultyTier()-10} earlier •</span>` : ''}
+          ${Array.from({length: Math.min(10, superPrestigeDifficultyTier())}, (_, i) => superPrestigeDifficultyTier() - Math.min(10, superPrestigeDifficultyTier()) + i + 1).map(n => `
             <span style="font-family:'Oswald',sans-serif; font-size:10px; font-weight:700; color:#082624; background:var(--champ-teal); padding:3px 8px; border-radius:999px;">SP:${n}</span>
           `).join('')}
         </div>
       </div>
     ` : (state.prestige.count > 0 ? `
-      <div class="card empty-state" style="padding:14px; margin-bottom:8px;">🌟 Reach prestige ${SUPER_PRESTIGE_INTERVAL} for your first Super Prestige tier: a permanent +${SUPER_PRESTIGE_STAT_BONUS_PER_TIER}-to-all-stats bonus plus an extra vehicle/partner slot, stacking every ${SUPER_PRESTIGE_INTERVAL} prestiges after that.</div>
+      <div class="card empty-state" style="padding:14px; margin-bottom:8px;">🌟 Reach prestige ${PRESTIGE_WINRATE_CAP_AT + SUPER_PRESTIGE_INTERVAL} for your first Super Prestige tier: PvE opponent power range narrows ${(SUPER_PRESTIGE_OPPONENT_REDUCTION_PER_TIER*100).toFixed(0)}% tighter on both ends, stacking every ${SUPER_PRESTIGE_INTERVAL} prestiges after that. (Held back until prestige ${PRESTIGE_WINRATE_CAP_AT} specifically so it doesn't double up with the win-rate ramp that's already easing things during your early prestiges.)</div>
     ` : '')}
     <div class="card" style="${eligible ? 'border-color:var(--belt-gold);' : ''}">
       <div style="font-size:13px; color:${eligible?'var(--text-main)':'var(--text-muted)'};">
@@ -3068,7 +3166,7 @@ function purchasePowerUp(key){
 }
 
 // Executes a prestige reset: retains 1-3% (boosted by the Iron Will power-up) of current stat
-// points, resets career/cash/gear/loot, but keeps companions, power-ups, and cosmetics.
+// points, resets career/cash/gear/loot/Corner progress, but keeps power-ups and cosmetics.
 // Every 10th prestige permanently unlocks an extra vehicle slot and partner slot.
 //
 // Retention breakpoints (150/300/600) are based on wins earned SINCE reaching Hall of Fame, NOT
@@ -3113,22 +3211,24 @@ function executePrestige(){
 
   state.prestige.count++;
   state.prestige.retainedStats = retained;
-  if(state.prestige.count % 10 === 0){
+  const slotMilestone = state.prestige.count % 10 === 0;
+  if(slotMilestone){
     state.prestige.vehicleSlots++;
     state.prestige.partnerSlots++;
-    if(state.prestige.count % SUPER_PRESTIGE_INTERVAL === 0){
-      // Super Prestige milestone: stacks an EXTRA slot on top of the regular every-10th bonus,
-      // plus the permanent +10-all-stats bump (applied automatically via effectiveStats/superPrestigeStatBonus).
-      state.prestige.vehicleSlots++;
-      state.prestige.partnerSlots++;
-      const tier = superPrestigeTier();
-      pushLog(`🌟 SUPER PRESTIGE #${state.prestige.count}! Tier ${tier} reached — +${SUPER_PRESTIGE_STAT_BONUS_PER_TIER} to all stats permanently, +2 vehicle/partner slots.`, 'level');
-      showToast(`🌟 SUPER PRESTIGE! Tier ${tier} — permanent stat bonus increased!`);
-    } else {
-      showToast(`Prestige ${state.prestige.count}! New vehicle + partner slot unlocked!`);
-    }
+  }
+  // Super Prestige fanfare only fires when the PvE-easing tier ACTUALLY increments — which, due
+  // to the gate above, first happens at prestige 275 (250 + the first 25-interval step), not at
+  // every raw multiple of 25. Being a multiple of 25 alone doesn't yet mean anything changed.
+  const pastRampCap = state.prestige.count > PRESTIGE_WINRATE_CAP_AT;
+  const superPrestigeMilestone = pastRampCap && (state.prestige.count - PRESTIGE_WINRATE_CAP_AT) % SUPER_PRESTIGE_INTERVAL === 0;
+  if(superPrestigeMilestone){
+    const tier = superPrestigeDifficultyTier();
+    pushLog(`🌟 SUPER PRESTIGE #${state.prestige.count}! Tier ${tier} reached — PvE opponent range narrows further. +${PRESTIGE_STAT_BONUS_PER_PRESTIGE} to all stats permanently, as with every prestige.`, 'level');
+    showToast(`🌟 SUPER PRESTIGE! Tier ${tier} — PvE range tightened!`);
+  } else if(slotMilestone){
+    showToast(`Prestige ${state.prestige.count}! New vehicle + partner slot, +${PRESTIGE_STAT_BONUS_PER_PRESTIGE} to all stats.`);
   } else {
-    showToast(`Prestiged! Carrying forward a fraction of your stats.`);
+    showToast(`Prestiged! +${PRESTIGE_STAT_BONUS_PER_PRESTIGE} to all stats permanently, plus a fraction of your current stats carried forward.`);
   }
 
   // Reset career/fighter progress, but keep retained stats, power-ups, companions, cosmetics.
@@ -3149,6 +3249,13 @@ function executePrestige(){
   state.economy.cash = 50 + startCashBonus;
   Object.values(state.gym).forEach(g => g.level = 0);
   Object.values(state.homePerks).forEach(p => p.level = 0);
+
+  // Corner (companion affection) progress resets too — deliberately, since rebuilding it is
+  // comparatively low-cost/fast next to career/gear, and the whole point of expanding to a
+  // 10-tier arc was to give each prestige cycle its own relationship-building project rather
+  // than a bonus that, once maxed, just sits there permanently forever after one playthrough.
+  state.companions = {};
+  state.activePartnerId = null;
 
   pushLog(`🌟 PRESTIGED (#${state.prestige.count})! Stats reset with ${Math.round(retainPct*100)}% retained.`, 'level');
   render();
@@ -3269,6 +3376,7 @@ function applyRoulettePrize(segment){
         state.economy.cash += applyCashGain((8 + state.fighter.level*2) * tier.cashMult);
         gainXp(Math.round(10 * tier.xpMult));
       }
+      addWeeklyWins(10);
       const newTier = currentTier();
       if(newTier.name !== state.fighter.tier) state.fighter.tier = newTier.name;
       return `+10 Wins credited instantly (with cash & XP)`;
@@ -4259,7 +4367,11 @@ function currentTenureTier(){
 // Curve is deliberately steep (3x the original) specifically so a single very active gym can't
 // blow through the whole named-tier ladder in a day or two — climbing should feel like a
 // multi-day-to-multi-week project, not something that maxes out on day one.
-function gymXpForLevel(level){ return 1500 * level * level; } // cumulative XP needed to REACH this level
+function gymXpForLevel(level){ return 600 * level * level; } // cumulative XP needed to REACH this level
+// Retuned alongside the 10-tier daily quest expansion below — together these hit roughly:
+// Level 10 in ~2-4 days, Level 50 in ~60-90 days, Level 100 in ~4-11 months, across a realistic
+// 30-40 daily-active-member gym. Was 1500 (way steeper) before this pass — at that rate, even a
+// fairly active 20-member gym was looking at 586+ days just to reach Level 50.
 
 // Named milestones layered on top of the raw level number, so "Gym Level 37" also reads as
 // something like "Regional Powerhouse" — gives the climb real texture instead of just a number
@@ -4300,15 +4412,22 @@ function gymLevelBonusPct(){
   return Math.min(0.20, Math.max(0, (state.social.knownGymLevel||1) - 1) * 0.004);
 }
 
-// Daily quests are now a fixed 5-tier ladder, shown in full every day (not a random 3-of-7 pick).
-// Each tier escalates in difficulty, cash/Teeth reward, AND Gym XP contribution — so pushing
-// through all 5 in one day is a real, escalating payoff, not just 3 flat, same-value quests.
+// Daily quests are now a fixed 10-tier ladder (expanded from 5), shown in full every day (not a
+// random pick). Each tier escalates in difficulty, cash/Teeth reward, AND Gym XP contribution —
+// doubling the ladder depth roughly doubles the daily Gym XP a fully-active player can generate,
+// which combined with the retuned gymXpForLevel curve above is what actually fixes gym-leveling
+// pacing — quest COUNT alone wouldn't have been enough without also softening the XP curve.
 const DAILY_QUEST_TIERS = [
-  { tier:1, id:'tier1', label:'Win 5 fights',             type:'winsToday',  goal:5,    rewardCash:150, rewardTeeth:0, gymXp:20  },
-  { tier:2, id:'tier2', label:'Complete 15 training reps',type:'trainToday', goal:15,   rewardCash:250, rewardTeeth:1, gymXp:35  },
-  { tier:3, id:'tier3', label:'Earn $1,200 from fights',  type:'cashToday',  goal:1200, rewardCash:0,   rewardTeeth:2, gymXp:55  },
-  { tier:4, id:'tier4', label:'Land 8 knockouts',         type:'critsToday', goal:8,    rewardCash:600, rewardTeeth:3, gymXp:80  },
-  { tier:5, id:'tier5', label:'Win 30 fights',            type:'winsToday',  goal:30,   rewardCash:0,   rewardTeeth:6, gymXp:130 },
+  { tier:1,  id:'tier1',  label:'Win 5 fights',              type:'winsToday',  goal:5,    rewardCash:100, rewardTeeth:0, gymXp:15  },
+  { tier:2,  id:'tier2',  label:'Complete 15 training reps', type:'trainToday', goal:15,   rewardCash:150, rewardTeeth:1, gymXp:25  },
+  { tier:3,  id:'tier3',  label:'Win 15 fights',             type:'winsToday',  goal:15,   rewardCash:200, rewardTeeth:0, gymXp:30  },
+  { tier:4,  id:'tier4',  label:'Complete 40 training reps', type:'trainToday', goal:40,   rewardCash:350, rewardTeeth:1, gymXp:45  },
+  { tier:5,  id:'tier5',  label:'Earn $1,000 from fights',   type:'cashToday',  goal:1000, rewardCash:0,   rewardTeeth:2, gymXp:40  },
+  { tier:6,  id:'tier6',  label:'Land 6 knockouts',          type:'critsToday', goal:6,    rewardCash:400, rewardTeeth:2, gymXp:55  },
+  { tier:7,  id:'tier7',  label:'Earn $3,000 from fights',   type:'cashToday',  goal:3000, rewardCash:0,   rewardTeeth:3, gymXp:70  },
+  { tier:8,  id:'tier8',  label:'Land 18 knockouts',         type:'critsToday', goal:18,   rewardCash:900, rewardTeeth:4, gymXp:100 },
+  { tier:9,  id:'tier9',  label:'Win 25 fights',             type:'winsToday',  goal:25,   rewardCash:0,   rewardTeeth:4, gymXp:90  },
+  { tier:10, id:'tier10', label:'Win 70 fights',             type:'winsToday',  goal:70,   rewardCash:0,   rewardTeeth:8, gymXp:160 },
 ];
 
 function getDateKey(d = new Date()){
@@ -4329,6 +4448,20 @@ function ensureWeeklyReset(){
   if(state.social.weekKey === wk) return;
   state.social.weekKey = wk;
   state.social.weeklyXp = 0;
+  state.social.weeklyWins = 0; // tracked separately from state.fighter.wins specifically because
+                                 // THAT resets on prestige mid-week — see addWeeklyWins() below.
+}
+
+// Wins earned THIS CALENDAR WEEK, immune to prestige resets — unlike state.fighter.wins (which
+// resets to 0 every prestige), this is the correct basis for the Gym Wars plausibility check.
+// Real bug this fixes: pushWeeklyStats() used to submit state.fighter.wins/level (tiny right
+// after a prestige) alongside state.social.weeklyXp (correctly NOT reset by prestige, since it's
+// week-scoped) — comparing a post-prestige near-zero wins count against a full week's
+// accumulated XP guaranteed a false "implausible" flag on every prestige.
+function addWeeklyWins(n){
+  if(!state.social.leagueId) return;
+  ensureWeeklyReset();
+  state.social.weeklyWins = (state.social.weeklyWins||0) + n;
 }
 
 // Resets daily counters + rolls new quests whenever the local date changes. Cheap to call often —
@@ -4344,7 +4477,7 @@ function ensureDailyReset(){
   state.daily.trainToday = 0;
   state.daily.questProgress = {};
   state.daily.questsClaimed = [];
-  state.daily.questIds = DAILY_QUEST_TIERS.map(q => q.id); // fixed 5-tier ladder, same every day
+  state.daily.questIds = DAILY_QUEST_TIERS.map(q => q.id); // fixed 10-tier ladder, same every day
   state.daily.spendUSD = 0;
   if(!isFirstEver){
     fireLocalNotification('🎯 New Daily Quests!', 'Fresh quests are up in the League tab.');
@@ -4607,8 +4740,7 @@ async function pushWeeklyStats(){
     await window.storage.set(key, JSON.stringify({
       name: state.social.displayName,
       weeklyXp: state.social.weeklyXp,
-      wins: state.fighter.wins,
-      level: state.fighter.level,
+      wins: state.social.weeklyWins || 0, // week-scoped, survives prestige — NOT state.fighter.wins
       updatedAt: Date.now(),
     }), true);
     lastWeeklyPushAt = Date.now();
@@ -4616,10 +4748,18 @@ async function pushWeeklyStats(){
 }
 
 // Rough plausibility ceiling: even a very active, fully-boosted week of nonstop play tops out
-// somewhere in the low thousands of XP. Self-reported numbers far beyond what reported
-// wins/level could plausibly produce get flagged for display — not removed.
+// somewhere in the low thousands of XP. Self-reported numbers far beyond what reported weekly
+// wins could plausibly produce get flagged for display — not removed.
+//
+// FIXED BUG: this used to also factor in state.fighter.level, and pushWeeklyStats() used to
+// submit state.fighter.wins directly — both reset to near-zero on every prestige, while
+// weeklyXp correctly does NOT (it's week-scoped, meant to span multiple prestiges within the
+// same week). That meant EVERY prestige briefly compared a tiny post-reset wins/level count
+// against a full week's already-earned XP, guaranteeing a false "implausible" flag right after
+// prestiging. Now based entirely on weeklyWins (see addWeeklyWins), which is itself week-scoped
+// and immune to prestige resets, so it stays valid across any number of prestiges mid-week.
 function isImplausibleWeeklyEntry(entry){
-  const plausibleCap = Math.max(600, (entry.wins||0) * 40 + (entry.level||0) * 25);
+  const plausibleCap = Math.max(600, (entry.wins||0) * 40);
   return (entry.weeklyXp||0) > plausibleCap * 3;
 }
 
@@ -5294,7 +5434,7 @@ function renderLeagueTab(){
   `;
 
   const questsHtml = `
-    <div class="panel-title">Daily Quests <span style="color:var(--text-muted); font-size:11px;">(5-tier ladder, resets daily, same for everyone)</span></div>
+    <div class="panel-title">Daily Quests <span style="color:var(--text-muted); font-size:11px;">(10-tier ladder, resets daily, same for everyone)</span></div>
     ${state.daily.questIds.map(id => {
       const quest = questDef(id);
       if(!quest) return '';
@@ -5550,7 +5690,7 @@ function renderLeagueTab(){
           <div style="font-family:'Oswald',sans-serif; font-weight:700; color:var(--text-muted); width:18px; flex-shrink:0;">${i+1}</div>
           <div style="min-width:0;">
             <div style="font-size:13px; font-weight:600; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;">${escapeHtml(e.name||'Unnamed')}${e.flagged ? ' ⚠️' : ''}</div>
-            ${e.flagged ? `<div style="font-size:10px; color:var(--corner-red);">Flagged: implausible for reported wins/level</div>` : ''}
+            ${e.flagged ? `<div style="font-size:10px; color:var(--corner-red);">Flagged: implausible for reported weekly wins</div>` : ''}
           </div>
         </div>
         <div style="font-family:'Oswald',sans-serif; font-weight:700; color:var(--belt-gold); flex-shrink:0;">${fmtNum(e.weeklyXp||0)}</div>
@@ -5906,6 +6046,21 @@ function renderHomeTab(){
       </div>
     </div>
 
+    <div class="card">
+      <div style="font-size:13px; font-weight:600;">☁️ Cloud Backup</div>
+      ${isGoogleLinked() ? `
+        <div style="font-size:11px; color:var(--champ-teal); margin-top:6px;">✅ Linked as ${escapeHtml(_auth.currentUser.email || 'your Google account')}</div>
+        <div style="font-size:11px; color:var(--text-muted); margin-top:4px;">Your progress survives reinstalls and works across any device you sign into.</div>
+      ` : `
+        <div style="font-size:11px; color:var(--text-muted); margin-top:6px;">
+          Right now your save only lives on this device — uninstalling or switching phones loses it.
+          Link a Google account to back it up for real, no downside: you keep playing exactly as
+          you are, this just adds a safety net.
+        </div>
+        <button class="btn btn-teal btn-block" style="margin-top:8px;" data-link-google>Link Google Account</button>
+      `}
+    </div>
+
     <div class="panel-title">Dev Code</div>
     <div class="card">
       <div style="font-size:11px; color:var(--text-muted); margin-bottom:8px;">Have a code? Redeem it here for early stat boosts.</div>
@@ -5933,37 +6088,57 @@ function renderHomeTab(){
 /* ========================================================================
    COMPANIONS MODULE
    ======================================================================== */
-// Generates the 5-stage affection story arc for a companion, parameterized by role and name
+// Generates the 10-stage affection story arc for a companion, parameterized by role and name
 // so the roster can scale to many companions without hand-writing every line of dialogue.
 // Each role has a distinct narrative flavor; names/pronouns are substituted in per-companion.
+// Expanded from 5 to 10 stages (and thresholds scaled up ~4.6x at the top) specifically so maxing
+// out a relationship is a genuine long-term project again, especially now that Corner progress
+// resets on prestige — a 5-stage/140-affection arc would have been trivially fast to redo each cycle.
 function buildCompanionStages(name, role, pronoun){
   const firstName = name.split(' ')[0];
   const p = pronoun; // 'her' | 'him'
+  const she = p === 'her' ? 'she' : 'he';
+  const She = p === 'her' ? 'She' : 'He';
   const TEMPLATES = {
     coach: [
       `${firstName} watches your training from across the gym, arms crossed, saying nothing.`,
-      `"Your footwork's sloppy," ${firstName} says, stepping in to correct your stance. It's the first time ${p==='her'?'she':'he'}'s bothered.`,
-      `${firstName} starts staying late to run extra pads with you. ${p==='her'?'She':'He'} still won't admit ${p==='her'?'she':'he'} enjoys it.`,
-      `"You're not terrible to be around," ${firstName} admits, almost smiling. ${p==='her'?'She':'He'} lingers longer than ${p==='her'?'she':'he'} needs to.`,
+      `"Your footwork's sloppy," ${firstName} says, stepping in to correct your stance. It's the first time ${she}'s bothered.`,
+      `${firstName} starts nodding at you across the gym floor now — a real acknowledgment, not just a glance.`,
+      `${firstName} starts staying late to run extra pads with you. ${She} still won't admit ${she} enjoys it.`,
+      `"You've actually gotten better," ${firstName} admits — the closest thing to a compliment ${she}'s ever given you.`,
+      `${firstName} shows up outside scheduled hours "to check the equipment," conveniently while you're training.`,
+      `"You're not terrible to be around," ${firstName} admits, almost smiling. ${She} lingers longer than ${she} needs to.`,
+      `${firstName} catches your eye across the gym and doesn't look away first, for once.`,
       `${firstName} laces your gloves before your next fight and presses a kiss to your cheek. "Don't make me regret this, champ."`,
+      `${firstName} shows up to every fight now, front row, and doesn't pretend it's just professional anymore.`,
     ],
     trainer: [
       `${firstName} clocks your reps from the corner of the room, clipboard in hand, expression unreadable.`,
       `"That's three sets short," ${firstName} says, adjusting your form with surprising gentleness for someone so exacting.`,
-      `${firstName} starts texting you workout tweaks at odd hours. You suspect ${p==='her'?'she':'he'} thinks about your program more than ${p==='her'?'she':'he'} lets on.`,
+      `${firstName} starts greeting you by name instead of just pointing at the next station.`,
+      `${firstName} starts texting you workout tweaks at odd hours. You suspect ${she} thinks about your program more than ${she} lets on.`,
+      `"You're actually keeping up now," ${firstName} says, and it might be the nicest thing ${she}'s ever told you.`,
+      `${firstName} starts saving you a spot at ${she==='she'?'her':'his'} usual station without being asked.`,
       `"I don't usually do this," ${firstName} says, sitting closer than strictly necessary to review your progress chart.`,
+      `${firstName} brings two coffees to your session now, and one's always exactly how you take it.`,
       `${firstName} shows up to your fight in the front row, mouths "you've got this," and means every word.`,
+      `${firstName} starts introducing you as "mine" to the other trainers, then pretends ${she} didn't say it.`,
     ],
     nutritionist: [
       `${firstName} hands you a meal plan without much eye contact and walks off before you can ask questions.`,
       `"You actually followed it this time," ${firstName} says, genuinely surprised, checking your log over a coffee.`,
+      `${firstName} starts remembering your usual order before you say a word.`,
       `${firstName} starts packing an extra meal "by accident" whenever you're both at the gym kitchen.`,
-      `"I made this one specifically for you," ${firstName} admits, sliding over a container ${p==='her'?'she':'he'} clearly spent real time on.`,
+      `"I actually look forward to these check-ins," ${firstName} admits, like the words surprised ${she===`she`?'her':'him'} too.`,
+      `${firstName} starts texting you recipe ideas that are suspiciously tailored to exactly what you like.`,
+      `"I made this one specifically for you," ${firstName} admits, sliding over a container ${she} clearly spent real time on.`,
+      `${firstName} shows up with your favorite pre-fight snack before you even mention feeling nervous.`,
       `${firstName} cooks you a full pre-fight dinner and stays to watch you eat every bite. "Now go win."`,
+      `${firstName} starts planning meals for two without asking first, and neither of you mentions it.`,
     ],
   };
-  const titles = ['Stranger','Acquaintance','Friend','Close','Dating'];
-  const thresholds = [0,20,50,90,140];
+  const titles = ['Stranger','Acquaintance','Friendly','Close Friend','Trusted Friend','Warming Up','Mutual Spark','Close','Dating','Devoted'];
+  const thresholds = [0, 30, 70, 120, 180, 250, 330, 420, 520, 650];
   return thresholds.map((threshold,i) => ({ threshold, title:titles[i], text:TEMPLATES[role][i] }));
 }
 
@@ -5996,7 +6171,8 @@ const ROLE_TAGLINES = {
   nutritionist: d => `Your nutritionist. Knows your macros better than you do.`,
 };
 const ROLE_COOLDOWN = { coach:20000, trainer:20000, nutritionist:20000 };
-const ROLE_AFFECTION = { coach:{chat:4,gift:14}, trainer:{chat:4,gift:14}, nutritionist:{chat:4,gift:14} };
+const ROLE_SPAR_COOLDOWN = { coach:60000, trainer:60000, nutritionist:60000 }; // 3x chat's cooldown
+const ROLE_AFFECTION = { coach:{chat:4,gift:14,spar:9}, trainer:{chat:4,gift:14,spar:9}, nutritionist:{chat:4,gift:14,spar:9} };
 
 function slugify(name){ return name.toLowerCase().replace(/[^a-z]+/g,'_').replace(/^_|_$/g,''); }
 
@@ -6017,7 +6193,9 @@ ROSTER_SEED.forEach(seed => {
     statTrait: seed.statTrait,
     affectionPerChat: ROLE_AFFECTION[seed.role].chat,
     affectionPerGift: ROLE_AFFECTION[seed.role].gift,
+    affectionPerSpar: ROLE_AFFECTION[seed.role].spar,
     chatCooldownMs: ROLE_COOLDOWN[seed.role],
+    sparCooldownMs: ROLE_SPAR_COOLDOWN[seed.role],
     stages: buildCompanionStages(seed.name, seed.role, seed.pronoun),
   };
 });
@@ -6033,7 +6211,7 @@ function visibleCompanions(){
 
 function getCompanionProgress(id){
   if(!state.companions[id]){
-    state.companions[id] = { affection:0, stage:0, lastChatAt:0, isPartner:false };
+    state.companions[id] = { affection:0, stage:0, lastChatAt:0, lastSparAt:0, isPartner:false };
   }
   return state.companions[id];
 }
@@ -6057,7 +6235,7 @@ function companionCurrentStageIndex(def, progress){
 // the only existing reward was a one-time flat stat bump on reaching Dating/partner status, with
 // nothing at all for the earlier stages. This adds real, ongoing incentive to invest in every
 // relationship, not just whichever one you pick as a partner.
-const CORNER_STAGE_BONUS_PCT = [0, 0.005, 0.01, 0.02, 0.04]; // Stranger/Acquaintance/Friend/Close/Dating
+const CORNER_STAGE_BONUS_PCT = [0, 0.002, 0.004, 0.006, 0.01, 0.014, 0.018, 0.024, 0.03, 0.05]; // Stranger..Devoted (10 tiers)
 const CORNER_BONUS_CAP_PCT = 0.25;
 
 function cornerBonusPct(){
@@ -6091,10 +6269,34 @@ function chatWithCompanion(id){
   scheduleSave();
 }
 
+// Second free interaction alongside Chat — longer cooldown (3x), bigger affection payoff, so
+// there's a genuine choice between "check in often" and "commit to a longer session" rather than
+// gifts being the only alternative to spamming Chat.
+function sparWithCompanion(id){
+  const def = COMPANION_DEFS[id];
+  const progress = getCompanionProgress(id);
+  const now = Date.now();
+  if(now - (progress.lastSparAt||0) < def.sparCooldownMs){
+    const waitSec = Math.ceil((def.sparCooldownMs - (now - (progress.lastSparAt||0)))/1000);
+    showToast(`${def.name.split(' ')[0]} needs a breather — try again in ${waitSec}s`);
+    return;
+  }
+  progress.lastSparAt = now;
+  applyAffectionGain(id, def.affectionPerSpar);
+  pushLog(`Sparred with ${def.name.split(' ')[0]} (+${def.affectionPerSpar} affection)`, 'level');
+  render();
+  scheduleSave();
+}
+
 const GIFT_OPTIONS = [
+  { key:'letter',  label:'💌 Handwritten Letter', cost:10 },
+  { key:'cake',    label:'🎂 Cake', cost:25 },
   { key:'flowers', label:'🌹 Flowers', cost:25 },
+  { key:'dinner',  label:'🍲 Home-Cooked Dinner', cost:45 },
   { key:'gear',    label:'🥊 Custom Gear', cost:60 },
+  { key:'tickets', label:'🎫 Concert Tickets', cost:90 },
   { key:'jewelry', label:'💎 Jewelry', cost:140 },
+  { key:'trip',    label:'✈️ Weekend Getaway', cost:220 },
 ];
 
 function giveGiftToCompanion(id, giftKey){
@@ -6167,11 +6369,11 @@ function renderCompanionsTab(){
         Every companion contributes a stat bonus based on how close you are, stacking across
         everyone in your corner (not just your partner) — capped at +${(CORNER_BONUS_CAP_PCT*100).toFixed(0)}%.
       </div>
-      <div style="display:flex; justify-content:space-between; margin-top:8px; font-size:10px; color:var(--text-muted);">
-        ${['Stranger','Acquaint.','Friend','Close','Dating'].map((label,i) => `
-          <div style="text-align:center; flex:1;">
-            <div>${label}</div>
-            <div style="color:var(--champ-teal); font-weight:600;">+${(CORNER_STAGE_BONUS_PCT[i]*100).toFixed(1)}%</div>
+      <div style="display:grid; grid-template-columns:1fr 1fr; gap:4px 12px; margin-top:8px; font-size:10px; color:var(--text-muted);">
+        ${['Stranger','Acquaintance','Friendly','Close Friend','Trusted Friend','Warming Up','Mutual Spark','Close','Dating','Devoted'].map((label,i) => `
+          <div style="display:flex; justify-content:space-between;">
+            <span>${label}</span>
+            <span style="color:var(--champ-teal); font-weight:600;">+${(CORNER_STAGE_BONUS_PCT[i]*100).toFixed(1)}%</span>
           </div>
         `).join('')}
       </div>
@@ -6226,6 +6428,8 @@ function renderCompanionProfile(id){
   const now = Date.now();
   const onCooldown = (now - progress.lastChatAt) < def.chatCooldownMs;
   const cooldownSec = onCooldown ? Math.ceil((def.chatCooldownMs - (now - progress.lastChatAt))/1000) : 0;
+  const onSparCooldown = (now - (progress.lastSparAt||0)) < def.sparCooldownMs;
+  const sparCooldownSec = onSparCooldown ? Math.ceil((def.sparCooldownMs - (now - (progress.lastSparAt||0)))/1000) : 0;
 
   return `
     <button class="btn btn-ghost" data-companion-back style="margin-bottom:10px;">← Back to Corner</button>
@@ -6243,6 +6447,9 @@ function renderCompanionProfile(id){
     <div class="panel-title">Spend Time</div>
     <button class="btn ${onCooldown ? 'btn-ghost' : 'btn-teal'} btn-block" data-companion-chat="${id}" ${onCooldown?'disabled':''}>
       💬 Chat ${onCooldown ? `(${cooldownSec}s)` : `(+${def.affectionPerChat} affection)`}
+    </button>
+    <button class="btn ${onSparCooldown ? 'btn-ghost' : 'btn-teal'} btn-block" style="margin-top:6px;" data-companion-spar="${id}" ${onSparCooldown?'disabled':''}>
+      🥊 Spar Together ${onSparCooldown ? `(${sparCooldownSec}s)` : `(+${def.affectionPerSpar} affection)`}
     </button>
 
     <div class="panel-title">Gifts</div>
@@ -6293,6 +6500,9 @@ function attachContentHandlers(){
   });
   document.querySelectorAll('[data-companion-chat]').forEach(btn => {
     btn.addEventListener('click', () => chatWithCompanion(btn.dataset.companionChat));
+  });
+  document.querySelectorAll('[data-companion-spar]').forEach(btn => {
+    btn.addEventListener('click', () => sparWithCompanion(btn.dataset.companionSpar));
   });
   document.querySelectorAll('[data-companion-gift]').forEach(btn => {
     btn.addEventListener('click', () => giveGiftToCompanion(btn.dataset.companionGift, btn.dataset.giftKey));
@@ -6363,7 +6573,7 @@ function attachContentHandlers(){
   const prestigeBtn = document.querySelector('[data-do-prestige]');
   if(prestigeBtn){
     prestigeBtn.addEventListener('click', () => {
-      showConfirm('Prestige Now?', 'This resets your career, cash, and gear — but keeps companions, power-ups, and cosmetics, and carries forward a percentage of your stats based on total wins.', () => {
+      showConfirm('Prestige Now?', `This resets your career, cash, gear, and Corner relationship progress — but keeps power-ups and cosmetics, adds a permanent +${PRESTIGE_STAT_BONUS_PER_PRESTIGE} to all stats, and carries forward a percentage of your current stats based on wins since Hall of Fame.`, () => {
         executePrestige();
         offerPrestigeReroll();
       });
@@ -6439,6 +6649,10 @@ function attachContentHandlers(){
       if(state.settings.notificationsEnabled) disableNotifications();
       else requestNotificationPermission();
     });
+  }
+  const linkGoogleBtn = document.querySelector('[data-link-google]');
+  if(linkGoogleBtn){
+    linkGoogleBtn.addEventListener('click', linkGoogleAccount);
   }
   const devCodeSubmit = document.getElementById('dev-code-submit');
   if(devCodeSubmit){
@@ -7278,7 +7492,10 @@ async function bootGame(){
 
 // Wait for Firebase Anonymous Auth before booting — otherwise loadGame()'s very first
 // window.storage.get() call would fire before we have a uid to scope the save to.
-_authReady.then(() => bootGame()).catch((e) => {
+_authReady.then(async () => {
+  await handleGoogleRedirectResult(); // no-op unless we're returning from a Google sign-in redirect
+  bootGame();
+}).catch((e) => {
   console.error('Firebase auth failed, cannot load save:', e);
   bootGame(); // still boot so onboarding is at least reachable, even though saves won't work
 });
