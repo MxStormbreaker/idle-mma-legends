@@ -1,46 +1,7529 @@
-// Minimal offline-cache service worker for Idle MMA Legends.
-// Only useful once this is hosted on a real HTTPS origin — browsers refuse to register service
-// workers for sandboxed/preview contexts (like an artifact iframe), so this is inert there.
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+<title>Idle MMA Legends</title>
+<link rel="manifest" href="manifest.json">
+<meta name="theme-color" content="#0D0D12">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Oswald:wght@400;500;600;700&family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+
+<!-- FIREBASE (Anonymous Auth + Firestore) — replaces the Claude.ai-only window.storage API so
+     saves/leagues/leaderboards work once this is hosted outside Claude.ai. Using the "compat"
+     build specifically because it works as plain <script> tags — no bundler/build step needed
+     for a single-file game like this. -->
+<script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-app-compat.js"></script>
+<script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-auth-compat.js"></script>
+<script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-firestore-compat.js"></script>
+
+<style>
+  :root{
+    --bg-floor:#0D0D12;
+    --bg-panel:#1A1A24;
+    --bg-panel-raised:#22222E;
+    --corner-red:#E8483C;
+    --corner-red-dim:#5C2620;
+    --belt-gold:#F2C744;
+    --champ-teal:#2DD4BF;
+    --text-main:#F2F0EC;
+    --text-muted:#9494A8;
+    --border-soft:#2C2C3A;
+    --danger:#E8483C;
+    --success:#2DD4BF;
+  }
+  *{box-sizing:border-box; -webkit-tap-highlight-color:transparent;}
+  html,body{
+    margin:0; padding:0; height:100%; background:var(--bg-floor);
+    color:var(--text-main); font-family:'Inter',sans-serif;
+    overflow:hidden;
+  }
+  #app{
+    max-width:480px; margin:0 auto; height:100vh; height:100dvh;
+    display:flex; flex-direction:column; background:var(--bg-floor);
+    position:relative; border-left:1px solid var(--border-soft); border-right:1px solid var(--border-soft);
+    visibility:hidden; /* stays hidden until bootGame() finishes deciding onboarding-vs-save */
+  }
+  body.boot-ready #app{ visibility:visible; }
+  body.boot-ready #boot-loading{ display:none; }
+  #boot-loading{
+    position:fixed; inset:0; z-index:200; background:var(--bg-floor);
+    display:flex; flex-direction:column; align-items:center; justify-content:center; gap:10px;
+    font-family:'Oswald',sans-serif; color:var(--text-muted);
+  }
+  #boot-loading .boot-icon{ font-size:40px; }
+
+  /* ---------- TOP STAT BAR ---------- */
+  #topbar{
+    display:flex; align-items:center; justify-content:space-between;
+    padding:8px 10px; background:var(--bg-panel);
+    border-bottom:2px solid var(--corner-red); flex-shrink:0;
+    gap:6px;
+  }
+  .stat-chip{
+    display:flex; align-items:center; gap:6px;
+    font-family:'Oswald',sans-serif; font-size:15px; font-weight:600;
+    color:var(--text-main); background:var(--bg-panel-raised);
+    padding:9px 13px; border-radius:8px; white-space:nowrap;
+    min-height:40px;
+  }
+  .stat-chip .icon{font-size:17px;}
+  .stat-chip.gold{color:var(--belt-gold);}
+  .stat-chip.teal{color:var(--champ-teal);}
+  .stat-chip.teeth{color:#F2F0EC;}
+  button.stat-chip{ border:none; cursor:pointer; }
+  button.stat-chip:active{ transform:scale(0.93); }
+  .log-toggle{
+    cursor:pointer; flex-shrink:0; padding:9px 13px;
+  }
+  .log-toggle:active{ transform:scale(0.92); }
+
+  /* ---------- FIGHT LOG MODAL ---------- */
+  .modal-overlay{
+    position:absolute; inset:0; background:rgba(8,8,11,0.75); z-index:80;
+    display:flex; align-items:center; justify-content:center; padding:20px;
+  }
+  /* Confirm dialogs can be triggered from inside another modal (e.g. a purchase confirm opened
+     from the Shop) — needs to render above every other modal-overlay, not just whichever one
+     happens to come later in the DOM (same z-index would otherwise stack by document order). */
+  #confirm-modal{ z-index:95; }
+  .modal-card{
+    background:var(--bg-panel); border:1px solid var(--border-soft); border-radius:14px;
+    width:100%; max-width:380px; max-height:75vh; display:flex; flex-direction:column;
+    overflow:hidden; box-shadow:0 12px 40px rgba(0,0,0,0.5);
+  }
+  .modal-header{
+    display:flex; align-items:center; justify-content:space-between;
+    padding:14px 16px; border-bottom:1px solid var(--border-soft); flex-shrink:0;
+  }
+  .modal-title{ font-family:'Oswald',sans-serif; font-size:16px; font-weight:600; }
+  .modal-close{
+    background:var(--bg-panel-raised); border:none; color:var(--text-main);
+    width:28px; height:28px; border-radius:50%; cursor:pointer; font-size:13px;
+  }
+  .modal-body{ padding:14px 16px; overflow-y:auto; flex:1; }
+  .shop-tabs{
+    display:flex; gap:2px; padding:8px 12px 0 12px; overflow-x:auto; flex-shrink:0;
+    border-bottom:1px solid var(--border-soft);
+  }
+  .shop-tab-btn{
+    background:none; border:none; color:var(--text-muted); font-family:'Oswald',sans-serif;
+    font-size:11px; font-weight:600; padding:8px 10px; cursor:pointer; white-space:nowrap;
+    border-bottom:2px solid transparent;
+  }
+  .shop-tab-btn.active{ color:var(--corner-red); border-bottom-color:var(--corner-red); }
+  .shop-item-card{
+    background:var(--bg-panel-raised); border-radius:10px; padding:12px; margin-bottom:8px;
+    display:flex; align-items:center; gap:10px;
+  }
+  .shop-item-icon{ font-size:26px; flex-shrink:0; }
+  .shop-item-info{ flex:1; min-width:0; }
+  .shop-item-name{ font-family:'Oswald',sans-serif; font-size:13px; font-weight:600; }
+  .shop-item-desc{ font-size:11px; color:var(--text-muted); margin-top:1px; }
+  .shop-buy-btn{
+    flex-shrink:0; font-family:'Oswald',sans-serif; font-weight:700; font-size:12px;
+    padding:8px 12px; border-radius:8px; border:none; cursor:pointer; white-space:nowrap;
+  }
+  .shop-buy-btn.teeth{ background:#F2F0EC; color:#1a1208; }
+  .shop-buy-btn.cash{ background:var(--belt-gold); color:#1a1208; }
+  .shop-buy-btn.real{ background:var(--champ-teal); color:#082624; }
+  .shop-buy-btn:disabled{ opacity:0.4; }
+
+  /* ---------- MAIN CONTENT ---------- */
+  #content{
+    flex:1; overflow-y:auto; padding:14px 14px 90px 14px;
+    -webkit-overflow-scrolling:touch;
+  }
+  #content::-webkit-scrollbar{width:0;}
+
+  .panel-title{
+    font-family:'Oswald',sans-serif; font-size:13px; font-weight:600;
+    letter-spacing:1.5px; text-transform:uppercase; color:var(--text-muted);
+    margin:18px 0 8px 0;
+  }
+  .panel-title:first-child{margin-top:0;}
+
+  .card{
+    background:var(--bg-panel); border:1px solid var(--border-soft);
+    border-radius:10px; padding:14px; margin-bottom:10px;
+  }
+
+  /* ---------- FIGHTER HEADER / TALE OF THE TAPE ---------- */
+  .progress-stat-btn{
+    background:none; border:none; padding:0; margin:0; text-align:left; width:100%;
+    cursor:pointer; font-family:inherit; color:inherit; border-radius:6px;
+    transition:opacity 0.1s ease;
+  }
+  .progress-stat-btn:active{ opacity:0.6; }
+
+  .fighter-hero{
+    background:linear-gradient(135deg, var(--bg-panel) 0%, var(--corner-red-dim) 150%);
+    border:1px solid var(--border-soft); border-radius:12px;
+    padding:18px; margin-bottom:12px; position:relative; overflow:hidden;
+  }
+  .fighter-hero::before{
+    content:''; position:absolute; top:-20px; right:-20px;
+    width:120px; height:120px; border-radius:50%;
+    background:radial-gradient(circle, rgba(232,72,60,0.25), transparent 70%);
+  }
+  .fighter-row{display:flex; align-items:center; gap:14px;}
+  .fighter-avatar{
+    font-size:48px; width:74px; height:74px; flex-shrink:0;
+    display:flex; align-items:center; justify-content:center;
+    background:var(--bg-panel-raised); border:2px solid var(--corner-red);
+    border-radius:50%;
+  }
+
+  /* ---------- FIGHT SCENE (venue + animated rig) ---------- */
+  .fight-scene{
+    position:relative; width:100%; aspect-ratio:400/220; border-radius:12px;
+    overflow:hidden; border:1px solid var(--border-soft); background:#15151E;
+    cursor:pointer; user-select:none;
+  }
+  .fight-scene:active{ filter:brightness(1.08); }
+  .hype-meter{
+    position:absolute; right:10px; top:34%; z-index:6;
+    display:flex; flex-direction:column; align-items:center; gap:4px;
+    height:38%; /* clear of the opponent's top-right name/HP card and the bottom fighter sprites */
+  }
+  .hype-icon{ font-size:13px; filter:drop-shadow(0 1px 2px rgba(0,0,0,0.8)); }
+  .hype-track{
+    position:relative; flex:1; width:8px; background:rgba(0,0,0,0.5); border-radius:4px; overflow:hidden;
+    border:1px solid rgba(255,255,255,0.1);
+  }
+  .hype-fill{
+    position:absolute; bottom:0; left:0; width:100%;
+    background:linear-gradient(0deg, var(--belt-gold), var(--corner-red)); transition:height 0.2s ease;
+  }
+  .hype-combo{
+    font-family:'Oswald',sans-serif; font-size:11px; font-weight:700; color:var(--corner-red);
+    text-shadow:0 1px 3px rgba(0,0,0,0.9);
+  }
+  .tap-hint{
+    text-align:center; font-size:10px; color:var(--text-muted); margin-top:6px;
+  }
+  .venue-bg{ position:absolute; inset:0; width:100%; height:100%; }
+  .scene-fighter{
+    position:absolute; bottom:6%; left:50%; transform:translateX(-50%);
+    width:34%; height:auto; filter:drop-shadow(0 6px 6px rgba(0,0,0,0.4));
+  }
+  .scene-fighter.is-player{ left:32%; transform:translateX(-50%); z-index:3; }
+  .scene-fighter.is-opponent{ left:68%; transform:translateX(-50%); z-index:3; }
+  .corner-partner{
+    position:absolute; bottom:4%; right:6%; width:16%; height:auto;
+    opacity:0.85; filter:drop-shadow(0 4px 4px rgba(0,0,0,0.4));
+  }
+  .corner-partner.is-cornerman{
+    bottom:6%; right:auto; left:2%; width:12%;
+    opacity:0.8; z-index:1; /* behind the player fighter, who sits at left:32% */
+  }
+  .corner-partner.is-cornerteam{
+    bottom:6%; right:auto; width:10%;
+    opacity:0.75; z-index:1; /* left offset is set per-instance in renderCornerTeamSvgs */
+  }
+  .corner-partner.is-cornerteam-idle{
+    bottom:4%; right:auto; width:10%;
+    opacity:0.75; z-index:1; /* left offset is set per-instance in renderCornerTeamSvgs */
+  }
+  .venue-label{
+    position:absolute; top:8px; left:10px; font-family:'Oswald',sans-serif;
+    font-size:11px; font-weight:600; letter-spacing:0.5px; color:var(--text-main);
+    background:rgba(13,13,18,0.6); padding:3px 9px; border-radius:5px;
+  }
+  .roulette-fab{
+    position:absolute; top:50%; left:8px; transform:translateY(-50%); z-index:7;
+    width:38px; height:38px; border-radius:50%; border:2px solid var(--belt-gold);
+    background:rgba(13,13,18,0.75); display:flex; align-items:center; justify-content:center;
+    font-size:18px; cursor:pointer; box-shadow:0 0 10px rgba(242,199,68,0.35);
+  }
+  .roulette-fab:active{ transform:translateY(-50%) scale(0.92); }
+  .notif-fab{
+    position:absolute; top:calc(50% + 27px); left:8px; z-index:7;
+    width:38px; height:38px; border-radius:50%; border:2px solid var(--champ-teal);
+    background:rgba(13,13,18,0.75); display:flex; align-items:center; justify-content:center;
+    font-size:18px; cursor:pointer; box-shadow:0 0 10px rgba(45,212,191,0.35);
+  }
+  .notif-fab:active{ transform:scale(0.92); }
+  .notif-fab .nav-badge{ top:-4px; right:-6px; }
+
+  /* ---------- FIGHT CARD HP EDGES ---------- */
+  .fightcard-edge{
+    position:absolute; top:8px; width:38%; z-index:5;
+  }
+  .fightcard-edge.is-left{ left:6px; }
+  .fightcard-edge.is-right{ right:6px; text-align:right; }
+  .fightcard-name{
+    font-family:'Oswald',sans-serif; font-size:11px; font-weight:600; color:var(--text-main);
+    text-shadow:0 1px 3px rgba(0,0,0,0.8); margin-bottom:2px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis;
+  }
+  .hp-track{ height:7px; background:rgba(0,0,0,0.5); border-radius:4px; overflow:hidden; border:1px solid rgba(255,255,255,0.1); }
+  .hp-fill{ height:100%; background:var(--success); border-radius:4px; transition:width 0.3s ease; }
+  .hp-fill.low{ background:var(--corner-red); }
+  .fightcard-hp-num{ font-size:9px; color:var(--text-muted); margin-top:1px; text-shadow:0 1px 2px rgba(0,0,0,0.8); }
+
+  /* ---------- PRE-FIGHT CARD ---------- */
+  .prefight-card{
+    position:absolute; inset:0; display:flex; flex-direction:column; justify-content:center;
+    padding:10px; background:rgba(13,13,18,0.55);
+  }
+  .prefight-vs-label{
+    text-align:center; font-family:'Oswald',sans-serif; font-size:11px; letter-spacing:2px;
+    color:var(--belt-gold); margin-bottom:6px;
+  }
+  .prefight-row{ display:flex; align-items:center; justify-content:center; gap:6px; }
+  .prefight-side{ flex:1; text-align:center; max-width:42%; }
+  .prefight-mini{ width:62%; height:auto; filter:drop-shadow(0 4px 4px rgba(0,0,0,0.4)); }
+  .prefight-name{ font-family:'Oswald',sans-serif; font-size:13px; font-weight:700; color:var(--text-main); margin-top:2px; }
+  .prefight-tier{ font-size:10px; color:var(--text-muted); }
+  .prefight-power{ font-family:'Oswald',sans-serif; font-size:13px; color:var(--belt-gold); font-weight:600; }
+  .prefight-vs{ font-family:'Oswald',sans-serif; font-size:18px; font-weight:700; color:var(--corner-red); flex-shrink:0; }
+
+  /* ---------- BOUT RESULT BANNER ---------- */
+  .bout-result-banner{
+    position:absolute; top:42%; left:50%; transform:translate(-50%,-50%);
+    font-family:'Oswald',sans-serif; font-size:16px; font-weight:700; letter-spacing:0.5px;
+    padding:8px 16px; border-radius:8px; background:rgba(13,13,18,0.88);
+    animation:popIn 0.25s ease; white-space:nowrap;
+  }
+  .bout-result-banner.win{ color:var(--success); border:2px solid var(--success); }
+  .bout-result-banner.loss{ color:var(--corner-red); border:2px solid var(--corner-red); }
+  @keyframes popIn{ from{ transform:translate(-50%,-50%) scale(0.7); opacity:0; } to{ transform:translate(-50%,-50%) scale(1); opacity:1; } }
+
+  /* ---------- PROMOTION FANFARE ---------- */
+  .promotion-fanfare{
+    position:absolute; inset:0; z-index:8; display:flex; flex-direction:column;
+    align-items:center; justify-content:center; text-align:center; gap:4px;
+    background:radial-gradient(circle, rgba(242,199,68,0.22), rgba(13,13,18,0.85) 70%);
+    animation:fanfareIn 0.4s ease;
+  }
+  .promotion-fanfare .fanfare-kicker{
+    font-family:'Oswald',sans-serif; font-size:11px; font-weight:600; letter-spacing:2px;
+    text-transform:uppercase; color:var(--belt-gold); animation:fanfarePulse 1.1s ease-in-out infinite;
+  }
+  .promotion-fanfare .fanfare-title{
+    font-family:'Oswald',sans-serif; font-size:26px; font-weight:700; color:var(--belt-gold);
+    text-shadow:0 0 18px rgba(242,199,68,0.7); margin:2px 0;
+  }
+  .promotion-fanfare .fanfare-sub{ font-size:12px; color:var(--text-main); }
+  @keyframes fanfareIn{ from{ opacity:0; transform:scale(0.85); } to{ opacity:1; transform:scale(1); } }
+  @keyframes fanfarePulse{ 0%,100%{ opacity:0.7; } 50%{ opacity:1; } }
+
+  .fighter-id{flex:1; min-width:0;}
+  .fighter-name{font-family:'Oswald',sans-serif; font-size:20px; font-weight:700; line-height:1.1;}
+  .fighter-record{font-size:12px; color:var(--text-muted); margin-top:2px;}
+  .fighter-tier{
+    display:inline-block; margin-top:6px; font-family:'Oswald',sans-serif;
+    font-size:11px; font-weight:600; letter-spacing:0.5px; text-transform:uppercase;
+    color:var(--belt-gold); border:1px solid var(--belt-gold); border-radius:4px;
+    padding:2px 8px;
+  }
+
+  .xp-track{margin-top:14px;}
+  .xp-label{display:flex; justify-content:space-between; font-size:11px; color:var(--text-muted); margin-bottom:4px;}
+  .bar-track{height:8px; background:var(--bg-panel-raised); border-radius:4px; overflow:hidden;}
+  .bar-fill{height:100%; border-radius:4px; transition:width 0.3s ease;}
+  .bar-fill.xp{background:var(--champ-teal);}
+  .bar-fill.fight{background:var(--corner-red);}
+  .bar-fill.train{background:var(--belt-gold);}
+
+  /* ---------- TALE OF THE TAPE STATS ---------- */
+  .tape{
+    display:grid; grid-template-columns:1fr 1fr; gap:8px; margin-top:4px;
+  }
+  .tape.tape-2x4{
+    grid-template-columns:1fr 1fr 1fr 1fr; gap:6px;
+  }
+  .tape.tape-2x4 .tape-stat{ padding:8px 6px; text-align:center; }
+  .tape.tape-2x4 .tape-stat .label{ font-size:9px; letter-spacing:0.5px; }
+  .tape.tape-2x4 .tape-stat .value{ font-size:18px; margin-top:1px; }
+  .gear-bonus{ font-size:11px; color:var(--champ-teal); margin-left:3px; font-weight:600; }
+
+  /* ---------- LOOT BOXES ---------- */
+  .lootbox-grid{
+    display:grid; grid-template-columns:1fr 1fr 1fr; gap:8px; margin-top:4px;
+  }
+  .lootbox-card{
+    background:var(--bg-panel-raised); border:2px solid var(--border-soft); border-radius:10px;
+    padding:12px 6px; text-align:center; cursor:pointer; transition:transform 0.1s ease;
+  }
+  .lootbox-card:active{ transform:scale(0.94); }
+  .lootbox-icon{ font-size:28px; }
+  .lootbox-tier{ font-family:'Oswald',sans-serif; font-size:11px; font-weight:700; margin-top:4px; }
+  .lootbox-source{ font-size:9px; color:var(--belt-gold); margin-top:1px; }
+
+  /* ---------- LOOT REVEAL MODAL ---------- */
+  .reveal-card{
+    text-align:center; padding:10px 0;
+  }
+  .reveal-icon{ font-size:56px; margin-bottom:8px; }
+  .reveal-rarity{ font-family:'Oswald',sans-serif; font-size:20px; font-weight:700; }
+  .reveal-name{ font-size:14px; color:var(--text-main); margin-top:2px; }
+  .reveal-stats{ margin-top:14px; display:flex; flex-direction:column; gap:6px; }
+  .reveal-stat-row{
+    display:flex; justify-content:space-between; background:var(--bg-panel-raised);
+    border-radius:6px; padding:7px 12px; font-size:13px;
+  }
+  .reveal-outcome{
+    margin-top:16px; font-family:'Oswald',sans-serif; font-weight:600; font-size:14px;
+    padding:10px; border-radius:8px;
+  }
+  .reveal-outcome.equipped{ background:rgba(45,212,191,0.12); color:var(--champ-teal); }
+  .reveal-outcome.sold{ background:rgba(242,199,68,0.12); color:var(--belt-gold); }
+  .tape-stat{
+    background:var(--bg-panel-raised); border-radius:8px; padding:10px 12px;
+    border-left:3px solid var(--corner-red);
+  }
+  .tape-stat .label{
+    font-family:'Oswald',sans-serif; font-size:10px; letter-spacing:1px;
+    text-transform:uppercase; color:var(--text-muted);
+  }
+  .tape-stat .value{
+    font-family:'Oswald',sans-serif; font-size:22px; font-weight:700; color:var(--text-main);
+    margin-top:2px;
+  }
+  .tape-stat .sub{font-size:10px; color:var(--champ-teal); margin-top:1px;}
+
+  /* ---------- GEAR SLOT GRID ---------- */
+  .gear-grid{
+    display:grid; grid-template-columns:1fr 1fr 1fr 1fr; gap:6px; margin-top:4px;
+  }
+  .gear-slot{
+    background:var(--bg-panel-raised); border-radius:8px; padding:10px 4px;
+    text-align:center; border:1.5px dashed var(--border-soft);
+    display:flex; flex-direction:column; align-items:center; gap:3px;
+  }
+  .gear-slot.filled{ border-style:solid; border-color:var(--belt-gold); }
+  .gear-slot-icon{ font-size:22px; opacity:0.9; }
+  .gear-slot.empty .gear-slot-icon{ opacity:0.35; }
+  .gear-slot-label{
+    font-family:'Oswald',sans-serif; font-size:9px; letter-spacing:0.3px;
+    text-transform:uppercase; color:var(--text-muted);
+    text-align:center; line-height:1.25; word-break:break-word; padding:0 2px;
+  }
+  .gear-slot-power{ font-family:'Oswald',sans-serif; font-size:10px; font-weight:700; }
+
+  /* ---------- COLOR SWATCHES ---------- */
+  .color-swatch{
+    width:22px; height:22px; border-radius:50%; border:2px solid transparent;
+    cursor:pointer; padding:0; flex-shrink:0;
+  }
+  .color-swatch.large{ width:30px; height:30px; }
+  .color-swatch.selected{ border-color:var(--text-main); box-shadow:0 0 0 2px var(--bg-panel); }
+
+  /* ---------- IDLE LOOP CARDS (fight/train) ---------- */
+  .loop-card{display:flex; align-items:center; gap:12px;}
+  .loop-icon{
+    font-size:26px; width:46px; height:46px; flex-shrink:0;
+    display:flex; align-items:center; justify-content:center;
+    background:var(--bg-panel-raised); border-radius:10px;
+  }
+  .loop-info{flex:1; min-width:0;}
+  .loop-title{font-family:'Oswald',sans-serif; font-size:14px; font-weight:600;}
+  .loop-desc{font-size:11px; color:var(--text-muted); margin-top:1px;}
+  .loop-progress{margin-top:8px;}
+
+  /* ---------- BUTTONS ---------- */
+  .btn{
+    font-family:'Oswald',sans-serif; font-weight:600; font-size:13px;
+    letter-spacing:0.5px; text-transform:uppercase; text-align:center;
+    padding:11px 16px; border-radius:8px; border:none; cursor:pointer;
+    transition:transform 0.08s ease, opacity 0.15s ease; color:var(--text-main);
+  }
+  .btn:active{transform:scale(0.96);}
+  .btn:disabled{opacity:0.4; cursor:not-allowed;}
+  .btn-primary{background:var(--corner-red); color:#fff;}
+  .btn-gold{background:var(--belt-gold); color:#1a1208;}
+  .btn-teal{background:var(--champ-teal); color:#082624;}
+  .btn-ghost{background:var(--bg-panel-raised); color:var(--text-main); border:1px solid var(--border-soft);}
+  .btn-block{width:100%; display:block;}
+  .btn-row{display:flex; gap:8px; margin-top:10px;}
+  .btn-row .btn{flex:1;}
+
+  /* ---------- LOG FEED ---------- */
+  .log-feed{display:flex; flex-direction:column; gap:6px;}
+  .log-entry{
+    font-size:12px; padding:8px 10px; border-radius:6px;
+    background:var(--bg-panel-raised); border-left:3px solid var(--border-soft);
+    color:var(--text-muted); animation:slideIn 0.25s ease;
+  }
+  .log-entry.win{border-left-color:var(--success); color:var(--text-main);}
+  .log-entry.loss{border-left-color:var(--corner-red); color:var(--text-main);}
+  .log-entry.train{border-left-color:var(--belt-gold); color:var(--text-main);}
+  .log-entry.level{border-left-color:var(--champ-teal); color:var(--text-main); font-weight:600;}
+  @keyframes slideIn{from{opacity:0; transform:translateY(-4px);} to{opacity:1; transform:translateY(0);}}
+
+  /* ---------- BOTTOM NAV ---------- */
+  #bottomnav{
+    position:absolute; bottom:0; left:0; right:0;
+    display:flex; background:var(--bg-panel); border-top:1px solid var(--border-soft);
+    padding:6px 4px calc(6px + env(safe-area-inset-bottom)) 4px; gap:2px; flex-shrink:0;
+  }
+  .nav-btn{
+    flex:1; display:flex; flex-direction:column; align-items:center; gap:3px;
+    padding:11px 2px; border-radius:10px; background:none; border:none;
+    color:var(--text-muted); font-family:'Inter',sans-serif; font-size:10px;
+    font-weight:600; cursor:pointer; transition:color 0.15s ease, background 0.15s ease;
+    min-width:0; min-height:52px;
+  }
+  .nav-btn:active{ transform:scale(0.95); }
+  .nav-btn .nav-icon{font-size:22px; position:relative; display:inline-block;}
+  .nav-badge{
+    position:absolute; top:-4px; right:-8px; min-width:15px; height:15px; padding:0 3px;
+    background:var(--corner-red); color:#fff; border-radius:999px; font-family:'Inter',sans-serif;
+    font-size:9px; font-weight:700; line-height:15px; text-align:center;
+    box-shadow:0 0 0 2px var(--bg-panel); align-items:center; justify-content:center;
+  }
+  .nav-btn.active{color:var(--corner-red); background:rgba(232,72,60,0.1);}
+
+  /* ---------- ONBOARDING MODAL ---------- */
+  #onboard{
+    position:absolute; inset:0; background:var(--bg-floor); z-index:100;
+    display:flex; flex-direction:column; justify-content:center; padding:24px;
+    overflow-y:auto;
+  }
+  #onboard .ob-title{
+    font-family:'Oswald',sans-serif; font-size:28px; font-weight:700;
+    text-align:center; margin-bottom:4px;
+  }
+  #onboard .ob-title span{color:var(--corner-red);}
+  #onboard .ob-sub{text-align:center; color:var(--text-muted); font-size:13px; margin-bottom:28px;}
+  .ob-field{margin-bottom:18px;}
+  .ob-label{
+    font-family:'Oswald',sans-serif; font-size:12px; letter-spacing:1px;
+    text-transform:uppercase; color:var(--text-muted); margin-bottom:8px; display:block;
+  }
+  .ob-input{
+    width:100%; padding:12px 14px; border-radius:8px; border:1px solid var(--border-soft);
+    background:var(--bg-panel); color:var(--text-main); font-size:15px; font-family:'Inter',sans-serif;
+  }
+  .ob-input:focus{outline:none; border-color:var(--corner-red);}
+  .ob-options{display:flex; gap:8px;}
+  .ob-option{
+    flex:1; padding:12px 8px; border-radius:8px; border:1px solid var(--border-soft);
+    background:var(--bg-panel); text-align:center; cursor:pointer; font-size:13px;
+    font-weight:600; color:var(--text-muted); transition:all 0.15s ease;
+  }
+  .ob-option.selected{border-color:var(--corner-red); color:var(--text-main); background:var(--corner-red-dim);}
+
+  .rando-preview-wrap{
+    display:flex; justify-content:center; align-items:center;
+    background:var(--bg-panel); border:1px solid var(--border-soft); border-radius:12px;
+    padding:16px; margin-top:8px;
+  }
+  #rando-svg{width:160px; height:218px;}
+  .rando-trait-label{
+    text-align:center; font-family:'Oswald',sans-serif; font-size:14px; font-weight:600;
+    color:var(--belt-gold); margin-top:10px; letter-spacing:0.5px;
+  }
+
+  /* ---------- FLOATING TOAST ---------- */
+  #toast{
+    position:absolute; top:70px; left:50%; transform:translateX(-50%) translateY(-10px);
+    background:var(--bg-panel-raised); border:1px solid var(--belt-gold);
+    color:var(--belt-gold); font-family:'Oswald',sans-serif; font-weight:600;
+    font-size:13px; padding:10px 18px; border-radius:8px; opacity:0; pointer-events:none;
+    transition:all 0.3s ease; z-index:50; white-space:nowrap;
+  }
+  #toast.show{opacity:1; transform:translateX(-50%) translateY(0);}
+
+  .empty-state{text-align:center; padding:30px 14px; color:var(--text-muted); font-size:13px;}
+
+  .poster-preview{
+    border-radius:10px; padding:20px 10px; text-align:center; border:1px solid var(--border-soft);
+  }
+  .poster-preview-icon{ font-size:34px; }
+  .poster-preview-label{ font-family:'Oswald',sans-serif; font-size:12px; font-weight:600; color:var(--text-main); margin-top:6px; }
+
+  /* ---------- ROULETTE WHEEL ---------- */
+  .roulette-wrap{
+    position:relative; width:200px; height:200px; margin:6px auto 0 auto;
+    display:flex; align-items:center; justify-content:center;
+  }
+  .roulette-wheel{
+    width:190px; height:190px; border-radius:50%; position:relative;
+    border:4px solid var(--belt-gold); box-shadow:0 4px 18px rgba(0,0,0,0.5);
+  }
+  .roulette-seg-label{
+    position:absolute; top:50%; left:50%; width:0; height:0;
+    display:flex; align-items:center; justify-content:center;
+    font-size:20px; filter:drop-shadow(0 1px 2px rgba(0,0,0,0.8));
+  }
+  .roulette-pointer{
+    position:absolute; top:-6px; left:50%; transform:translateX(-50%);
+    font-size:22px; color:var(--corner-red); z-index:5;
+    filter:drop-shadow(0 2px 3px rgba(0,0,0,0.6));
+  }
+
+  /* ---------- COMPANIONS ---------- */
+  .corner-category{ margin-bottom:10px; }
+  .corner-category-header{
+    width:100%; display:flex; justify-content:space-between; align-items:center;
+    background:var(--bg-panel-raised); border:1px solid var(--border-soft); border-radius:8px;
+    padding:11px 14px; cursor:pointer; font-family:'Oswald',sans-serif; font-size:13px;
+    font-weight:600; color:var(--text-main); margin-bottom:6px;
+  }
+  .corner-category-count{ color:var(--text-muted); font-size:11px; font-weight:400; }
+  .corner-category-chevron{ color:var(--text-muted); font-size:12px; }
+
+  .companion-card{
+    display:flex; align-items:center; gap:12px; cursor:pointer;
+    transition:border-color 0.15s ease;
+  }
+  .companion-card:active{ border-color:var(--corner-red); }
+  .companion-thumb{ width:54px; height:74px; flex-shrink:0; }
+  .companion-info{ flex:1; min-width:0; }
+  .companion-name{ font-family:'Oswald',sans-serif; font-size:14px; font-weight:600; }
+  .companion-tagline{ font-size:11px; color:var(--text-muted); margin-top:1px; }
+  .companion-stage-label{ font-size:11px; color:var(--champ-teal); margin-top:6px; font-weight:600; }
+
+  .companion-hero{
+    background:linear-gradient(135deg, var(--bg-panel) 0%, var(--corner-red-dim) 150%);
+    border:1px solid var(--border-soft); border-radius:12px;
+    padding:18px; text-align:center; margin-bottom:8px;
+  }
+  .companion-hero-art{ width:110px; height:auto; margin:0 auto; display:block; filter:drop-shadow(0 6px 6px rgba(0,0,0,0.4)); }
+  .companion-hero-name{ font-family:'Oswald',sans-serif; font-size:18px; font-weight:700; margin-top:8px; }
+  .companion-hero-stage{ font-size:12px; color:var(--belt-gold); margin-top:2px; }
+  .companion-story{ font-style:italic; color:var(--text-main); line-height:1.5; font-size:13px; }
+</style>
+</head>
+<body>
+
+<div id="boot-loading"><div class="boot-icon">🥊</div><div>Loading…</div></div>
+<div id="app">
+
+  <!-- ONBOARDING -->
+  <div id="onboard">
+    <div id="ob-step1">
+      <div class="ob-title">IDLE MMA <span>LEGENDS</span></div>
+      <div class="ob-sub">Build your fighter. Build your empire.</div>
+
+      <div class="ob-field">
+        <label class="ob-label">Fighter Name</label>
+        <input type="text" id="ob-name" class="ob-input" placeholder="Enter your fighter's name" maxlength="18">
+      </div>
+
+      <div class="ob-field">
+        <label class="ob-label">Fighter Gender</label>
+        <div class="ob-options" id="ob-gender">
+          <div class="ob-option" data-val="male">♂ Male</div>
+          <div class="ob-option" data-val="female">♀ Female</div>
+        </div>
+      </div>
+
+      <div class="ob-field">
+        <label class="ob-label">Interested In</label>
+        <div class="ob-options" id="ob-orientation">
+          <div class="ob-option" data-val="men">Men</div>
+          <div class="ob-option" data-val="women">Women</div>
+          <div class="ob-option" data-val="both">Both</div>
+        </div>
+      </div>
+
+      <button class="btn btn-primary btn-block" id="ob-next" style="margin-top:10px;">Next: Build Your Look</button>
+    </div>
+
+    <div id="ob-step2" style="display:none;">
+      <div class="ob-title" style="font-size:22px;">SHAPE YOUR <span>FIGHTER</span></div>
+      <div class="ob-sub">Roll for a look — each build favors different stats.</div>
+
+      <div class="rando-preview-wrap">
+        <svg id="rando-svg" viewBox="0 0 140 190"></svg>
+      </div>
+
+      <div class="rando-trait-label" id="rando-trait-label">Balanced Build</div>
+
+      <button class="btn btn-gold btn-block" id="ob-reroll" style="margin-top:14px;">🎲 Reroll Look</button>
+
+      <div class="btn-row" style="margin-top:14px;">
+        <button class="btn btn-ghost" id="ob-back">Back</button>
+        <button class="btn btn-primary" id="ob-confirm" style="flex:2;">Lock In Fighter</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- TOP BAR -->
+  <div id="topbar">
+    <div class="stat-chip gold"><span class="icon">💰</span><span id="hud-cash">0</span></div>
+    <div class="stat-chip teeth"><span class="icon">🦷</span><span id="hud-teeth">0</span></div>
+    <div class="stat-chip teal"><span class="icon">⭐</span><span id="hud-level">Lv.1</span></div>
+    <button class="stat-chip" id="shop-toggle-btn"><span class="icon">🛍️</span></button>
+    <button class="stat-chip log-toggle" id="log-toggle-btn"><span class="icon">📋</span></button>
+  </div>
+
+  <div id="toast"></div>
+
+  <!-- FIGHT LOG MODAL -->
+  <div id="log-modal" class="modal-overlay" style="display:none;">
+    <div class="modal-card">
+      <div class="modal-header">
+        <div class="modal-title">Fight Log</div>
+        <button class="modal-close" id="log-modal-close">✕</button>
+      </div>
+      <div class="modal-body" id="log-modal-body"></div>
+    </div>
+  </div>
+
+  <!-- LOOT REVEAL MODAL -->
+  <div id="loot-modal" class="modal-overlay" style="display:none;">
+    <div class="modal-card">
+      <div class="modal-header">
+        <div class="modal-title">Loot Box</div>
+        <button class="modal-close" id="loot-modal-close">✕</button>
+      </div>
+      <div class="modal-body" id="loot-modal-body"></div>
+    </div>
+  </div>
+
+  <!-- GEAR DETAIL MODAL -->
+  <div id="gear-modal" class="modal-overlay" style="display:none;">
+    <div class="modal-card">
+      <div class="modal-header">
+        <div class="modal-title" id="gear-modal-title">Gear Slot</div>
+        <button class="modal-close" id="gear-modal-close">✕</button>
+      </div>
+      <div class="modal-body" id="gear-modal-body"></div>
+    </div>
+  </div>
+
+  <!-- CONFIRM MODAL (replaces native confirm(), which is unreliable inside sandboxed iframes) -->
+  <div id="confirm-modal" class="modal-overlay" style="display:none;">
+    <div class="modal-card">
+      <div class="modal-header">
+        <div class="modal-title" id="confirm-modal-title">Confirm</div>
+      </div>
+      <div class="modal-body">
+        <div id="confirm-modal-text" style="font-size:13px; color:var(--text-main); line-height:1.5;"></div>
+        <div class="btn-row" style="margin-top:16px;">
+          <button class="btn btn-ghost" id="confirm-modal-cancel" style="flex:1;">Cancel</button>
+          <button class="btn btn-gold" id="confirm-modal-ok" style="flex:1;">Confirm</button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- WELCOME BACK MODAL (shown after a longer absence, instead of just a toast) -->
+  <div id="welcome-modal" class="modal-overlay" style="display:none;">
+    <div class="modal-card">
+      <div class="modal-header">
+        <div class="modal-title">👋 Welcome Back!</div>
+        <button class="modal-close" id="welcome-modal-close">✕</button>
+      </div>
+      <div class="modal-body" id="welcome-modal-body"></div>
+    </div>
+  </div>
+
+  <!-- LEVEL-UP NOTICES MODAL -->
+  <div id="levelup-modal" class="modal-overlay" style="display:none;">
+    <div class="modal-card">
+      <div class="modal-header">
+        <div class="modal-title">⭐ Level-Up Notices</div>
+        <button class="modal-close" id="levelup-modal-close">✕</button>
+      </div>
+      <div class="modal-body" id="levelup-modal-body"></div>
+    </div>
+  </div>
+
+  <!-- ROLES INFO MODAL -->
+  <div id="roles-info-modal" class="modal-overlay" style="display:none;">
+    <div class="modal-card">
+      <div class="modal-header">
+        <div class="modal-title">🏋️ Gym Roles</div>
+        <button class="modal-close" id="roles-info-modal-close">✕</button>
+      </div>
+      <div class="modal-body" id="roles-info-modal-body"></div>
+    </div>
+  </div>
+
+  <!-- GYM PREVIEW MODAL -->
+  <div id="gympreview-modal" class="modal-overlay" style="display:none;">
+    <div class="modal-card">
+      <div class="modal-header">
+        <div class="modal-title" id="gympreview-modal-title">Gym Preview</div>
+        <button class="modal-close" id="gympreview-modal-close">✕</button>
+      </div>
+      <div class="modal-body" id="gympreview-modal-body"></div>
+    </div>
+  </div>
+
+  <!-- PRESTIGE REROLL MODAL -->
+  <div id="reroll-modal" class="modal-overlay" style="display:none;">
+    <div class="modal-card">
+      <div class="modal-header">
+        <div class="modal-title">🎲 New Look?</div>
+        <button class="modal-close" id="reroll-modal-close">✕</button>
+      </div>
+      <div class="modal-body" id="reroll-modal-body"></div>
+    </div>
+  </div>
+
+  <!-- SHOP MODAL -->
+  <div id="shop-modal" class="modal-overlay" style="display:none;">
+    <div class="modal-card" style="max-height:85vh;">
+      <div class="modal-header">
+        <div class="modal-title">🛍️ Shop</div>
+        <button class="modal-close" id="shop-modal-close">✕</button>
+      </div>
+      <div class="shop-tabs">
+        <button class="shop-tab-btn active" data-shop-tab="featured">Featured</button>
+        <button class="shop-tab-btn" data-shop-tab="chests">Chests</button>
+        <button class="shop-tab-btn" data-shop-tab="home">Home</button>
+        <button class="shop-tab-btn" data-shop-tab="cosmetics">Cosmetics</button>
+        <button class="shop-tab-btn" data-shop-tab="roulette">Roulette</button>
+        <button class="shop-tab-btn" data-shop-tab="bundles">Bundles</button>
+        <button class="shop-tab-btn" data-shop-tab="idle">Idle Time</button>
+      </div>
+      <div class="modal-body" id="shop-modal-body"></div>
+    </div>
+  </div>
+
+  <!-- MAIN CONTENT -->
+  <div id="content"></div>
+
+  <!-- BOTTOM NAV -->
+  <div id="bottomnav">
+    <button class="nav-btn active" data-tab="fighter"><span class="nav-icon">🥊<span class="nav-badge" id="badge-fighter" style="display:none;"></span></span>FIGHTER</button>
+    <button class="nav-btn" data-tab="career"><span class="nav-icon">🏟️<span class="nav-badge" id="badge-career" style="display:none;"></span></span>CAREER</button>
+    <button class="nav-btn" data-tab="gym"><span class="nav-icon">🏋️</span>TRAIN</button>
+    <button class="nav-btn" data-tab="home"><span class="nav-icon">🏠</span>HOME</button>
+    <button class="nav-btn" data-tab="companions"><span class="nav-icon">❤️</span>CORNER</button>
+    <button class="nav-btn" data-tab="league"><span class="nav-icon">🌐<span class="nav-badge" id="badge-league" style="display:none;"></span></span>GYM</button>
+  </div>
+
+</div>
+
+<script>
+/* =========================================================================
+   FIREBASE INTEGRATION — replaces window.storage (Claude.ai-only API) with a
+   Firestore-backed equivalent, matching the EXACT same get/set/list/delete
+   signature the rest of this file already calls. This means none of the
+   ~6,700 lines of game logic below need to change — they already call
+   window.storage the same way, just against a real backend now.
+
+   >>> REPLACE firebaseConfig BELOW with YOUR project's config from
+   >>> Firebase Console → Project Settings → Your apps <<<
+   ========================================================================= */
+const firebaseConfig = {
+  apiKey: "AIzaSyCmIWWiAflusbTig9oC6xGx6dMbmFUDb4g",
+  authDomain: "idle-mma-legends.firebaseapp.com",
+  projectId: "idle-mma-legends",
+  storageBucket: "idle-mma-legends.firebasestorage.app",
+  messagingSenderId: "211560350553",
+  appId: "1:211560350553:web:e54531218abff14f010248",
+};
+
+// If the Firebase CDN scripts failed to load (blocked network, ad-blocker, no internet, or
+// viewing this file in a sandboxed preview with no external network access at all), `firebase`
+// won't exist — without this guard, the next line throws immediately and leaves the player
+// stuck on the "Loading…" screen forever with zero explanation.
+if(typeof firebase === 'undefined'){
+  const loadingEl = document.getElementById('boot-loading');
+  if(loadingEl){
+    loadingEl.innerHTML = `
+      <div class="boot-icon">⚠️</div>
+      <div style="max-width:280px; text-align:center; padding:0 16px;">
+        Couldn't reach Firebase — check your internet connection and reload.
+        <div style="font-size:11px; margin-top:10px; opacity:0.7;">(Viewing this inside a sandboxed preview instead of the live hosted site? External scripts can't load there — this is expected, not a bug in the real game.)</div>
+      </div>
+    `;
+  }
+  throw new Error('Firebase SDK failed to load — check network connectivity or ad-blocker settings for gstatic.com');
+}
+
+firebase.initializeApp(firebaseConfig);
+const _auth = firebase.auth();
+const _db = firebase.firestore();
+
+// Resolves once anonymous sign-in completes. bootGame() at the bottom of this file waits on
+// this before doing anything — otherwise the very first window.storage call would fire before
+// we have a uid to scope it to.
 //
-// Strategy: cache-first for the app shell (works fully offline after first load), falling back
-// to network for anything not pre-cached. Bump CACHE_NAME whenever you ship a new build so
-// returning players actually get the update instead of a stale cached copy forever.
-const CACHE_NAME = 'idle-mma-legends-v18';
-const APP_SHELL = [
-  './index.html',
-  './manifest.json',
+// IMPORTANT: explicitly setting LOCAL persistence here (rather than relying on the SDK's
+// implicit default, which SHOULD already be LOCAL but wasn't being stated outright) — a TWA's
+// underlying WebView/Chrome Custom Tab can behave subtly differently around storage partitioning
+// than a normal desktop browser tab, so being explicit removes that ambiguity entirely.
+const _authReady = new Promise((resolve, reject) => {
+  _auth.setPersistence(firebase.auth.Auth.Persistence.LOCAL)
+    .then(() => {
+      _auth.onAuthStateChanged((user) => {
+        if(user){ window._uid = user.uid; resolve(user.uid); }
+      }, reject);
+      _auth.signInAnonymously().catch(reject);
+    })
+    .catch(reject);
+});
+
+/* ------------------------------------------------------------------------
+   GOOGLE SIGN-IN — optional upgrade from anonymous auth. Players start
+   anonymously (zero-friction, no signup wall before their first fight) and
+   can optionally LINK a Google account later for a durable identity that
+   survives reinstalls and works across devices — this does NOT replace
+   anonymous auth, both stay enabled; linking just adds a second credential
+   to the SAME uid, so existing progress carries over automatically.
+
+   Uses redirect (not popup) — popups don't have a reliable window-management
+   model inside a TWA's Custom Tab, redirect is the recommended pattern here.
+   ------------------------------------------------------------------------ */
+function isGoogleLinked(){
+  return !!(_auth.currentUser && _auth.currentUser.providerData.some(p => p.providerId === 'google.com'));
+}
+
+function linkGoogleAccount(){
+  const provider = new firebase.auth.GoogleAuthProvider();
+  _auth.currentUser.linkWithRedirect(provider).catch((e) => {
+    showToast('Could not start Google sign-in: ' + e.message);
+  });
+  // Page navigates away to Google's consent screen here — handleGoogleRedirectResult() picks up
+  // the result on the next boot, after the browser returns to this page.
+}
+
+async function handleGoogleRedirectResult(){
+  try {
+    const result = await _auth.getRedirectResult();
+    if(result && result.user){
+      showToast(`✅ Google account linked! Your progress now backs up to ${result.user.email || 'your Google account'}.`);
+      render();
+    }
+  } catch(e){
+    if(e.code === 'auth/credential-already-in-use'){
+      // This Google account already has a DIFFERENT, older linked identity with its own progress
+      // (e.g. they played on another device first). The right move is offering to switch to
+      // THAT account — restoring their real progress — rather than just failing silently.
+      const proceed = confirm(
+        "This Google account already has saved progress from another device. Sign in and use THAT progress instead? (This device's current save will be replaced.)"
+      );
+      if(proceed && e.credential){
+        try {
+          await _auth.signInWithCredential(e.credential);
+          window._uid = _auth.currentUser.uid;
+          await loadGame();
+          render();
+          showToast('✅ Restored progress from your Google account!');
+        } catch(err){
+          showToast('Could not restore progress: ' + err.message);
+        }
+      }
+    } else if(e.code && e.code !== 'auth/no-auth-event'){
+      // 'auth/no-auth-event' just means this boot wasn't a return from a redirect — not a real error.
+      showToast('Google sign-in failed: ' + e.message);
+    }
+  }
+}
+
+function _kvRef(key, shared){
+  return shared
+    ? _db.collection('shared_kv').doc(key)
+    : _db.collection('users').doc(window._uid).collection('kv').doc(key);
+}
+
+window.storage = {
+  async get(key, shared){
+    await _authReady;
+    const snap = await _kvRef(key, shared).get();
+    if(!snap.exists) throw new Error('Storage get failed: key not found');
+    return { key, value: snap.data().value, shared: !!shared };
+  },
+  async set(key, value, shared){
+    await _authReady;
+    await _kvRef(key, shared).set({ value, updatedAt: firebase.firestore.FieldValue.serverTimestamp() });
+    return { key, value, shared: !!shared };
+  },
+  async delete(key, shared){
+    await _authReady;
+    const ref = _kvRef(key, shared);
+    const snap = await ref.get();
+    const existed = snap.exists;
+    await ref.delete();
+    return { key, deleted: existed, shared: !!shared };
+  },
+  async list(prefix, shared){
+    await _authReady;
+    const coll = shared ? _db.collection('shared_kv') : _db.collection('users').doc(window._uid).collection('kv');
+    let query = coll;
+    if(prefix){
+      // Firestore has no native "starts with" query — this range trick (documented Firestore
+      // pattern) achieves the same prefix-match behavior the game's list() calls rely on.
+      query = coll.where(firebase.firestore.FieldPath.documentId(), '>=', prefix)
+                  .where(firebase.firestore.FieldPath.documentId(), '<', prefix + '\uf8ff');
+    }
+    const snap = await query.get();
+    return { keys: snap.docs.map(d => d.id), prefix, shared: !!shared };
+  },
+};
+
+/* =========================================================================
+   IDLE MMA LEGENDS — CORE ENGINE (Layer 1)
+   Sections: STATE -> UTIL -> GAME LOOP -> ACTIONS -> RENDER -> INIT
+   ========================================================================= */
+
+/* ---------------------------- STATE ---------------------------- */
+const AVATAR_SETS = {
+  male:   ['🥊','🦾','😤','🧔'],
+  female: ['🥊','🦾','😤','👩']
+};
+
+let state = {
+  meta: {
+    createdAt: null,
+    lastTick: Date.now(),
+    notifiedPrestigeReady: false, // avoids re-firing the same "prestige ready" notification repeatedly
+    lastSavedAt: 0, // set on every save (local or cloud) — lets loadGame() tell which copy is newer
+  },
+  fighter: {
+    name: '',
+    gender: 'male',
+    orientation: 'women',
+    level: 1,
+    xp: 0,
+    xpToNext: 50,
+    wins: 0,
+    losses: 0,
+    tier: 'Amateur',
+    hallOfFameEnteredAtWins: null, // f.wins value at the moment tier first became Hall of Fame
+                                     // this run — retention % is based on wins EARNED SINCE this
+                                     // point, not lifetime wins, so reaching Hall of Fame always
+                                     // starts everyone at ~0% and genuinely rewards grinding further.
+    stats: {
+      power: 5,
+      speed: 5,
+      defense: 5,
+      stamina: 5,
+      chin: 5,
+      technique: 5,
+      slip: 5,
+      mental: 5,
+    },
+    appearance: {
+      build: 'balanced',      // lean | balanced | brawler | heavy — controls bulk (limb thickness)
+      bodyShape: 'athletic',  // straight | curvy | athletic | lean | broad — controls silhouette
+      skin: '#C68642',
+      gear: '#E8483C',
+      gloves: true,
+      shoes: true,
+      tattoo: false,
+      traitLabel: 'Balanced Build',
+      hairStyle: 'short',      // none | short | long | ponytail | buzz | afro | mohawk
+      hairColor: '#1A1A1A',
+      eyeColor: '#1A1A1A',
+      eyeStyle: 'focused',     // calm | focused | fierce — controls brow angle/expression
+      jewelry: false,
+      jewelryColor: '#F2C744',
+      poster: 'none',          // none | championBelt | cityScape | flames
+      cosmetics: {              // equipped state for purchased premium cosmetics (see SHOP_COSMETICS)
+        goldChain: false,
+        flameAura: false,
+        diamondTatt: false,
+        royalRobe: false,
+      },
+    },
+    equipment: {
+      // 8 gear slots. null = empty. Populated items will carry { name, tier, statBonuses } once loot exists.
+      head: null,
+      hands: null,
+      body: null,
+      legs: null,
+      feet: null,
+      accessory1: null,
+      accessory2: null,
+      trinket: null,
+    }
+  },
+  economy: {
+    cash: 50,
+    teeth: 5, // premium currency — earned rarely from knockouts, spent in the Shop
+    everSpentReal: false, // true after ANY real-money purchase — gates the one-time Founder's Bundle
+    unlockedPromoOffers: [], // promo-code-gated Shop offers unlocked so far (see VIPACCESS dev code)
+    spendCapDisabled: false, // testing-only override — see QAUNLIMITED dev code
+    realPurchasesUnlocked: false, // real-money "Buy" buttons stay locked until QAPURCHASE is redeemed
+    teethSpentWeekKey: '',      // local week bucket (see getWeekKey) for the Teeth Spent leaderboard
+    teethSpentThisWeek: 0,      // resets when teethSpentWeekKey rolls over — tracks spend, not earnings
+    lastTeethSpendPayoutWeekKey: '', // most recent week this player's rebate has been settled for
+  },
+  adSkip: {
+    lastUsedAt: 0,
+    cooldownMs: 30*60*1000, // 30 min between free ad-skips
+  },
+  speedBoost: {
+    bankedMs: 0,        // banked 2x-speed real-time, drains during play/offline catch-up. Max 8h.
+    noAdsOwned: false,   // "Diamond in the Rough" pack: permanent 2x speed, no ads needed
+  },
+  clickCombat: {
+    charge: 0,           // 0-20 "hype" built up by tapping the fight scene; boosts crit chance
+    lastClickAt: 0,
+    combo: 0,             // consecutive RAPID taps (see handleFightSceneClick) — drives the up-to-10x multiplier
+  },
+  roulette: {
+    cycleStart: 0,       // when the current prize set was rolled; refreshes every few days
+    segments: null,      // cached prize list for the current cycle
+  },
+  gym: {
+    // Each upgrade: level (purchased count) and cost scales with level
+    gloves:  { level: 0, baseCost: 40,  statKey:'power',     bonusPerLevel: 1 },
+    ropes:   { level: 0, baseCost: 40,  statKey:'speed',     bonusPerLevel: 1 },
+    mats:    { level: 0, baseCost: 40,  statKey:'defense',   bonusPerLevel: 1 },
+    cardio:  { level: 0, baseCost: 40,  statKey:'stamina',   bonusPerLevel: 1 },
+    chinbag: { level: 0, baseCost: 50,  statKey:'chin',      bonusPerLevel: 1 },
+    pads:    { level: 0, baseCost: 50,  statKey:'technique', bonusPerLevel: 1 },
+    agility: { level: 0, baseCost: 50,  statKey:'slip',      bonusPerLevel: 1 },
+    sports_psych: { level: 0, baseCost: 55, statKey:'mental', bonusPerLevel: 1 },
+  },
+  homePerks: {
+    // Tiered like Gym, but each level grants a % bonus applied at calculation time
+    // (cash/XP/affection/training speed) rather than a flat stat point.
+    sofa:      { level: 0, baseCost: 60,  effectKey:'cashPct',     bonusPerLevel: 2 },
+    office:    { level: 0, baseCost: 60,  effectKey:'xpPct',       bonusPerLevel: 2 },
+    diningSet: { level: 0, baseCost: 70,  effectKey:'affectionPct',bonusPerLevel: 3 },
+    homeGym:   { level: 0, baseCost: 80,  effectKey:'trainSpeedPct',bonusPerLevel: 2 },
+    artWall:   { level: 0, baseCost: 90,  effectKey:'critPct',     bonusPerLevel: 1 },
+    securitySys:{ level: 0, baseCost: 100, effectKey:'lootPct',    bonusPerLevel: 2 },
+  },
+  companions: {
+    // Per-companion-id progress. Populated lazily the first time the player views the Corner tab.
+    // Shape per entry: { affection: 0, stage: 0, lastChatAt: 0, isPartner: false }
+  },
+  activePartnerId: null, // which companion (if any) has crossed the "dating" threshold and shows in the corner
+  lootBoxes: [], // unopened boxes: { id, tier, source: 'win'|'tierup' }
+  garage: {
+    // 8 vehicle category slots, each equipped independently and stacking stats together.
+    car: null, plane: null, boat: null, motorcycle: null, offroad: null, specialty: null,
+    helicopter: null, rv: null,
+  },
+  prestige: {
+    count: 0,
+    retainedStats: {}, // snapshot of stat points carried over from the last prestige (1-3% of pre-reset stats)
+    vehicleSlots: 1,    // extra car slots unlocked every 10th prestige
+    partnerSlots: 1,    // extra active-partner slots unlocked every 10th prestige
+  },
+  powerUps: {
+    // Cash-purchasable upgrades that persist through prestige resets — a separate progression
+    // track from Gym/Home so there's always a reason to keep earning cash post-reset.
+    ironWill:     { level: 0, baseCost: 200, effectKey:'retainPct',  bonusPerLevel: 0.2 }, // boosts prestige retention %
+    legacyVault:  { level: 0, baseCost: 250, effectKey:'startCash', bonusPerLevel: 50 },  // cash bonus on fresh start
+    quickStudy:   { level: 0, baseCost: 300, effectKey:'xpPct',     bonusPerLevel: 3 },
+    ringRust:     { level: 0, baseCost: 300, effectKey:'cashPct',   bonusPerLevel: 3 },
+  },
+  pendingLootReveal: null, // item currently being revealed in the opening modal, or null
+  autoOpenChests: false, // when true, newly dropped boxes auto-resolve immediately (silent, logged) instead of queuing for manual opening
+  settings: {
+    vibrateOnKnockout: true,
+    notificationsEnabled: false, // see requestNotificationPermission — local notifications only,
+                                  // not real background push (see in-app disclaimer text)
+  },
+  devCodesRedeemed: [],
+  companionView: null,   // which companion's profile is currently open in the Corner tab (null = roster list)
+  cornerExpanded: { partners: true }, // which Corner categories are expanded; Partners open by default
+  ui: {
+    editingFighterName: false, // toggles the inline rename field on the Home tab
+    editingLeagueName: false,  // toggles the inline rename field on the League tab
+    badgeAcked: { fighter:false, career:false, league:false }, // see updateNavBadges — visiting
+                                                                 // a tab acknowledges/hides its
+                                                                 // badge until the count changes again
+    rosterExpanded: false, // Gym Roster: false = top 5 only, true = all members
+    bulkBuyQty: 1, // 1 | 10 | 100 | 'max' — shared quantity toggle for Equipment/Home Perks/Power-Ups
+    gearExpanded: true,   // Fighter tab Gear grid — collapsible instead of always open
+    garageExpanded: true, // Home tab Garage grid — collapsible instead of always open
+    tiersExpanded: false,  // Career Tiers list: false = first 5 only, true = all 10
+    lastAckedLevel: 0,     // fighter.level as of the last time the notifications panel was opened
+                            // — badge count is simply (current level - this), see updateNavBadges
+  },
+  recentLevelUps: [], // {level, bonus, t} — newest first, capped at 20, feeds the notifications panel
+  loops: {
+    // Both run simultaneously, each on its own timer (ms)
+    training: { interval: 8000, progress: 0, statCycle: ['power','speed','defense','stamina','chin','technique','slip','mental'], statIndex: 0 },
+    fighting: { interval: 12000, progress: 0 },
+  },
+  combatAnim: {
+    // Drives which pose the fight-scene rig displays, cycling during idle, overridden during a bout
+    currentPose: 'idle',
+    poseUntil: 0,
+  },
+  bout: {
+    // phase: 'none' | 'prefight' | 'exchange' | 'resolved'
+    phase: 'none',
+    phaseUntil: 0,
+    opponent: null,
+    beats: [],       // sequence of {attacker:'player'|'opponent', move:'punch'|'kick'|'crit', defenderReacts:'block'|'dodge'|'hit'}
+    beatIndex: 0,
+    outcome: null,   // 'win' | 'loss', determined up front, revealed through beats
+    playerPose: 'idle',
+    opponentPose: 'idle',
+    promotedTo: null, // tier name if this win's fanfare should show a promotion banner, else null
+  },
+  log: [],
+  // Lightweight social layer: a shared (all-players) gym league roster the player can join, plus
+  // personal membership progress and a rotating set of daily quests. There's no real backend here —
+  // just window.storage's shared key/value store — so this is inherently best-effort: no accounts,
+  // no anti-cheat, no live matchmaking. See LEAGUES/MEMBERSHIP_TIERS for the actual mechanics.
+  social: {
+    playerId: null,      // generated once on first load, stable per-device identifier
+    displayName: '',     // chosen by the player before joining a league — enforced unique via shared registry
+    leagueId: null,       // which of the 10 LEAGUES this player has joined, if any
+    contributedXp: 0,     // lifetime XP earned while a member of the CURRENT league (resets on switch)
+    joinedAt: 0,
+    weekKey: '',           // local week bucket (see getWeekKey) — resets weeklyXp when it changes
+    weeklyXp: 0,           // XP earned toward the CURRENT league this week — basis for the weekly leaderboard
+    weeklyWins: 0,         // wins earned THIS WEEK, immune to prestige resets — see addWeeklyWins()
+    recoveryCode: null,    // shared-storage sync code for cross-device restore (see pushRecoverySnapshot)
+    role: 'member',         // this player's role in their CURRENT league: head_coach|coach|trainer|member
+    gymXpContributed: 0,    // lifetime Gym XP contributed to the CURRENT league (resets on switch)
+    knownGymLevel: 1,       // last-fetched gym level, cached/persisted so the stat bonus still applies
+                             // offline without needing a live network read every combat tick
+    lastPayoutWeekKey: '',   // most recent week this player's Gym Wars payout has been settled for
+  },
+  daily: {
+    dateKey: '',           // local YYYY-MM-DD; when this doesn't match today, counters/quests reset
+    questSchemeVersion: 0, // forces an immediate questIds refresh when DAILY_QUEST_TIERS itself
+                             // changes shape (e.g. 5->10 tiers), without waiting for a real day change
+    winsToday: 0,
+    cashToday: 0,
+    critsToday: 0,
+    trainToday: 0,
+    questIds: [],           // today's quest ids — the full DAILY_QUEST_TIERS ladder
+    questProgress: {},       // questId -> progress count
+    questsClaimed: [],       // quest ids already claimed today
+    spendUSD: 0,             // real-money $ spent today across all IAP paths — see DAILY_SPEND_CAP_USD
+  },
+};
+
+/* ---------------------------- UTIL ---------------------------- */
+function fmtNum(n){
+  if(n >= 1e18) return (n/1e18).toFixed(2)+'Qi'; // quintillion
+  if(n >= 1e15) return (n/1e15).toFixed(2)+'Qa'; // quadrillion
+  if(n >= 1e12) return (n/1e12).toFixed(2)+'T';  // trillion
+  if(n >= 1e9) return (n/1e9).toFixed(2)+'B';
+  if(n >= 1e6) return (n/1e6).toFixed(2)+'M';
+  if(n >= 1e3) return (n/1e3).toFixed(1)+'K';
+  return Math.floor(n).toString();
+}
+
+function clamp(v,min,max){ return Math.max(min, Math.min(max, v)); }
+
+function pushLog(text, type=''){
+  state.log.unshift({text, type, t: Date.now()});
+  if(state.log.length > 30) state.log.pop();
+}
+
+/* ========================================================================
+   FIGHTER RIG MODULE — layered SVG fighter renderer
+   Validated pose math: 0deg = limb hangs straight down, positive = swings
+   toward viewer-right (forward, toward opponent for a right-facing fighter).
+   ======================================================================== */
+const BUILD_VARIANTS = {
+  lean:     { armUpperW: 12, armLowerW: 9,  legUpperW: 15, legLowerW: 11, torsoScale: 0.88, label: 'Lean Build',     trait: { speed: 3 } },
+  balanced: { armUpperW: 15, armLowerW: 11, legUpperW: 19, legLowerW: 14, torsoScale: 1.0,  label: 'Balanced Build', trait: { power: 1, speed: 1, defense: 1, stamina: 1 } },
+  brawler:  { armUpperW: 18, armLowerW: 13, legUpperW: 22, legLowerW: 16, torsoScale: 1.12, label: 'Brawler Build',  trait: { power: 3 } },
+  heavy:    { armUpperW: 21, armLowerW: 15, legUpperW: 25, legLowerW: 18, torsoScale: 1.24, label: 'Heavy Build',    trait: { defense: 3 } },
+};
+const BUILD_KEYS = ['lean','balanced','brawler','heavy'];
+const SKIN_TONES = ['#F5D0A9','#E8B894','#D4A276','#C68642','#A66835','#8D5524','#6B3F1D','#5C3A21','#3D2314'];
+const GEAR_COLORS = ['#E8483C','#2DD4BF','#F2C744','#5B6EE1','#7C3AED','#1A1A1A','#22C55E','#EC4899','#F97316'];
+
+// Companion body shapes — distinct silhouettes for roster variety (not used by the player
+// fighter, which keeps its own 4 builds). Values scaled to match the fighter rig's coordinate
+// system (cx=70, shoulder/hip Y positions) so companions render at consistent proportions.
+const BODY_SHAPES = {
+  straight: { shoulderHalfW:19, bustHalfW:19,   waistHalfW:18,   hipHalfW:18,   armW:11, legW:14, label:'Straight' },
+  curvy:    { shoulderHalfW:14, bustHalfW:23,   waistHalfW:9.5,  hipHalfW:25,   armW:8.5,legW:13, label:'Curvy' },
+  athletic: { shoulderHalfW:21, bustHalfW:20,   waistHalfW:13.5, hipHalfW:15.5, armW:11, legW:14, label:'Athletic' },
+  lean:     { shoulderHalfW:12.5,bustHalfW:12.5,waistHalfW:10.5, hipHalfW:11.5, armW:7,  legW:9.5,label:'Lean' },
+  broad:    { shoulderHalfW:27, bustHalfW:24,   waistHalfW:19,   hipHalfW:16,   armW:14, legW:16, label:'Broad' },
+};
+const BODY_SHAPE_KEYS_FEMALE = ['straight','curvy','athletic','lean'];
+const BODY_SHAPE_KEYS_MALE = ['straight','athletic','lean','broad'];
+
+function taperedSeg(x1,y1,x2,y2,w1,w2){
+  const dx=x2-x1, dy=y2-y1;
+  const len=Math.hypot(dx,dy)||1;
+  const nx=-dy/len, ny=dx/len;
+  const p1=[x1+nx*w1/2,y1+ny*w1/2], p2=[x2+nx*w2/2,y2+ny*w2/2];
+  const p3=[x2-nx*w2/2,y2-ny*w2/2], p4=[x1-nx*w1/2,y1-ny*w1/2];
+  return `${p1[0]},${p1[1]} ${p2[0]},${p2[1]} ${p3[0]},${p3[1]} ${p4[0]},${p4[1]}`;
+}
+
+function rigLimb(px,py,ang1,len1,ang2,len2,upperW,lowerW,color){
+  const toRad=d=>d*Math.PI/180;
+  const a1=toRad(ang1);
+  const jx=px+Math.sin(a1)*len1, jy=py+Math.cos(a1)*len1;
+  const a2=toRad(ang1+ang2);
+  const ex=jx+Math.sin(a2)*len2, ey=jy+Math.cos(a2)*len2;
+  const upperPts=taperedSeg(px,py,jx,jy,upperW,upperW*0.7);
+  const lowerPts=taperedSeg(jx,jy,ex,ey,lowerW*0.85,lowerW*0.55);
+  const markup = `<polygon points="${upperPts}" fill="${color}"/><polygon points="${lowerPts}" fill="${color}"/><circle cx="${jx}" cy="${jy}" r="${upperW*0.32}" fill="${color}"/><circle cx="${ex}" cy="${ey}" r="${lowerW*0.42}" fill="${color}"/>`;
+  return { markup, endX: ex, endY: ey, endR: lowerW*0.42 };
+}
+
+function rigLimbReach(px,py,len1,len2,tx,ty,upperW,lowerW,color,bendSign=1){
+  const dx=tx-px, dy=ty-py;
+  const dist=Math.min(Math.hypot(dx,dy), len1+len2-0.5);
+  const baseAng=Math.atan2(dx,dy);
+  const cosElbow=(len1*len1+len2*len2-dist*dist)/(2*len1*len2);
+  const elbowInner=Math.acos(Math.max(-1,Math.min(1,cosElbow)));
+  const cosShoulderOffset=(len1*len1+dist*dist-len2*len2)/(2*len1*dist);
+  const shoulderOffset=Math.acos(Math.max(-1,Math.min(1,cosShoulderOffset)))*bendSign;
+  const a1=baseAng+shoulderOffset;
+  const jx=px+Math.sin(a1)*len1, jy=py+Math.cos(a1)*len1;
+  const a2=a1+(Math.PI-elbowInner)*-bendSign;
+  const hx=jx+Math.sin(a2)*len2, hy=jy+Math.cos(a2)*len2;
+  const upperPts=taperedSeg(px,py,jx,jy,upperW,upperW*0.7);
+  const lowerPts=taperedSeg(jx,jy,hx,hy,lowerW*0.85,lowerW*0.55);
+  const markup = `<polygon points="${upperPts}" fill="${color}"/><polygon points="${lowerPts}" fill="${color}"/><circle cx="${jx}" cy="${jy}" r="${upperW*0.32}" fill="${color}"/><circle cx="${hx}" cy="${hy}" r="${lowerW*0.42}" fill="${color}"/>`;
+  return { markup, endX: hx, endY: hy, endR: lowerW*0.42 };
+}
+
+const GLOVE_COLOR='#1A1A24', GLOVE_ACCENT='#E8483C', SHOE_COLOR='#1A1A24', SHOE_SOLE='#F2C744', TATTOO_COLOR='#2DD4BF';
+
+function rigGlove(x,y,r){
+  const w=r*2.1, h=r*2.3;
+  return `<ellipse cx="${x}" cy="${y}" rx="${w*0.55}" ry="${h*0.55}" fill="${GLOVE_COLOR}"/><ellipse cx="${x-w*0.32}" cy="${y-h*0.05}" rx="${w*0.22}" ry="${h*0.28}" fill="${GLOVE_COLOR}"/><rect x="${x-w*0.32}" y="${y+h*0.42}" width="${w*0.64}" height="${h*0.22}" rx="${h*0.08}" fill="${GLOVE_ACCENT}"/>`;
+}
+function rigShoe(x,y,r){
+  const w=r*2.3, h=r*1.3;
+  return `<ellipse cx="${x}" cy="${y}" rx="${w*0.5}" ry="${h*0.55}" fill="${SHOE_COLOR}"/><rect x="${x-w*0.45}" y="${y+h*0.28}" width="${w*0.9}" height="${h*0.22}" rx="${h*0.1}" fill="${SHOE_SOLE}"/>`;
+}
+function rigTattoo(shoulderX,shoulderY,ang1,len1){
+  const toRad=d=>d*Math.PI/180;
+  const a1=toRad(ang1);
+  const midX=shoulderX+Math.sin(a1)*len1*0.4, midY=shoulderY+Math.cos(a1)*len1*0.4;
+  return `<path d="M ${midX-5},${midY-4} L ${midX+5},${midY-4} L ${midX+2},${midY+5} L ${midX-2},${midY+5} Z" fill="${TATTOO_COLOR}" opacity="0.9"/>`;
+}
+// Premium "Diamond Tattoo Set" cosmetic — a sparkling diamond motif instead of the standard mark.
+function rigDiamondTattoo(shoulderX,shoulderY,ang1,len1){
+  const toRad=d=>d*Math.PI/180;
+  const a1=toRad(ang1);
+  const midX=shoulderX+Math.sin(a1)*len1*0.4, midY=shoulderY+Math.cos(a1)*len1*0.4;
+  return `
+    <path d="M ${midX},${midY-6} L ${midX+5},${midY} L ${midX},${midY+6} L ${midX-5},${midY} Z" fill="#BAF2FF" opacity="0.95"/>
+    <circle cx="${midX}" cy="${midY}" r="1.4" fill="#FFFFFF"/>
+    <circle cx="${midX-6}" cy="${midY-6}" r="1" fill="#FFFFFF" opacity="0.8"/>
+    <circle cx="${midX+6}" cy="${midY+5}" r="1" fill="#FFFFFF" opacity="0.8"/>
+  `;
+}
+// Premium "Gold Chain Trim" cosmetic — a small gold chain draped at the neckline.
+function rigGoldChain(cx,neckY){
+  return `
+    <path d="M ${cx-9},${neckY} Q ${cx},${neckY+9} ${cx+9},${neckY}" stroke="#F2C744" stroke-width="2.4" fill="none"/>
+    <circle cx="${cx}" cy="${neckY+8}" r="2.4" fill="#F2C744"/>
+  `;
+}
+// Premium "Flame Entrance Aura" cosmetic — a glowing flame burst behind the fighter.
+function rigFlameAura(cx,cy){
+  const gid = 'auraGrad_' + Math.random().toString(36).slice(2,8);
+  return `
+    <defs>
+      <radialGradient id="${gid}" cx="50%" cy="50%" r="50%">
+        <stop offset="0%" stop-color="#F2C744" stop-opacity="0.55"/>
+        <stop offset="55%" stop-color="#E8483C" stop-opacity="0.32"/>
+        <stop offset="100%" stop-color="#E8483C" stop-opacity="0"/>
+      </radialGradient>
+    </defs>
+    <circle cx="${cx}" cy="${cy}" r="58" fill="url(#${gid})"/>
+  `;
+}
+// Premium "Champion's Robe" cosmetic — a flowing cape from the shoulders down.
+function rigRoyalRobe(cx,shY,hipY,color){
+  const capeBottom = hipY + 30;
+  return `<path d="
+    M ${cx-22},${shY-4}
+    C ${cx-30},${shY+40} ${cx-26},${capeBottom-20} ${cx-16},${capeBottom}
+    L ${cx+16},${capeBottom}
+    C ${cx+26},${capeBottom-20} ${cx+30},${shY+40} ${cx+22},${shY-4}
+    C ${cx+12},${shY+2} ${cx-12},${shY+2} ${cx-22},${shY-4}
+    Z" fill="${color}" opacity="0.92"/>
+    <path d="M ${cx-22},${shY-4} C ${cx-12},${shY+2} ${cx+12},${shY+2} ${cx+22},${shY-4}" stroke="${shadeColor(color,-25)}" stroke-width="2" fill="none"/>`;
+}
+
+// Renders a complete fighter SVG (innerHTML for an <svg viewBox="0 0 140 190">) for the given pose + appearance.
+// Shared by both the player rig and companion rig — simple almond eyes (customizable color) plus
+// brows whose angle reflects the chosen expression. Neither rig had ANY face detail before this;
+// defaults are used when an appearance object doesn't specify eyeColor/eyeStyle (e.g. companion
+// roster seeds, which weren't authored with these fields).
+function renderFaceMarkup(appearance, skin, cx, headCY){
+  const eyeColor = appearance.eyeColor || '#1A1A1A';
+  const browShade = shadeColor(skin, -45);
+  const browLift = { calm:0, focused:2, fierce:4 }[appearance.eyeStyle] ?? 2;
+  return `
+    <ellipse cx="${cx-5.5}" cy="${headCY+1}" rx="2.1" ry="2.5" fill="${eyeColor}"/>
+    <ellipse cx="${cx+5.5}" cy="${headCY+1}" rx="2.1" ry="2.5" fill="${eyeColor}"/>
+    <line x1="${cx-9}" y1="${headCY-5+browLift}" x2="${cx-2.5}" y2="${headCY-5.5}" stroke="${browShade}" stroke-width="1.6" stroke-linecap="round"/>
+    <line x1="${cx+2.5}" y1="${headCY-5.5}" x2="${cx+9}" y2="${headCY-5+browLift}" stroke="${browShade}" stroke-width="1.6" stroke-linecap="round"/>
+  `;
+}
+
+function renderFighterRig(pose, appearance, mirror=false){
+  const bv = BUILD_VARIANTS[appearance.build] || BUILD_VARIANTS.balanced;
+  const bs = BODY_SHAPES[appearance.bodyShape] || BODY_SHAPES.straight;
+  const skin = appearance.skin, gear = appearance.gear;
+  const skinShade = shadeColor(skin, -22);
+  const cx=70, hipY=128, shY=62, waistY=110;
+
+  // Two independent customization axes: BUILD controls bulk (limb thickness, overall scale),
+  // BODY_SHAPES controls silhouette (the same 5 shapes companions can use — straight, curvy,
+  // athletic, lean, broad) — so build×shape gives 20 real combinations instead of 4 fixed builds.
+  const bulk = bv.torsoScale;
+  const shoulderHalfW = bs.shoulderHalfW * bulk, bustHalfW = bs.bustHalfW * bulk;
+  const waistHalfW = bs.waistHalfW * bulk, hipHalfW = bs.hipHalfW * bulk;
+  const bustY = shY + (waistY-shY)*0.4;
+
+  const torso = `<path d="
+    M ${cx-shoulderHalfW},${shY}
+    C ${cx-shoulderHalfW-2},${shY+10} ${cx-bustHalfW-2},${bustY-6} ${cx-bustHalfW},${bustY}
+    C ${cx-bustHalfW+1},${bustY+10} ${cx-waistHalfW-1},${waistY-10} ${cx-waistHalfW},${waistY}
+    C ${cx-waistHalfW-1},${waistY+8} ${cx-hipHalfW},${hipY-14} ${cx-hipHalfW},${hipY}
+    L ${cx+hipHalfW},${hipY}
+    C ${cx+hipHalfW},${hipY-14} ${cx+waistHalfW+1},${waistY+8} ${cx+waistHalfW},${waistY}
+    C ${cx+waistHalfW-1},${waistY-10} ${cx+bustHalfW-1},${bustY+10} ${cx+bustHalfW},${bustY}
+    C ${cx+bustHalfW+2},${bustY-6} ${cx+shoulderHalfW+2},${shY+10} ${cx+shoulderHalfW},${shY}
+    C ${cx+shoulderHalfW*0.7},${shY-10} ${cx-shoulderHalfW*0.7},${shY-10} ${cx-shoulderHalfW},${shY}
+    Z" fill="${gear}"/>`;
+
+  const neck = `<rect x="${cx-7}" y="${shY-10}" width="14" height="12" fill="${skin}"/>`;
+  const headCY = shY-22;
+  const head = `<circle cx="${cx}" cy="${headCY}" r="16" fill="${skin}"/>`;
+  const earL = `<ellipse cx="${cx-15}" cy="${headCY}" rx="2.5" ry="4" fill="${skinShade}"/>`;
+  const earR = `<ellipse cx="${cx+15}" cy="${headCY}" rx="2.5" ry="4" fill="${skin}"/>`;
+
+  // Basic face — didn't exist at all before (fighters were fully faceless).
+  const faceMarkup = renderFaceMarkup(appearance, skin, cx, headCY);
+
+  const fighterHairMarkup = renderCompanionHair(appearance.hairStyle, appearance.hairColor || '#1A1A1A', cx, shY);
+  const fighterJewelryMarkup = appearance.jewelry ? `<circle cx="${cx}" cy="${shY-6}" r="2" fill="${appearance.jewelryColor||'#F2C744'}"/>` : '';
+
+  const AUW=bv.armUpperW, ALW=bv.armLowerW, LUW=bv.legUpperW, LLW=bv.legLowerW;
+  const ARM_LEN1=24, ARM_LEN2=22, LEG_LEN1=30, LEG_LEN2=28;
+  const shoulderL=[cx-shoulderHalfW+1, shY+2], shoulderR=[cx+shoulderHalfW-1, shY+2];
+  const hipL=[cx-hipHalfW*0.72, hipY], hipR=[cx+hipHalfW*0.72, hipY];
+
+  let backArm,frontArm,backLeg,frontLeg;
+  const P = POSE_DEFS[pose] || POSE_DEFS.idle;
+
+  if(P.reachArms){
+    const yRef = { sh: shY, waist: waistY, hip: hipY };
+    const backTy = yRef[P.armTargetBack[2]] + P.armTargetBack[1];
+    const frontTy = yRef[P.armTargetFront[2]] + P.armTargetFront[1];
+    backArm = rigLimbReach(...shoulderL, ARM_LEN1, ARM_LEN2, cx+P.armTargetBack[0], backTy, AUW, ALW, skinShade, P.bendBack);
+    frontArm = rigLimbReach(...shoulderR, ARM_LEN1, ARM_LEN2, cx+P.armTargetFront[0], frontTy, AUW, ALW, skin, P.bendFront);
+  } else {
+    backArm = rigLimb(...shoulderL, P.lArmS, ARM_LEN1*(P.armLenMult||1), P.lArmE, ARM_LEN2*(P.armLenMult||1), AUW, ALW, skinShade);
+    frontArm = rigLimb(...shoulderR, P.rArmS, ARM_LEN1*(P.armLenMult||1), P.rArmE, ARM_LEN2*(P.armLenMult||1), AUW, ALW, skin);
+  }
+  backLeg = rigLimb(...hipL, P.lLegH, LEG_LEN1*(P.legLenMult||1), P.lLegK, LEG_LEN2*(P.legLenMult||1), LUW, LLW, skinShade);
+  frontLeg = rigLimb(...hipR, P.rLegH, LEG_LEN1*(P.legLenMult||1), P.rLegK, LEG_LEN2*(P.legLenMult||1), LUW, LLW, skin);
+
+  const shorts = `<rect x="${cx-hipHalfW*0.85}" y="${hipY-9}" width="${hipHalfW*1.7}" height="14" rx="5" fill="${shadeColor(gear,-20)}"/>`;
+  const glovesMarkup = appearance.gloves ? rigGlove(backArm.endX,backArm.endY,backArm.endR*1.6) + rigGlove(frontArm.endX,frontArm.endY,frontArm.endR*1.6) : '';
+  const shoesMarkup = appearance.shoes ? rigShoe(backLeg.endX,backLeg.endY,backLeg.endR*1.3) + rigShoe(frontLeg.endX,frontLeg.endY,frontLeg.endR*1.3) : '';
+  // Premium cosmetics (equipped via Home tab, purchased via Shop) layer on top of the base rig.
+  const cos = appearance.cosmetics || {};
+  const tattooMarkup = appearance.tattoo
+    ? (cos.diamondTatt ? rigDiamondTattoo(shoulderR[0],shoulderR[1],0,ARM_LEN1) : rigTattoo(shoulderR[0],shoulderR[1],0,ARM_LEN1))
+    : '';
+  const chainMarkup = cos.goldChain ? rigGoldChain(cx, shY-4) : '';
+  const auraMarkup = cos.flameAura ? rigFlameAura(cx, hipY-30) : '';
+  const robeMarkup = cos.royalRobe ? rigRoyalRobe(cx, shY, hipY, shadeColor(gear,10)) : '';
+
+  const innerMarkup = `
+    ${auraMarkup}
+    ${robeMarkup}
+    ${backLeg.markup}
+    ${torso}
+    ${shorts}
+    ${backArm.markup}
+    ${neck}${head}${earL}${earR}${faceMarkup}${fighterHairMarkup}${fighterJewelryMarkup}${chainMarkup}
+    ${frontArm.markup}
+    ${tattooMarkup}
+    ${frontLeg.markup}
+    ${shoesMarkup}
+    ${glovesMarkup}
+  `;
+  const leanWrap = P.lean ? `<g transform="rotate(${P.lean} ${cx} ${hipY})">${innerMarkup}</g>` : innerMarkup;
+  return mirror ? `<g transform="translate(140,0) scale(-1,1)">${leanWrap}</g>` : leanWrap;
+}
+
+// Renders a companion in a simple standing idle pose with a curved torso silhouette
+// (bust/waist/hip control points) rather than the fighter rig's straight taper — this is what
+// lets body shapes like "curvy" actually read as curvy instead of just a uniform width scale.
+function renderCompanionRig(appearance, mirror=false){
+  const shape = BODY_SHAPES[appearance.bodyShape] || BODY_SHAPES.straight;
+  const skin = appearance.skin, gear = appearance.gear;
+  const skinShade = shadeColor(skin, -22);
+  const cx=70, hipY=128, shY=62, waistY=104, bustY=shY+(waistY-shY)*0.4;
+  const { shoulderHalfW, bustHalfW, waistHalfW, hipHalfW, armW, legW } = shape;
+
+  const torso = `<path d="
+    M ${cx-shoulderHalfW},${shY}
+    C ${cx-shoulderHalfW-2},${shY+10} ${cx-bustHalfW-2},${bustY-6} ${cx-bustHalfW},${bustY}
+    C ${cx-bustHalfW+1},${bustY+10} ${cx-waistHalfW-1},${waistY-10} ${cx-waistHalfW},${waistY}
+    C ${cx-waistHalfW-1},${waistY+8} ${cx-hipHalfW},${hipY-14} ${cx-hipHalfW},${hipY}
+    L ${cx+hipHalfW},${hipY}
+    C ${cx+hipHalfW},${hipY-14} ${cx+waistHalfW+1},${waistY+8} ${cx+waistHalfW},${waistY}
+    C ${cx+waistHalfW-1},${waistY-10} ${cx+bustHalfW-1},${bustY+10} ${cx+bustHalfW},${bustY}
+    C ${cx+bustHalfW+2},${bustY-6} ${cx+shoulderHalfW+2},${shY+10} ${cx+shoulderHalfW},${shY}
+    C ${cx+shoulderHalfW*0.7},${shY-10} ${cx-shoulderHalfW*0.7},${shY-10} ${cx-shoulderHalfW},${shY}
+    Z" fill="${gear}"/>`;
+
+  const neck = `<rect x="${cx-7}" y="${shY-10}" width="14" height="12" fill="${skin}"/>`;
+  const headCY = shY-22;
+  const head = `<circle cx="${cx}" cy="${headCY}" r="16" fill="${skin}"/>`;
+  const earL = `<ellipse cx="${cx-15}" cy="${headCY}" rx="2.5" ry="4" fill="${skinShade}"/>`;
+  const earR = `<ellipse cx="${cx+15}" cy="${headCY}" rx="2.5" ry="4" fill="${skin}"/>`;
+  const faceMarkup = renderFaceMarkup(appearance, skin, cx, headCY);
+  const hairMarkup = renderCompanionHair(appearance.hairStyle, appearance.hairColor, cx, shY);
+
+  const shoulderL=[cx-shoulderHalfW+1, shY+2], shoulderR=[cx+shoulderHalfW-1, shY+2];
+  const hipL=[cx-hipHalfW*0.5, hipY], hipR=[cx+hipHalfW*0.5, hipY];
+
+  // Arms angled slightly outward at rest so they don't obscure the waist/hip curve
+  const backArm = rigLimb(...shoulderL, -8,24, 14,22, armW,armW*0.75, skinShade);
+  const frontArm = rigLimb(...shoulderR, 8,24, -14,22, armW,armW*0.75, skin);
+  const backLeg = rigLimb(...hipL, -4,30, 6,28, legW,legW*0.75, skinShade);
+  const frontLeg = rigLimb(...hipR, 4,30, -6,28, legW,legW*0.75, skin);
+
+  const jewelryMarkup = appearance.jewelry ? `<circle cx="${cx}" cy="${shY-6}" r="2" fill="${appearance.jewelryColor||'#F2C744'}"/>` : '';
+
+  const innerMarkup = `
+    ${backLeg.markup}
+    ${torso}
+    ${backArm.markup}
+    ${neck}${head}${earL}${earR}${faceMarkup}${hairMarkup}${jewelryMarkup}
+    ${frontArm.markup}
+    ${frontLeg.markup}
+  `;
+  return mirror ? `<g transform="translate(140,0) scale(-1,1)">${innerMarkup}</g>` : innerMarkup;
+}
+
+// Simple hair silhouettes layered behind/around the head circle. Kept intentionally minimal —
+// a few shape archetypes rather than literal strand detail, consistent with the rig's flat style.
+function renderCompanionHair(style, color, cx, shY){
+  if(!style || style === 'none') return '';
+  const headCY = shY-22, headR = 16;
+  if(style === 'short'){
+    return `<path d="M ${cx-headR},${headCY} C ${cx-headR},${headCY-14} ${cx+headR},${headCY-14} ${cx+headR},${headCY} L ${cx+headR},${headCY-2} C ${cx+headR},${headCY-12} ${cx-headR},${headCY-12} ${cx-headR},${headCY-2} Z" fill="${color}"/>`;
+  }
+  if(style === 'long'){
+    return `<path d="M ${cx-headR},${headCY-4} C ${cx-headR-1},${headCY-16} ${cx+headR+1},${headCY-16} ${cx+headR},${headCY-4}
+             L ${cx+headR+2},${headCY+28} C ${cx+headR+2},${headCY+32} ${cx+headR-3},${headCY+32} ${cx+headR-3},${headCY+26}
+             L ${cx+headR-2},${headCY-2} L ${cx-headR+2},${headCY-2} L ${cx-headR+3},${headCY+26}
+             C ${cx-headR+3},${headCY+32} ${cx-headR-2},${headCY+32} ${cx-headR-2},${headCY+28} Z" fill="${color}"/>`;
+  }
+  if(style === 'ponytail'){
+    return `<path d="M ${cx-headR},${headCY-4} C ${cx-headR-1},${headCY-16} ${cx+headR+1},${headCY-16} ${cx+headR},${headCY-4} L ${cx+headR},${headCY-1} C ${cx+headR},${headCY-12} ${cx-headR},${headCY-12} ${cx-headR},${headCY-1} Z" fill="${color}"/>
+            <path d="M ${cx+headR-3},${headCY-2} C ${cx+headR+9},${headCY+2} ${cx+headR+10},${headCY+22} ${cx+headR+1},${headCY+28} C ${cx+headR-2},${headCY+22} ${cx+headR-1},${headCY+6} ${cx+headR-5},${headCY+1} Z" fill="${color}"/>`;
+  }
+  if(style === 'buzz'){
+    return `<path d="M ${cx-headR},${headCY-2} C ${cx-headR},${headCY-12} ${cx+headR},${headCY-12} ${cx+headR},${headCY-2} L ${cx+headR},${headCY-4} C ${cx+headR},${headCY-13} ${cx-headR},${headCY-13} ${cx-headR},${headCY-4} Z" fill="${color}" opacity="0.85"/>`;
+  }
+  if(style === 'afro'){
+    return `<circle cx="${cx}" cy="${headCY-3}" r="${headR+5}" fill="none" stroke="${color}" stroke-width="11"/>`;
+  }
+  if(style === 'mohawk'){
+    return `<path d="M ${cx-4},${headCY-16} L ${cx+4},${headCY-16} L ${cx+3},${headCY+14} L ${cx-3},${headCY+14} Z" fill="${color}"/>`;
+  }
+  return '';
+}
+
+// Pose definitions — validated angles from prototyping. reachArms poses use IK targets instead of fixed angles.
+const POSE_DEFS = {
+  idle:    { lArmS:10,  lArmE:25,  rArmS:-12, rArmE:30,  lLegH:-4,  lLegK:6,   rLegH:4,  rLegK:6,   lean:0 },
+  punch:   { lArmS:18,  lArmE:20,  rArmS:-88, rArmE:5,   lLegH:-10, lLegK:10,  rLegH:14, rLegK:8,   lean:0, armLenMult:1.08 },
+  kick:    { lArmS:30,  lArmE:20,  rArmS:-25, rArmE:25,  lLegH:-95, lLegK:-55, rLegH:30, rLegK:10,  lean:0, legLenMult:1.05 },
+  dodge:   { lArmS:35,  lArmE:40,  rArmS:-45, rArmE:-30, lLegH:-35, lLegK:45,  rLegH:35, rLegK:-10, lean:-12 },
+  block:   { reachArms:true, armTargetBack:[2,-32,'sh'], armTargetFront:[6,-30,'sh'], bendBack:1, bendFront:-1, lLegH:-6, lLegK:8, rLegH:6, rLegK:-8, lean:0 },
+  clinch:  { reachArms:true, armTargetBack:[-4,-30,'waist'], armTargetFront:[4,-30,'waist'], bendBack:-1, bendFront:1, lLegH:-8, lLegK:15, rLegH:12, rLegK:-15, lean:0 },
+  grapple: { reachArms:true, armTargetBack:[-6,10,'hip'], armTargetFront:[6,10,'hip'], bendBack:-1, bendFront:1, lLegH:-24,lLegK:30, rLegH:30, rLegK:32,  lean:0 },
+  crit:    { lArmS:-55, lArmE:-15, rArmS:120, rArmE:-15, lLegH:-22, lLegK:22,  rLegH:26, rLegK:-16, lean:6, armLenMult:1.15 },
+};
+
+function shadeColor(hex, percent){
+  const num = parseInt(hex.replace('#',''),16);
+  let r=(num>>16)+Math.round(255*(percent/100));
+  let g=((num>>8)&0xff)+Math.round(255*(percent/100));
+  let b=(num&0xff)+Math.round(255*(percent/100));
+  r=Math.max(0,Math.min(255,r)); g=Math.max(0,Math.min(255,g)); b=Math.max(0,Math.min(255,b));
+  return '#'+[r,g,b].map(v=>v.toString(16).padStart(2,'0')).join('');
+}
+
+function showToast(text){
+  const t = document.getElementById('toast');
+  t.textContent = text;
+  t.classList.add('show');
+  clearTimeout(window._toastTimer);
+  window._toastTimer = setTimeout(()=> t.classList.remove('show'), 2200);
+}
+
+// Vibrates on knockout if the setting is enabled and the device/browser supports it.
+// navigator.vibrate is widely unsupported on iOS Safari — this fails silently there, not an error.
+function triggerKnockoutVibration(){
+  if(!state.settings.vibrateOnKnockout) return;
+  try {
+    if(navigator.vibrate) navigator.vibrate([60, 40, 120]);
+  } catch(e) { /* no-op — vibration unsupported on this device */ }
+}
+
+/* ========================================================================
+   LOCAL NOTIFICATIONS
+   IMPORTANT HONESTY NOTE: these are NOT real background push notifications.
+   There's no server here to send anything, and this artifact can't run a
+   service worker anyway (sandboxed preview, no top-level HTTPS origin) — so
+   even once self-hosted with sw.js, a fully-closed app/browser still can't
+   receive these. What this DOES do: while the tab is open (foreground OR a
+   backgrounded-but-still-running tab, which most desktop/mobile browsers
+   allow for a while) fire a real OS-level notification for a handful of
+   genuinely exciting moments, on top of the in-app toast/badge/fanfare that
+   already covers the same events. Real always-works-when-closed push needs
+   FCM + a backend, same as flagged before.
+   ======================================================================== */
+function notificationsSupported(){
+  return typeof Notification !== 'undefined';
+}
+
+async function requestNotificationPermission(){
+  if(!notificationsSupported()){
+    showToast('Notifications are not supported in this browser');
+    return;
+  }
+  try {
+    const result = await Notification.requestPermission();
+    if(result === 'granted'){
+      state.settings.notificationsEnabled = true;
+      showToast('Notifications enabled!');
+      fireLocalNotification('🥊 Idle MMA Legends', "You're all set — you'll get pinged for big moments.");
+    } else {
+      state.settings.notificationsEnabled = false;
+      showToast(result === 'denied' ? 'Notifications blocked — check your browser/site settings to re-enable' : 'Notification permission dismissed');
+    }
+  } catch(e){
+    showToast('Could not request notification permission');
+  }
+  render();
+  scheduleSave();
+}
+
+function disableNotifications(){
+  state.settings.notificationsEnabled = false;
+  render();
+  scheduleSave();
+}
+
+async function fireLocalNotification(title, body){
+  if(!state.settings.notificationsEnabled) return;
+  if(!notificationsSupported() || Notification.permission !== 'granted') return;
+  try {
+    // Prefer the service worker's notification (works while a backgrounded tab is still alive,
+    // and is required on Android Chrome for anything beyond the simplest notifications) with a
+    // plain `new Notification()` fallback for contexts without an active SW registration.
+    if('serviceWorker' in navigator){
+      const reg = await navigator.serviceWorker.getRegistration();
+      if(reg){ await reg.showNotification(title, { body, icon: undefined, tag: title }); return; }
+    }
+    new Notification(title, { body });
+  } catch(e){ /* silently drop — a missed local notification isn't worth surfacing an error for */ }
+}
+
+// Combines base trained stats with all equipped gear bonuses — this is what combat and the
+// UI should read from, not state.fighter.stats directly, so gear actually matters in fights.
+function effectiveStats(){
+  const result = { ...state.fighter.stats };
+  Object.values(state.fighter.equipment).forEach(item => {
+    if(!item) return;
+    Object.entries(item.statBonuses).forEach(([key, val]) => {
+      result[key] = (result[key] || 0) + val;
+    });
+  });
+  Object.values(state.garage).forEach(vehicle => {
+    if(!vehicle) return;
+    Object.entries(vehicle.statBonuses).forEach(([key, val]) => {
+      result[key] = (result[key] || 0) + val;
+    });
+  });
+  if(state.social.leagueId){
+    const pct = gymLevelBonusPct();
+    if(pct > 0) STAT_KEYS_ALL.forEach(key => { result[key] = Math.round((result[key] || 0) * (1 + pct)); });
+  }
+  const cornerPct = cornerBonusPct();
+  if(cornerPct > 0) STAT_KEYS_ALL.forEach(key => { result[key] = Math.round((result[key] || 0) * (1 + cornerPct)); });
+  const prestigeBonus = prestigeStatBonus();
+  if(prestigeBonus > 0) STAT_KEYS_ALL.forEach(key => { result[key] = (result[key] || 0) + prestigeBonus; });
+  return result;
+}
+
+function totalPower(){
+  const s = effectiveStats();
+  return s.power + s.speed + s.defense + s.stamina + s.chin + s.technique + s.slip + s.mental;
+}
+
+function fighterAvatar(){
+  return state.fighter.gender === 'female' ? '🥊' : '🥊';
+}
+
+// Tier gates step up in clean 40-win increments across the board, including the final jump to
+// Hall of Fame — a full climb is 360 wins total.
+const TIERS = [
+  { name:'Amateur',      minWins:0,   cashMult:1,  xpMult:1,   sides:3  },
+  { name:'Regional',     minWins:40,  cashMult:1.6,xpMult:1.3, sides:4  },
+  { name:'Pro',          minWins:80,  cashMult:2.5,xpMult:1.7, sides:5  },
+  { name:'Contender',    minWins:120, cashMult:4,  xpMult:2.2, sides:6  },
+  { name:'Champion',     minWins:160, cashMult:7,  xpMult:3,   sides:7  },
+  { name:'Elite',        minWins:200, cashMult:11, xpMult:4,   sides:8  },
+  { name:'Veteran',      minWins:240, cashMult:17, xpMult:5.3, sides:9  },
+  { name:'Legend',       minWins:280, cashMult:26, xpMult:7,   sides:10 },
+  { name:'World Champion',minWins:320,cashMult:40, xpMult:9.2, sides:11 },
+  { name:'Hall of Fame', minWins:360, cashMult:60, xpMult:12,  sides:11 },
 ];
 
-self.addEventListener('install', (event) => {
-  event.waitUntil(
-    caches.open(CACHE_NAME).then((cache) => cache.addAll(APP_SHELL))
-  );
-  self.skipWaiting();
-});
+function currentTier(){
+  let t = TIERS[0];
+  for(const tier of TIERS){
+    if(state.fighter.wins >= tier.minWins) t = tier;
+  }
+  return t;
+}
 
-self.addEventListener('activate', (event) => {
-  event.waitUntil(
-    caches.keys().then((keys) =>
-      Promise.all(keys.filter((k) => k !== CACHE_NAME).map((k) => caches.delete(k)))
-    )
-  );
-  self.clients.claim();
-});
+/* ---------------------------- OPPONENT GENERATOR ---------------------------- */
+/* ========================================================================
+   COMBAT SIMULATION CORE — pure functions, shared by live animated bouts
+   and instant offline resolution. Validated via parameter sweep:
+   +20% stat edge -> ~64% win rate, +60% edge -> ~81%, +140% edge -> ~95%.
+   ======================================================================== */
+function deriveCombatStats(stats){
+  return {
+    maxHp: Math.round(100 + Math.sqrt(stats.chin)*14),
+    damageReduction: Math.min(0.30, Math.sqrt(stats.chin)*0.006),
+    critChance: Math.min(0.50, stats.technique*0.01),
+    dodgeChance: Math.min(0.35, stats.slip*0.01),
+    rallyChance: Math.min(0.25, stats.mental*0.005),
+    basePower: stats.power,
+  };
+}
 
-self.addEventListener('fetch', (event) => {
-  if(event.request.method !== 'GET') return;
-  event.respondWith(
-    caches.match(event.request).then((cached) => {
-      if(cached) return cached;
-      return fetch(event.request).then((response) => {
-        // Only cache successful, same-origin responses — avoid caching opaque cross-origin
-        // (e.g. Google Fonts) or error responses.
-        if(response.ok && response.type === 'basic'){
-          const copy = response.clone();
-          caches.open(CACHE_NAME).then((cache) => cache.put(event.request, copy));
+function rollDamage(atkStats, defStats, rng){
+  const isCrit = rng() < atkStats.critChance;
+  const dampedPower = Math.sqrt(atkStats.basePower) * 20;
+  const rawDmg = Math.max(6, Math.round(dampedPower * (0.5 + rng()*0.8)));
+  return { dmg: Math.round(rawDmg * (isCrit ? 2 : 1) * (1 - defStats.damageReduction)), isCrit };
+}
+
+// Simulates a full fight beat-by-beat. First attacker is randomized each fight (validated fix —
+// a fixed first-attacker caused a 65/35 split even between identical fighters).
+// extraCritChanceA: additive crit chance bonus applied ONLY to side 'a' (the player), so Home
+// perks like the Art Wall don't accidentally buff generated opponents too.
+function simulateFight(statsA, statsB, maxBeats=12, rng=Math.random, extraCritChanceA=0){
+  const a = deriveCombatStats(statsA);
+  if(extraCritChanceA > 0) a.critChance = Math.min(0.50, a.critChance + extraCritChanceA);
+  const b = deriveCombatStats(statsB);
+  let hpA = a.maxHp, hpB = b.maxHp;
+  const beats = [];
+  let attacker = rng() < 0.5 ? 'a' : 'b';
+
+  for(let i=0; i<maxBeats; i++){
+    const atkStats = attacker === 'a' ? a : b;
+    const defStats = attacker === 'a' ? b : a;
+    const dodged = rng() < defStats.dodgeChance;
+    let dmg = 0, isCrit = false;
+    if(!dodged){
+      const roll = rollDamage(atkStats, defStats, rng);
+      dmg = roll.dmg;
+      isCrit = roll.isCrit;
+    }
+    if(attacker === 'a') hpB = Math.max(0, hpB - dmg);
+    else hpA = Math.max(0, hpA - dmg);
+
+    // Mental rally: defender has a small chance to dig in and recover some HP after the exchange,
+    // but only if the hit didn't just knock them out (no rallying back from zero).
+    let rallied = false, healAmt = 0;
+    if(attacker === 'a' && hpB > 0 && rng() < b.rallyChance){
+      healAmt = Math.round(b.maxHp * 0.10);
+      hpB = Math.min(b.maxHp, hpB + healAmt);
+      rallied = true;
+    } else if(attacker === 'b' && hpA > 0 && rng() < a.rallyChance){
+      healAmt = Math.round(a.maxHp * 0.10);
+      hpA = Math.min(a.maxHp, hpA + healAmt);
+      rallied = true;
+    }
+
+    beats.push({ attacker, dodged, isCrit, dmg, hpA, hpB, rallied, healAmt });
+    if(hpA <= 0 || hpB <= 0) break;
+    attacker = attacker === 'a' ? 'b' : 'a';
+  }
+
+  let winner;
+  if(hpB <= 0 && hpA > 0) winner = 'a';
+  else if(hpA <= 0 && hpB > 0) winner = 'b';
+  else if(hpA <= 0 && hpB <= 0) winner = 'draw';
+  else winner = hpA >= hpB ? 'a' : 'b';
+
+  return { winner, beats, finalHpA: hpA, finalHpB: hpB, maxHpA: a.maxHp, maxHpB: b.maxHp };
+}
+
+const OPPONENT_FIRST_NAMES = ['Marcus','Dante','Viktor','Kade','Rico','Jonas','Leo','Tariq','Bruno','Axel','Hugo','Niko','Costa','Brick','Diego'];
+const OPPONENT_NICKNAMES = ['"The Hammer"','"Iron"','"Razor"','"The Wall"','"Vicious"','"Stormbreaker"','"The Butcher"','"Lights Out"','"The Reaper"','"Anvil"','"The Machine"','"Wildfire"'];
+const OPPONENT_LAST_NAMES = ['Volkov','Reyes','Okafor','Steele','Diaz','Hayes','Kovac','Silva','Drago','Vance','Ferreira','Stone'];
+
+// Prestige progressively tilts matchmaking in the player's favor: average win rate rises
+// ~0.1% per prestige, capped at a 75% average once a player hits 250 prestiges. Calibrated off
+// the power-edge -> win-rate curve validated above (+20% edge ~64%, +60% edge ~81%): getting
+// from a ~50% baseline to ~75% average requires roughly a +46% power edge, so we ramp a power
+// discount on opponents linearly up to that edge over 250 prestiges, then hold it flat.
+const PRESTIGE_WINRATE_CAP_AT = 250;   // prestiges needed to hit the win-rate cap
+const PRESTIGE_EDGE_AT_CAP = 0.46;     // ~+46% relative power edge ≈ +25 avg win-rate points (50%→75%)
+
+function prestigeCombatEdge(){
+  const p = Math.min(state.prestige.count, PRESTIGE_WINRATE_CAP_AT);
+  return (p / PRESTIGE_WINRATE_CAP_AT) * PRESTIGE_EDGE_AT_CAP;
+}
+
+// PRESTIGE STAT BONUS — every single prestige now grants a permanent +10 to all 8 stats,
+// stacking forever. This replaced an earlier design where only every-50th "Super Prestige"
+// milestones granted this — now it's a guaranteed baseline reward for every prestige, with
+// retention (1-3% of current stats) as a smaller bonus layered on top rather than the main event.
+const PRESTIGE_STAT_BONUS_PER_PRESTIGE = 10;
+function prestigeStatBonus(){
+  return state.prestige.count * PRESTIGE_STAT_BONUS_PER_PRESTIGE;
+}
+
+// SUPER PRESTIGE — now specifically the every-25th-prestige PvE-easing milestone (the stat bonus
+// above is no longer tied to this; it's a separate, always-on reward every single prestige).
+// Deliberately NOT a multiple of 10, so it no longer stacks an extra vehicle/partner slot on top
+// of the regular every-10th bonus — slots stay strictly on their own 10-prestige cadence.
+const SUPER_PRESTIGE_INTERVAL = 25;
+
+// PvE gets a little gentler with every Super Prestige tier EARNED AFTER the regular prestige
+// win-rate ramp caps out (at PRESTIGE_WINRATE_CAP_AT, currently 250) — deliberately NOT counting
+// tiers reached before that. Without this gate, prestiges 25-250 would get eased by BOTH systems
+// at once (the win-rate ramp above AND this range compression), making that whole stretch
+// noticeably too easy. This way it's purely a post-cap, deep-endgame bonus.
+const SUPER_PRESTIGE_OPPONENT_REDUCTION_PER_TIER = 0.01;
+const SUPER_PRESTIGE_OPPONENT_LOW_FLOOR = 0.20;
+const SUPER_PRESTIGE_OPPONENT_HIGH_FLOOR = 0.50;
+function superPrestigeDifficultyTier(){
+  return Math.max(0, Math.floor((state.prestige.count - PRESTIGE_WINRATE_CAP_AT) / SUPER_PRESTIGE_INTERVAL));
+}
+function prestigesToNextSuperTier(){
+  const next = (superPrestigeDifficultyTier()+1) * SUPER_PRESTIGE_INTERVAL + PRESTIGE_WINRATE_CAP_AT;
+  return Math.max(0, next - state.prestige.count);
+}
+function superPrestigeOpponentRange(){
+  const reduction = superPrestigeDifficultyTier() * SUPER_PRESTIGE_OPPONENT_REDUCTION_PER_TIER;
+  return {
+    low: Math.max(SUPER_PRESTIGE_OPPONENT_LOW_FLOOR, 0.80 - reduction),
+    high: Math.max(SUPER_PRESTIGE_OPPONENT_HIGH_FLOOR, 1.10 - reduction),
+  };
+}
+
+function generateOpponent(){
+  const tier = currentTier();
+  const myPower = totalPower();
+  // Opponent total power lands between a low and high bound of the player's current power, then
+  // gets further discounted by the player's accumulated prestige combat edge (see
+  // prestigeCombatEdge). The bounds themselves shrink 1 percentage point per Super Prestige tier
+  // on BOTH ends (see superPrestigeOpponentRange) — floored so fights never trivialize entirely.
+  const range = superPrestigeOpponentRange();
+  const oppPowerTarget = Math.round(myPower * (range.low + Math.random()*(range.high-range.low)) / (1 + prestigeCombatEdge()));
+
+  // Distribute that total across all 7 stats with some variance, so opponent has a believable stat spread
+  const statKeys = ['power','speed','defense','stamina','chin','technique','slip','mental'];
+  const weights = statKeys.map(() => Math.random()+0.4);
+  const weightSum = weights.reduce((a,b)=>a+b,0);
+  const stats = {};
+  statKeys.forEach((key,i) => {
+    stats[key] = Math.max(1, Math.round(oppPowerTarget * (weights[i]/weightSum)));
+  });
+
+  const build = BUILD_KEYS[Math.floor(Math.random()*BUILD_KEYS.length)];
+  const name = `${OPPONENT_FIRST_NAMES[Math.floor(Math.random()*OPPONENT_FIRST_NAMES.length)]} ${OPPONENT_LAST_NAMES[Math.floor(Math.random()*OPPONENT_LAST_NAMES.length)]}`;
+  const nickname = OPPONENT_NICKNAMES[Math.floor(Math.random()*OPPONENT_NICKNAMES.length)];
+
+  return {
+    name, nickname,
+    tierName: tier.name,
+    stats,
+    totalPower: statKeys.reduce((sum,k) => sum + stats[k], 0),
+    appearance: {
+      build,
+      skin: SKIN_TONES[Math.floor(Math.random()*SKIN_TONES.length)],
+      gear: GEAR_COLORS[Math.floor(Math.random()*GEAR_COLORS.length)],
+      gloves: true,
+      shoes: true,
+      tattoo: Math.random() < 0.35,
+    }
+  };
+}
+
+/* ---------------------------- GAME LOOP ---------------------------- */
+const TICK_MS = 1000;
+
+function gameTick(deltaMs, isOffline=false){
+  processTraining(deltaMs);
+  if(isOffline){
+    processFightingOffline(deltaMs);
+  } else {
+    processFighting(deltaMs);
+  }
+}
+
+// Offline variant: resolves fights instantly (no animated bout/opponent card), since there's
+// no screen to watch the choreography on. Keeps the same odds/rewards logic as a live bout.
+function processFightingOffline(deltaMs){
+  const loop = state.loops.fighting;
+  loop.progress += deltaMs;
+  let offlineLootCount = 0;
+  while(loop.progress >= loop.interval){
+    loop.progress -= loop.interval;
+    const tier = currentTier();
+    const opponent = generateOpponent();
+    const result = simulateFight(effectiveStats(), opponent.stats, 12, Math.random, homePerkBonus('critPct'));
+    const win = result.winner === 'a';
+    const isCrit = win && result.beats.some(b => b.attacker==='a' && b.isCrit && b.hpB<=0);
+
+    if(win){
+      state.fighter.wins++;
+      addWeeklyWins(1);
+      ensureDailyReset();
+      state.daily.winsToday++;
+      const cashGain = applyCashGain((8 + state.fighter.level*2) * tier.cashMult * (isCrit?1.5:1));
+      state.economy.cash += cashGain;
+      state.daily.cashToday += cashGain;
+      if(isCrit) state.daily.critsToday++;
+      gainXp(Math.round(10 * tier.xpMult));
+
+      // Offline wins still generate loot, but auto-resolved immediately (auto-equip-if-better or
+      // sell) rather than queued as boxes — the player wasn't present to manually open hundreds of them.
+      const careerTierIndex = TIERS.findIndex(t => t.name === tier.name) + 1;
+      const tierForLoot = Math.max(1, Math.min(10, careerTierIndex));
+      if(Math.random() < 0.08){
+        const category = Object.keys(VEHICLE_CATEGORIES)[Math.floor(Math.random()*Object.keys(VEHICLE_CATEGORIES).length)];
+        autoResolveVehicle(generateVehicleItem(category, tierForLoot));
+      } else {
+        autoResolveItem(generateLootItem(tierForLoot));
+      }
+      offlineLootCount++;
+    } else {
+      state.fighter.losses++;
+      const cashGain = applyCashGain((2 + state.fighter.level) * tier.cashMult * 0.4);
+      state.economy.cash += cashGain;
+      gainXp(Math.round(4 * tier.xpMult));
+    }
+    if(state.speedBoost.noAdsOwned && Math.random() < 0.2){
+      state.economy.teeth += 1;
+    }
+    const newTier = currentTier();
+    if(newTier.name !== state.fighter.tier) state.fighter.tier = newTier.name;
+  }
+  return offlineLootCount;
+}
+
+function processTraining(deltaMs){
+  const loop = state.loops.training;
+  const effectiveDelta = deltaMs * (1 + homePerkBonus('trainSpeedPct'));
+  loop.progress += effectiveDelta;
+  if(loop.progress >= loop.interval){
+    loop.progress -= loop.interval;
+    doTrainingTick();
+  }
+}
+
+function doTrainingTick(){
+  const loop = state.loops.training;
+  const statKey = loop.statCycle[loop.statIndex];
+  const gain = 1;
+  state.fighter.stats[statKey] += gain;
+  ensureDailyReset();
+  state.daily.trainToday++;
+  loop.statIndex = (loop.statIndex + 1) % loop.statCycle.length;
+  pushLog(`Training: +${gain} ${capitalize(statKey)}`, 'train');
+  gainXp(3);
+}
+
+function processFighting(deltaMs){
+  const loop = state.loops.fighting;
+  // Pause the fight timer while a bout is actively playing out, so fights don't overlap
+  if(state.bout.phase !== 'none') return;
+  loop.progress += deltaMs;
+  if(loop.progress >= loop.interval){
+    loop.progress -= loop.interval;
+    startBout();
+  }
+}
+
+// Kicks off a new bout: generates an opponent, runs the validated HP-based simulation,
+// then maps the resulting beats to animation poses for the choreographed exchange.
+function startBout(){
+  const opponent = generateOpponent();
+  // "Smash-click" hype: tapping the fight scene builds charge (0-20) that grants up to +15%
+  // crit chance on the next bout, rewarding active engagement with genuinely higher win odds
+  // (crits both hit harder and can trigger bonus Teeth). Charge now persists fully across bouts
+  // (previously cut to 40% after each win) — an actively-tapping player keeps their crit bonus
+  // built up fight after fight instead of it resetting; it only fades via the idle-decay below
+  // if they actually stop tapping for a few seconds.
+  const clickBonusCrit = Math.min(0.15, (state.clickCombat.charge||0) * 0.0075);
+  const result = simulateFight(effectiveStats(), opponent.stats, 12, Math.random, homePerkBonus('critPct') + clickBonusCrit);
+  const win = result.winner === 'a';
+
+  const animBeats = buildAnimBeatsFromSim(result);
+
+  state.bout = {
+    phase: 'prefight',
+    phaseUntil: Date.now() + 2600,
+    opponent,
+    beats: animBeats,
+    beatIndex: 0,
+    outcome: win ? 'win' : 'loss',
+    isCrit: animBeats.some(b => b.isFinal && b.isCrit),
+    playerPose: 'idle',
+    opponentPose: 'idle',
+    playerHp: result.maxHpA,
+    playerMaxHp: result.maxHpA,
+    opponentHp: result.maxHpB,
+    opponentMaxHp: result.maxHpB,
+    promotedTo: null,
+  };
+}
+
+// Maps simulated combat beats (real damage/dodge/crit data) to animation pose pairs.
+// 'a' is always the player, 'b' is always the opponent.
+function buildAnimBeatsFromSim(result){
+  const strikeMoves = ['punch','kick'];
+  return result.beats.map((beat, i) => {
+    const isPlayer = beat.attacker === 'a';
+    const isFinal = i === result.beats.length - 1 && (beat.hpA<=0 || beat.hpB<=0);
+    let move;
+    if(beat.dodged) move = strikeMoves[Math.floor(Math.random()*2)];
+    else if(beat.isCrit) move = 'crit';
+    else move = strikeMoves[Math.floor(Math.random()*2)];
+
+    return {
+      attacker: isPlayer ? 'player' : 'opponent',
+      move,
+      defenderReacts: beat.dodged ? 'dodge' : (isFinal ? 'hit' : 'block'),
+      dodged: beat.dodged,
+      isCrit: beat.isCrit,
+      dmg: beat.dmg,
+      hpA: beat.hpA,
+      hpB: beat.hpB,
+      isFinal,
+    };
+  });
+}
+
+// Advances the bout state machine. Called on every fast animation tick (~200ms).
+function updateBout(){
+  const bout = state.bout;
+  if(bout.phase === 'none') return;
+  const now = Date.now();
+  if(now < bout.phaseUntil) return;
+
+  if(bout.phase === 'prefight'){
+    bout.phase = 'exchange';
+    bout.beatIndex = 0;
+    advanceBoutBeat();
+    return;
+  }
+
+  if(bout.phase === 'exchange'){
+    bout.beatIndex++;
+    if(bout.beatIndex >= bout.beats.length){
+      resolveBoutOutcome();
+      return;
+    }
+    advanceBoutBeat();
+    return;
+  }
+
+  if(bout.phase === 'resolved'){
+    state.bout = { phase:'none', phaseUntil:0, opponent:null, beats:[], beatIndex:0, outcome:null, playerPose:'idle', opponentPose:'idle' };
+  }
+}
+
+function advanceBoutBeat(){
+  const bout = state.bout;
+  const beat = bout.beats[bout.beatIndex];
+  const beatDuration = beat.isFinal ? 1300 : 900;
+
+  if(beat.attacker === 'player'){
+    bout.playerPose = beat.move;
+    bout.opponentPose = beat.dodged ? 'dodge' : 'block';
+  } else {
+    bout.opponentPose = beat.move;
+    bout.playerPose = beat.dodged ? 'dodge' : 'block';
+  }
+  // Sync live HP from the simulated beat so the fight-card bars drain in real time with the animation.
+  bout.playerHp = beat.hpA;
+  bout.opponentHp = beat.hpB;
+  bout.phaseUntil = Date.now() + beatDuration;
+}
+
+function resolveBoutOutcome(){
+  const bout = state.bout;
+  const tier = currentTier();
+  const opponent = bout.opponent;
+
+  if(bout.outcome === 'win'){
+    state.fighter.wins++;
+    addWeeklyWins(1);
+    ensureDailyReset();
+    state.daily.winsToday++;
+    const cashGain = applyCashGain((8 + state.fighter.level*2) * tier.cashMult * (bout.isCrit?1.5:1));
+    state.economy.cash += cashGain;
+    state.daily.cashToday += cashGain;
+    if(bout.isCrit) state.daily.critsToday++;
+    let teethMsg = '';
+    if(bout.isCrit && Math.random() < 0.25){
+      const teethGain = 1 + Math.floor(Math.random()*2);
+      state.economy.teeth += teethGain;
+      teethMsg = ` +🦷${teethGain}`;
+    }
+    pushLog(bout.isCrit ? `💥 KNOCKOUT vs ${opponent.name} ${opponent.nickname}! (+$${cashGain}${teethMsg})` : `WIN vs ${opponent.name} ${opponent.nickname}! (+$${cashGain})`, 'win');
+    gainXp(Math.round(10 * tier.xpMult));
+    bout.playerPose = bout.isCrit ? 'crit' : 'punch';
+    bout.opponentPose = 'block';
+
+    if(bout.isCrit) triggerKnockoutVibration();
+
+    // Every win drops a loot box, roughly matching the player's current career tier (+/- 1, with
+    // a small chance to roll a tier higher for excitement). Capped at tier 10. The Security
+    // System home perk increases the odds of that lucky upgrade.
+    const careerTierIndex = TIERS.findIndex(t => t.name === tier.name) + 1; // 1-10
+    const luckyChance = 0.12 + homePerkBonus('lootPct');
+    const variance = Math.random() < luckyChance ? 1 : 0;
+    const boxTier = Math.max(1, Math.min(10, careerTierIndex + variance));
+    dropLootBox(boxTier, 'win');
+  } else {
+    state.fighter.losses++;
+    const cashGain = applyCashGain((2 + state.fighter.level) * tier.cashMult * 0.4);
+    state.economy.cash += cashGain;
+    pushLog(`Loss vs ${opponent.name} ${opponent.nickname}... (+$${cashGain})`, 'loss');
+    gainXp(Math.round(4 * tier.xpMult));
+    bout.playerPose = 'block';
+    bout.opponentPose = 'punch';
+  }
+
+  // Diamond in the Rough owners get a small passive Teeth trickle on every fight (win or loss)
+  // as a light substitute for the ad revenue the pack removes.
+  if(state.speedBoost.noAdsOwned && Math.random() < 0.2){
+    state.economy.teeth += 1;
+  }
+
+  const newTier = currentTier();
+  if(newTier.name !== state.fighter.tier){
+    state.fighter.tier = newTier.name;
+    pushLog(`🏆 Promoted to ${newTier.name}!`, 'level');
+    showToast(`Promoted to ${newTier.name}!`);
+    bout.promotedTo = newTier.name;
+    fireLocalNotification('🏆 Promoted!', `You've been promoted to ${newTier.name}.`);
+
+    // Tier-up always drops a guaranteed box at the new tier's rarity level — a clear milestone reward.
+    const newTierIndex = TIERS.findIndex(t => t.name === newTier.name) + 1;
+    dropLootBox(Math.min(10, newTierIndex), 'tierup');
+  }
+
+  bout.phase = 'resolved';
+  // Give the promotion fanfare extra time on screen instead of the usual brief result flash.
+  bout.phaseUntil = Date.now() + (bout.promotedTo ? 3600 : 1800);
+  scheduleSave();
+}
+
+// Idle animation cycle: rotates through a believable "shadow-boxing while waiting" sequence
+// so the fighter always looks alive on screen between bouts.
+const IDLE_ANIM_SEQUENCE = ['idle','idle','punch','idle','kick','idle','dodge','idle','block','idle'];
+let idleAnimIndex = 0;
+
+function updateCombatAnimation(){
+  const now = Date.now();
+  if(now >= state.combatAnim.poseUntil){
+    idleAnimIndex = (idleAnimIndex + 1) % IDLE_ANIM_SEQUENCE.length;
+    state.combatAnim.currentPose = IDLE_ANIM_SEQUENCE[idleAnimIndex];
+    const isActionPose = state.combatAnim.currentPose !== 'idle';
+    state.combatAnim.poseUntil = now + (isActionPose ? 650 : 1100);
+  }
+}
+
+// LEVEL-UP BONUS — every level-up now grants a small reward instead of just a log line. Kept
+// deliberately auto-resolved rather than a manual wheel-spin: levels can come multiple times per
+// minute early on (xpToNext only grows 18% per level), so a mandatory spin animation each time
+// would be disruptive rather than exciting. Every 10th level upgrades to a bigger, TARGETED bonus
+// (aimed at your weakest stat, like the roulette's own Targeted Training prize) with its own toast,
+// since milestone levels are rare enough that a little extra fanfare doesn't get old.
+const LEVELUP_BONUS_POOL = [
+  { weight:55, apply: () => {
+      const stat = STAT_KEYS_ALL[Math.floor(Math.random()*STAT_KEYS_ALL.length)];
+      state.fighter.stats[stat] += 1;
+      return `+1 ${capitalize(stat)}`;
+    } },
+  { weight:35, apply: () => {
+      const amt = 10 + state.fighter.level*2;
+      state.economy.cash += amt;
+      return `+$${amt}`;
+    } },
+  { weight:10, apply: () => {
+      state.economy.teeth += 1;
+      return `+1 🦷`;
+    } },
+];
+
+function applyLevelUpBonus(){
+  if(state.fighter.level % 10 === 0){
+    const stat = findWeakestStats(1)[0];
+    state.fighter.stats[stat] += 3;
+    const text = `+3 ${capitalize(stat)} (weakest stat)`;
+    showToast(`⭐ Level ${state.fighter.level}! ${text}`);
+    return text;
+  }
+  const total = LEVELUP_BONUS_POOL.reduce((sum,p) => sum+p.weight, 0);
+  let roll = Math.random() * total;
+  for(const prize of LEVELUP_BONUS_POOL){
+    roll -= prize.weight;
+    if(roll <= 0) return prize.apply();
+  }
+  return LEVELUP_BONUS_POOL[LEVELUP_BONUS_POOL.length-1].apply();
+}
+
+function gainXp(amount){
+  const boosted = Math.round(amount * (1 + homePerkBonus('xpPct') + powerUpBonus('xpPct')/100 + membershipBonusPct()/100));
+  state.fighter.xp += boosted;
+  if(state.social.leagueId){
+    state.social.contributedXp += boosted;
+    ensureWeeklyReset();
+    state.social.weeklyXp += boosted;
+  }
+  while(state.fighter.xp >= state.fighter.xpToNext){
+    state.fighter.xp -= state.fighter.xpToNext;
+    state.fighter.level++;
+    state.fighter.xpToNext = Math.round(state.fighter.xpToNext * 1.18);
+    const bonusText = applyLevelUpBonus();
+    pushLog(`⭐ Level Up! Now Level ${state.fighter.level} (${bonusText})`, 'level');
+    state.recentLevelUps.unshift({ level: state.fighter.level, bonus: bonusText, t: Date.now() });
+    if(state.recentLevelUps.length > 20) state.recentLevelUps.length = 20;
+  }
+}
+
+function capitalize(s){ return s.charAt(0).toUpperCase() + s.slice(1); }
+
+// Tapping the fight scene lets an active player push the animation along faster (skips the
+// remaining wait on the current beat) and builds "hype" charge that grants bonus crit chance
+// on the fighter's next bout. Sustained RAPID tapping (each tap within 700ms of the last) builds
+// a combo multiplier up to 10x on how much charge each tap adds — so an actively-tapping player
+// with good stats can hit max charge (and max crit bonus) in a couple of seconds instead of
+// slowly accumulating it one tap at a time, directly rewarding active engagement with faster wins.
+const HYPE_COMBO_WINDOW_MS = 700;
+const HYPE_COMBO_MAX_MULTIPLIER = 10;
+function handleFightSceneClick(){
+  if(!state.fighter.name) return;
+  const now = Date.now();
+  const isRapid = (now - (state.clickCombat.lastClickAt||0)) < HYPE_COMBO_WINDOW_MS;
+  state.clickCombat.combo = isRapid ? Math.min(30, (state.clickCombat.combo||0) + 1) : 1;
+  const multiplier = Math.min(HYPE_COMBO_MAX_MULTIPLIER, 1 + Math.floor(state.clickCombat.combo / 3));
+  state.clickCombat.charge = Math.min(20, (state.clickCombat.charge||0) + multiplier);
+  state.clickCombat.lastClickAt = now;
+  if(state.bout.phase === 'exchange' || state.bout.phase === 'prefight'){
+    // Let the very next 200ms tick fire immediately instead of waiting out the beat/prefight timer.
+    state.bout.phaseUntil = Date.now();
+  }
+}
+
+/* ---------------------------- OFFLINE CATCH-UP ---------------------------- */
+// Base idle/offline catch-up window is 2 hours; every prestige permanently adds 30 seconds to
+// that window, rewarding long-term progress with more useful time away from the game — capped
+// at 48h max (reached at 5,520 prestiges) so the catch-up simulation in processOfflineProgress
+// (which runs synchronously in fixed 10s steps, no yielding) can never balloon into a
+// multi-thousand-iteration loop and freeze the UI after a very long absence at very high
+// prestige counts.
+const IDLE_CAP_BASE_MS = 2*60*60*1000;
+const IDLE_CAP_PER_PRESTIGE_MS = 30*1000;
+const IDLE_CAP_MAX_MS = 48*60*60*1000;
+function idleCapMs(){
+  return Math.min(IDLE_CAP_MAX_MS, IDLE_CAP_BASE_MS + state.prestige.count * IDLE_CAP_PER_PRESTIGE_MS);
+}
+
+function processOfflineProgress(){
+  const now = Date.now();
+  const last = state.meta.lastTick || now;
+  let deltaMs = now - last;
+  if(deltaMs < 2000) { state.meta.lastTick = now; return; }
+
+  // Cap offline simulation to the idle window (2h base, +30s per prestige)
+  const cappedMs = Math.min(deltaMs, idleCapMs());
+  const wasAway = cappedMs > 30000;
+
+  // Simulate in coarse steps for performance (10s steps). Any banked 2x-speed time (or a
+  // permanently-owned "Diamond in the Rough" boost) doubles the simulated progress for the
+  // portion of real elapsed time it covers.
+  const STEP = 10000;
+  let remaining = cappedMs;
+  const startCash = state.economy.cash;
+  const startWins = state.fighter.wins;
+  const startLosses = state.fighter.losses;
+  const startLevel = state.fighter.level;
+  const startTier = state.fighter.tier;
+  const wasPrestigeEligible = isPrestigeEligible();
+
+  const sb = state.speedBoost;
+  let boostRealMsLeft = sb.noAdsOwned ? Infinity : sb.bankedMs;
+
+  while(remaining > 0){
+    const step = Math.min(STEP, remaining);
+    const boosted = boostRealMsLeft > 0;
+    gameTick(step * (boosted ? 2 : 1), true);
+    if(boosted && !sb.noAdsOwned) boostRealMsLeft -= step;
+    remaining -= step;
+  }
+  if(!sb.noAdsOwned) sb.bankedMs = Math.max(0, boostRealMsLeft);
+
+  state.meta.lastTick = now;
+
+  if(wasAway){
+    const cashEarned = state.economy.cash - startCash;
+    const winsEarned = state.fighter.wins - startWins;
+    const lossesEarned = state.fighter.losses - startLosses;
+    const levelsEarned = state.fighter.level - startLevel;
+    const mins = Math.round(cappedMs/60000);
+    pushLog(`Away ${mins}m: earned $${fmtNum(cashEarned)}, ${winsEarned} wins${levelsEarned>0 ? `, ${levelsEarned} level ups` : ''}`, 'level');
+
+    // Longer absences get a proper summary modal (more like a mobile game's "welcome back"
+    // screen); short pauses (quick tab-switch, screen lock for a minute) stay a lightweight
+    // toast so it doesn't feel intrusive for something barely noticeable.
+    if(cappedMs > 5*60*1000){
+      showWelcomeBackModal({
+        mins, cashEarned, winsEarned, lossesEarned, levelsEarned,
+        tierChanged: state.fighter.tier !== startTier,
+        newTier: state.fighter.tier,
+        newlyPrestigeEligible: !wasPrestigeEligible && isPrestigeEligible(),
+        wasCapped: deltaMs > idleCapMs(),
+      });
+    } else {
+      showToast(`Welcome back! +$${fmtNum(cashEarned)}, +${winsEarned} wins while away`);
+    }
+  }
+}
+
+function showWelcomeBackModal(data){
+  const rows = [
+    { icon:'⏱️', label:'Time away', value: data.mins >= 60 ? `${(data.mins/60).toFixed(1)}h` : `${data.mins}m` },
+    { icon:'💰', label:'Cash earned', value: `+$${fmtNum(data.cashEarned)}` },
+    { icon:'🥊', label:'Record', value: `${data.winsEarned}W - ${data.lossesEarned}L` },
+  ];
+  if(data.levelsEarned > 0) rows.push({ icon:'⭐', label:'Levels gained', value: `+${data.levelsEarned}` });
+  if(data.tierChanged) rows.push({ icon:'🏆', label:'Promoted!', value: data.newTier });
+  if(data.newlyPrestigeEligible) rows.push({ icon:'🌟', label:'Prestige', value:'Now available!' });
+
+  document.getElementById('welcome-modal-body').innerHTML = `
+    ${rows.map(r => `
+      <div style="display:flex; justify-content:space-between; align-items:center; padding:8px 0; border-bottom:1px solid var(--border-soft);">
+        <div style="font-size:13px; color:var(--text-muted);">${r.icon} ${r.label}</div>
+        <div style="font-family:'Oswald',sans-serif; font-weight:700; font-size:14px; color:var(--belt-gold);">${r.value}</div>
+      </div>
+    `).join('')}
+    ${data.wasCapped ? `<div style="font-size:11px; color:var(--text-muted); margin-top:10px;">You were away longer than your idle cap (${(idleCapMs()/3600000).toFixed(2)}h) — progress beyond that wasn't simulated.${idleCapMs() >= IDLE_CAP_MAX_MS ? ' This is the maximum (48h) — it can\'t go higher.' : ' Prestige to raise the cap.'}</div>` : ''}
+    <button class="btn btn-gold btn-block" id="welcome-modal-ok" style="margin-top:14px;">Nice!</button>
+  `;
+  document.getElementById('welcome-modal').style.display = 'flex';
+}
+
+/* ---------------------------- RENDER ---------------------------- */
+let activeTab = 'fighter';
+
+function render(){
+  document.getElementById('hud-cash').textContent = fmtNum(state.economy.cash);
+  document.getElementById('hud-teeth').textContent = fmtNum(state.economy.teeth);
+  document.getElementById('hud-level').textContent = `Lv.${state.fighter.level}`;
+  updateNavBadges();
+
+  // Guard: if the player currently has a text input focused (e.g. typing a dev code, or the
+  // fighter-name field during onboarding), skip rebuilding #content this tick. The periodic
+  // 1s render() would otherwise tear down and recreate the input out from under their keystrokes,
+  // making it impossible to type. Once they blur the field, normal re-rendering resumes.
+  const active = document.activeElement;
+  const isTypingInTextField = active && active.tagName === 'INPUT' && active.type === 'text' && document.getElementById('content').contains(active);
+  if(isTypingInTextField) return;
+
+  const content = document.getElementById('content');
+  if(activeTab === 'fighter') content.innerHTML = renderFighterTab();
+  else if(activeTab === 'career') content.innerHTML = renderCareerTab();
+  else if(activeTab === 'gym') content.innerHTML = renderGymTab();
+  else if(activeTab === 'home') content.innerHTML = renderHomeTab();
+  else if(activeTab === 'companions') content.innerHTML = renderCompanionsTab();
+  else if(activeTab === 'league') content.innerHTML = renderLeagueTab();
+
+  attachContentHandlers();
+}
+
+const BASE_TITLE = document.title;
+
+// Lightweight, backend-free "notification" substitute: small red badges on the nav icons plus a
+// document.title ping (e.g. "(2) Idle MMA Legends") for anything worth a glance — unopened loot,
+// an available prestige, or a completed-but-unclaimed daily quest. No real push notifications are
+// possible without a server, but this at least surfaces "something's ready" while the tab is open
+// or if the player alt-tabs back to it.
+function updateNavBadges(){
+  if(!state.fighter.name) return;
+  if(!state.ui.badgeAcked) state.ui.badgeAcked = { fighter:false, career:false, league:false };
+
+  const rawCounts = {
+    fighter: state.lootBoxes.length,
+    career: isPrestigeEligible() ? 1 : 0,
+    league: (() => {
+      let n = 0;
+      (state.daily.questIds || []).forEach(id => {
+        const quest = questDef(id);
+        if(quest && !state.daily.questsClaimed.includes(id) && questProgressValue(quest) >= quest.goal) n++;
+      });
+      return n;
+    })(),
+  };
+
+  if(rawCounts.career > 0 && !state.meta.notifiedPrestigeReady){
+    state.meta.notifiedPrestigeReady = true;
+    fireLocalNotification('🌟 Prestige Available!', "You've reached Hall of Fame — head to Career to prestige.");
+  } else if(rawCounts.career === 0){
+    state.meta.notifiedPrestigeReady = false; // reset so the NEXT time it's ready, it notifies again
+  }
+
+  // A badge counts as "cleared" once you've visited that tab while it was showing — it only
+  // reappears once the underlying count goes back to zero and then becomes nonzero again (a
+  // genuinely NEW thing to look at), rather than nagging forever about something you've already seen.
+  const visibleCounts = {};
+  Object.entries(rawCounts).forEach(([tab, count]) => {
+    if(count <= 0){ state.ui.badgeAcked[tab] = false; visibleCounts[tab] = 0; }
+    else visibleCounts[tab] = state.ui.badgeAcked[tab] ? 0 : count;
+  });
+
+  const setBadge = (id, count) => {
+    const el = document.getElementById(id);
+    if(!el) return;
+    if(count > 0){ el.textContent = count > 9 ? '9+' : count; el.style.display = 'flex'; }
+    else el.style.display = 'none';
+  };
+  setBadge('badge-fighter', visibleCounts.fighter);
+  setBadge('badge-career', visibleCounts.career);
+  setBadge('badge-league', visibleCounts.league);
+
+  const total = visibleCounts.fighter + visibleCounts.career + visibleCounts.league;
+  document.title = total > 0 ? `(${total > 9 ? '9+' : total}) ${BASE_TITLE}` : BASE_TITLE;
+}
+
+function currentVenue(){
+  // Venue shape scales with career tier — Amateur starts at a triangle ring, growing toward
+  // an 11-sided ring at the top tiers (deliberately generic, not modeled on any specific real cage).
+  return currentTier().sides;
+}
+
+function mixHex(hex1, hex2, t){
+  const a = parseInt(hex1.replace('#',''),16), b = parseInt(hex2.replace('#',''),16);
+  const ar=(a>>16)&0xff, ag=(a>>8)&0xff, ab=a&0xff;
+  const br=(b>>16)&0xff, bg=(b>>8)&0xff, bb=b&0xff;
+  const r = Math.round(ar+(br-ar)*t), g = Math.round(ag+(bg-ag)*t), bl = Math.round(ab+(bb-ab)*t);
+  return '#'+[r,g,bl].map(v=>v.toString(16).padStart(2,'0')).join('');
+}
+
+// Generates a pseudo-3D ring viewed from a low angle. As `sides` increases, the ring reads as
+// progressively grander: more posts across a fixed front arc (capped for readability), then
+// rope color/glow escalate from corner-red toward champion-gold for the highest tiers.
+function renderVenueBackground(sides){
+  const cx = 200, floorY = 195, topY = 80;
+  const floorRX = 190, floorRY = 22;
+  const topRX = 140, topRY = 14;
+
+  const postCount = Math.min(sides, 7);
+  const arcStart = 165, arcEnd = 15;
+
+  const prestigeT = Math.max(0, Math.min(1, (sides - 7) / 4));
+  const ropeColor = mixHex('#E8483C', '#F2C744', prestigeT);
+  const glowOpacity = prestigeT * 0.5;
+
+  function pointOnEllipse(angleDeg, cx, cy, rx, ry){
+    const rad = angleDeg * Math.PI/180;
+    return [cx + Math.cos(rad)*rx, cy + Math.sin(rad)*ry];
+  }
+
+  const floorPts = [], topPts = [];
+  for(let i=0; i<postCount; i++){
+    const t = postCount === 1 ? 0.5 : i/(postCount-1);
+    const angle = arcStart + (arcEnd-arcStart)*t;
+    floorPts.push(pointOnEllipse(angle, cx, floorY, floorRX, floorRY));
+    topPts.push(pointOnEllipse(angle, cx, topY, topRX, topRY));
+  }
+
+  let postsAndRopes = '';
+  for(let i=0;i<postCount;i++){
+    const [fx,fy] = floorPts[i], [tx,ty] = topPts[i];
+    postsAndRopes += `<line x1="${fx}" y1="${fy}" x2="${tx}" y2="${ty}" stroke="${ropeColor}" stroke-width="3.5"/>`;
+  }
+  let topPath = `M ${topPts[0][0]},${topPts[0][1]}`;
+  for(let i=1;i<postCount;i++){
+    const [px,py] = topPts[i-1], [cx2,cy2] = topPts[i];
+    const midX = (px+cx2)/2, midY = Math.min(py,cy2) - 3;
+    topPath += ` Q ${midX},${midY} ${cx2},${cy2}`;
+  }
+  postsAndRopes += `<path d="${topPath}" fill="none" stroke="#3A3A4A" stroke-width="2.5" opacity="0.85"/>`;
+  const midPts = floorPts.map((fp,i) => [(fp[0]+topPts[i][0])/2, (fp[1]+topPts[i][1])/2]);
+  let midPath = `M ${midPts[0][0]},${midPts[0][1]}`;
+  for(let i=1;i<postCount;i++){
+    const [px,py] = midPts[i-1], [cx2,cy2] = midPts[i];
+    const midX = (px+cx2)/2, midY = Math.min(py,cy2) - 2;
+    midPath += ` Q ${midX},${midY} ${cx2},${cy2}`;
+  }
+  postsAndRopes += `<path d="${midPath}" fill="none" stroke="#3A3A4A" stroke-width="2" opacity="0.5"/>`;
+
+  let floorDashes = '';
+  for(let i=0;i<postCount-1;i++){
+    const [x1,y1] = floorPts[i], [x2,y2] = floorPts[i+1];
+    floorDashes += `<line x1="${x1}" y1="${y1}" x2="${x2}" y2="${y2}" stroke="#2C2C3A" stroke-width="1.5" opacity="0.4"/>`;
+  }
+
+  return `
+    <rect x="0" y="0" width="400" height="220" fill="#15151E"/>
+    ${glowOpacity > 0 ? `<ellipse cx="${cx}" cy="${(floorY+topY)/2}" rx="180" ry="90" fill="#F2C744" opacity="${glowOpacity*0.15}"/>` : ''}
+    <ellipse cx="${cx}" cy="${floorY}" rx="${floorRX}" ry="${floorRY}" fill="#1F1F2B"/>
+    ${floorDashes}
+    ${postsAndRopes}
+    <circle cx="${cx}" cy="160" r="50" fill="none" stroke="#2C2C3A" stroke-width="1.5" opacity="0.5"/>
+  `;
+}
+
+function renderPreFightCard(fighter, opponent){
+  if(!opponent) return '';
+  return `
+    <div class="prefight-card">
+      <div class="prefight-vs-label">UPCOMING BOUT</div>
+      <div class="prefight-row">
+        <div class="prefight-side">
+          <svg viewBox="0 0 140 190" class="prefight-mini">${renderFighterRig('idle', fighter.appearance)}</svg>
+          <div class="prefight-name">${escapeHtml(fighter.name)}</div>
+          <div class="prefight-tier">${fighter.tier}</div>
+          <div class="prefight-power">${totalPower()} PWR</div>
+        </div>
+        <div class="prefight-vs">VS</div>
+        <div class="prefight-side">
+          <svg viewBox="0 0 140 190" class="prefight-mini">${renderFighterRig('idle', opponent.appearance, true)}</svg>
+          <div class="prefight-name">${escapeHtml(opponent.name)}</div>
+          <div class="prefight-tier">${opponent.nickname}</div>
+          <div class="prefight-power">${opponent.totalPower} PWR</div>
+        </div>
+      </div>
+    </div>
+  `;
+}
+
+// Any companion who's reached Close or better (stage 7+ out of the 10-stage arc) joins the
+// corner crew visually during fights — not just a single "best" one. Capped at 3 so the left
+// edge of the fight scene doesn't get overcrowded; sorted by affection so your most invested
+// relationships take the inner spots closest to the ring, with newer Close-stage companions
+// stacking further out toward the edge.
+const CORNER_TEAM_MAX_VISIBLE = 3;
+function getCornerTeamMembers(){
+  return Object.entries(state.companions)
+    .filter(([id, c]) => !c.isPartner && COMPANION_DEFS[id])
+    .map(([id, c]) => ({ def: COMPANION_DEFS[id], progress: c }))
+    .filter(({def, progress}) => companionCurrentStageIndex(def, progress) >= 7) // Close or better
+    .sort((a,b) => b.progress.affection - a.progress.affection)
+    .slice(0, CORNER_TEAM_MAX_VISIBLE)
+    .map(({def}) => def);
+}
+
+// Renders all qualifying corner-team members (Close+ stage, non-partner) stacked toward the far
+// left of the fight scene, spaced out cleanly so they don't overlap each other. The partner (if
+// any) sits closest to the ring edge at left:2%; team members stack outward from there.
+function renderCornerTeamSvgs(idle){
+  const bottomPct = idle ? 4 : 6;
+  const cssClass = idle ? 'is-cornerteam-idle' : 'is-cornerteam';
+  return getCornerTeamMembers().map((def, i) => `
+    <svg class="corner-partner ${cssClass}" style="left:${13 + i*6}%; bottom:${bottomPct}%;" viewBox="0 0 140 190">${renderCompanionRig(def.appearance)}</svg>
+  `).join('');
+}
+
+function renderFighterTab(){
+  const f = state.fighter;
+  const trainPct = clamp((state.loops.training.progress / state.loops.training.interval) * 100, 0, 100);
+  const fightPct = clamp((state.loops.fighting.progress / state.loops.fighting.interval) * 100, 0, 100);
+  const xpPct = clamp((f.xp / f.xpToNext) * 100, 0, 100);
+  const venue = currentVenue();
+  const bout = state.bout;
+
+  let sceneInner = '';
+  if(bout.phase === 'prefight'){
+    sceneInner = renderPreFightCard(f, bout.opponent);
+  } else if(bout.phase === 'exchange' || bout.phase === 'resolved'){
+    const playerHpPct = clamp((bout.playerHp / bout.playerMaxHp) * 100, 0, 100);
+    const opponentHpPct = clamp((bout.opponentHp / bout.opponentMaxHp) * 100, 0, 100);
+    const partnerDef = state.activePartnerId ? COMPANION_DEFS[state.activePartnerId] : null;
+    sceneInner = `
+      <div class="fightcard-edge is-left">
+        <div class="fightcard-name">${escapeHtml(f.name)}</div>
+        <div class="hp-track"><div class="hp-fill ${playerHpPct<30?'low':''}" style="width:${playerHpPct}%"></div></div>
+        <div class="fightcard-hp-num">${Math.max(0,Math.round(bout.playerHp))} / ${bout.playerMaxHp}</div>
+      </div>
+      <div class="fightcard-edge is-right">
+        <div class="fightcard-name">${escapeHtml(bout.opponent.name)}</div>
+        <div class="hp-track"><div class="hp-fill ${opponentHpPct<30?'low':''}" style="width:${opponentHpPct}%"></div></div>
+        <div class="fightcard-hp-num">${Math.max(0,Math.round(bout.opponentHp))} / ${bout.opponentMaxHp}</div>
+      </div>
+      ${partnerDef ? `<svg class="corner-partner is-cornerman" viewBox="0 0 140 190">${renderCompanionRig(partnerDef.appearance)}</svg>` : ''}
+      ${renderCornerTeamSvgs(false)}
+      <svg class="scene-fighter is-player" viewBox="0 0 140 190">${renderFighterRig(bout.playerPose, f.appearance)}</svg>
+      <svg class="scene-fighter is-opponent" viewBox="0 0 140 190">${renderFighterRig(bout.opponentPose, bout.opponent.appearance, true)}</svg>
+      ${bout.phase === 'resolved' ? (
+        bout.promotedTo
+          ? `<div class="promotion-fanfare">
+               <div class="fanfare-kicker">🎉 Promoted 🎉</div>
+               <div class="fanfare-title">🏆 ${bout.promotedTo}</div>
+               <div class="fanfare-sub">${bout.isCrit ? '💥 Knockout win!' : '✅ Win!'} New tier unlocked</div>
+             </div>`
+          : `<div class="bout-result-banner ${bout.outcome}">${bout.outcome === 'win' ? (bout.isCrit ? '💥 KNOCKOUT' : '✅ WIN') : '❌ LOSS'}</div>`
+      ) : ''}
+    `;
+  } else {
+    const partnerDef = state.activePartnerId ? COMPANION_DEFS[state.activePartnerId] : null;
+    sceneInner = `
+      <svg class="scene-fighter is-player" viewBox="0 0 140 190">${renderFighterRig(state.combatAnim.currentPose, f.appearance)}</svg>
+      ${partnerDef ? `<svg class="corner-partner is-cornerman" viewBox="0 0 140 190">${renderCompanionRig(partnerDef.appearance)}</svg>` : ''}
+      ${renderCornerTeamSvgs(true)}
+    `;
+  }
+
+  const hypeCharge = state.clickCombat.charge || 0;
+  return `
+    <div class="fight-scene" data-fight-click>
+      <svg class="venue-bg" viewBox="0 0 400 220" preserveAspectRatio="xMidYMax slice">${renderVenueBackground(venue)}</svg>
+      ${sceneInner}
+      ${(bout.phase === 'exchange' || bout.phase === 'resolved') ? '' : `<div class="venue-label">🏆 ${f.tier} Ring (${venue}-sided)</div>`}
+      ${bout.phase === 'none' ? `<button class="roulette-fab" data-open-roulette title="Roulette">🎰</button>` : ''}
+      ${bout.phase === 'none' ? `
+        <button class="notif-fab" data-open-levelup-notices title="Level-Up Notices">
+          🔔
+          ${(f.level - state.ui.lastAckedLevel) > 0 ? `<span class="nav-badge" style="display:flex;">${(f.level - state.ui.lastAckedLevel) > 9 ? '9+' : (f.level - state.ui.lastAckedLevel)}</span>` : ''}
+        </button>
+      ` : ''}
+      <div class="hype-meter" title="Tap the ring to build Hype for bonus crit chance next fight">
+        <span class="hype-icon">🔥</span>
+        <div class="hype-track"><div class="hype-fill" style="height:${(hypeCharge/20)*100}%"></div></div>
+        <span class="hype-combo" style="display:${state.clickCombat.combo > 2 ? 'block' : 'none'};">×${Math.min(10, 1+Math.floor(state.clickCombat.combo/3))}</span>
+      </div>
+    </div>
+    <div class="tap-hint">👊 Tap the ring to speed up exchanges & build Hype for bonus crits</div>
+
+    <div class="fighter-hero" style="margin-top:10px;">
+      <div class="fighter-row">
+        <div class="fighter-id">
+          <div class="fighter-name">${escapeHtml(f.name)}</div>
+          <div class="fighter-record">${f.wins}-${f.losses} • ${totalPower()} PWR</div>
+          <div class="fighter-tier">${f.tier}</div>
+        </div>
+      </div>
+      <div class="xp-track">
+        <div class="xp-label"><span>Level ${f.level}</span><span>${f.xp} / ${f.xpToNext} XP</span></div>
+        <div class="bar-track"><div class="bar-fill xp" style="width:${xpPct}%"></div></div>
+      </div>
+    </div>
+
+    <div class="panel-title">Active Loops</div>
+    <div class="card loop-card">
+      <div class="loop-icon">🏋️</div>
+      <div class="loop-info">
+        <div class="loop-title">Training</div>
+        <div class="loop-desc">Cycles through all 8 stats: Power, Speed, Defense, Stamina, Chin, Technique, Slip, Mental</div>
+        <div class="loop-progress"><div class="bar-track"><div class="bar-fill train" style="width:${trainPct}%"></div></div></div>
+      </div>
+    </div>
+    <div class="card loop-card">
+      <div class="loop-icon">🥊</div>
+      <div class="loop-info">
+        <div class="loop-title">Auto-Fight</div>
+        <div class="loop-desc">Fights for cash & XP based on your stats</div>
+        <div class="loop-progress"><div class="bar-track"><div class="bar-fill fight" style="width:${fightPct}%"></div></div></div>
+      </div>
+    </div>
+
+    <div class="panel-title">Your Progress <span style="color:var(--text-muted); font-size:11px;">(tap any stat to jump there)</span></div>
+    <div class="card" style="display:grid; grid-template-columns:1fr 1fr; gap:10px;">
+      <button class="progress-stat-btn" data-jump-tab="career">
+        <div style="font-size:10px; color:var(--text-muted); text-transform:uppercase; letter-spacing:0.5px;">🏆 Career Tier</div>
+        <div style="font-family:'Oswald',sans-serif; font-weight:700; font-size:14px; color:var(--belt-gold);">${f.tier}</div>
+      </button>
+      <button class="progress-stat-btn" data-jump-tab="career">
+        <div style="font-size:10px; color:var(--text-muted); text-transform:uppercase; letter-spacing:0.5px;">🔁 Prestiges</div>
+        <div style="font-family:'Oswald',sans-serif; font-weight:700; font-size:14px;">${state.prestige.count > 0 ? `★ ${state.prestige.count} (+${prestigeStatBonus()} stats)` : '—'}</div>
+      </button>
+      <button class="progress-stat-btn" data-jump-tab="career">
+        <div style="font-size:10px; color:var(--text-muted); text-transform:uppercase; letter-spacing:0.5px;">🌟 Super Prestige</div>
+        <div style="font-family:'Oswald',sans-serif; font-weight:700; font-size:14px; color:var(--champ-teal);">${superPrestigeDifficultyTier() > 0 ? `Tier ${superPrestigeDifficultyTier()}` : '—'}</div>
+      </button>
+      <button class="progress-stat-btn" data-jump-tab="league">
+        <div style="font-size:10px; color:var(--text-muted); text-transform:uppercase; letter-spacing:0.5px;">🏋️ Gym Level</div>
+        <div style="font-family:'Oswald',sans-serif; font-weight:700; font-size:14px;">${state.social.leagueId ? `Level ${state.social.knownGymLevel||1}` : 'No gym'}</div>
+      </button>
+      <button class="progress-stat-btn" data-jump-tab="league" style="${state.social.leagueId ? 'grid-column:1 / -1;' : ''}">
+        <div style="font-size:10px; color:var(--text-muted); text-transform:uppercase; letter-spacing:0.5px;">🎖️ Membership</div>
+        ${state.social.leagueId ? (() => {
+          const tier = currentMembershipTier();
+          const next = nextMembershipTier();
+          const pct = next ? clamp((state.social.contributedXp / next.minXp) * 100, 0, 100) : 100;
+          return `
+            <div style="display:flex; justify-content:space-between; align-items:baseline;">
+              <div style="font-family:'Oswald',sans-serif; font-weight:700; font-size:14px;">${tier.name}</div>
+              <div style="font-size:9px; color:var(--text-muted);">${next ? `${state.social.contributedXp}/${next.minXp} XP` : 'Max'}</div>
+            </div>
+            <div class="bar-track" style="margin-top:4px; height:5px;"><div class="bar-fill xp" style="width:${pct}%"></div></div>
+          `;
+        })() : `<div style="font-family:'Oswald',sans-serif; font-weight:700; font-size:14px;">—</div>`}
+      </button>
+      <button class="progress-stat-btn" data-jump-tab="companions">
+        <div style="font-size:10px; color:var(--text-muted); text-transform:uppercase; letter-spacing:0.5px;">❤️ People in Corner</div>
+        <div style="font-family:'Oswald',sans-serif; font-weight:700; font-size:14px; color:var(--corner-red);">+${(cornerBonusPct()*100).toFixed(1)}% all stats</div>
+      </button>
+    </div>
+
+    <div class="panel-title">Tale of the Tape</div>
+    <div class="tape tape-2x4">
+      ${(() => {
+        const eff = effectiveStats();
+        const statRow = (key, label) => {
+          const bonus = eff[key] - f.stats[key];
+          return `<div class="tape-stat"><div class="label">${label}</div><div class="value">${eff[key]}${bonus>0?`<span class="gear-bonus">+${bonus}</span>`:''}</div></div>`;
+        };
+        return statRow('power','Power') + statRow('speed','Speed') + statRow('defense','Defense') + statRow('stamina','Stamina')
+             + statRow('chin','Chin') + statRow('technique','Technique') + statRow('slip','Slip') + statRow('mental','Mental');
+      })()}
+    </div>
+
+    <div class="panel-title" data-toggle-section="gearExpanded" style="cursor:pointer; display:flex; justify-content:space-between; align-items:center;">
+      <span>Gear</span><span style="font-size:12px;">${state.ui.gearExpanded ? '▾' : '▸'}</span>
+    </div>
+    ${state.ui.gearExpanded ? `
+    <div class="gear-grid">
+      ${GEAR_SLOT_DEFS.map(slot => {
+        const item = f.equipment[slot.key];
+        const rarity = item ? RARITY_TIERS[item.tier-1] : null;
+        return `
+          <div class="gear-slot ${item ? 'filled' : 'empty'}" style="${item ? `border-color:${rarity.color};` : ''}" data-view-gear="${slot.key}">
+            <div class="gear-slot-icon">${item ? item.icon : slot.icon}</div>
+            <div class="gear-slot-label">${item ? itemDisplayName(item) : slot.label}</div>
+            ${item ? `<div class="gear-slot-power" style="color:${rarity.color};">${item.itemPower}</div>` : ''}
+          </div>
+        `;
+      }).join('')}
+    </div>
+    ` : ''}
+
+    <div class="panel-title">Gear Loot ${state.lootBoxes.length > 0 ? `<span style="color:var(--belt-gold);">(${state.lootBoxes.length})</span>` : ''}</div>
+    <div class="card" style="display:flex; justify-content:space-between; align-items:center; padding:10px 14px; margin-bottom:8px;">
+      <div>
+        <div style="font-size:13px; font-weight:600;">🔓 Auto-Open Chests</div>
+        <div style="font-size:11px; color:var(--text-muted); margin-top:1px;">New boxes resolve instantly — no manual opening</div>
+      </div>
+      <button class="btn ${state.autoOpenChests?'btn-teal':'btn-ghost'}" style="padding:6px 14px; font-size:11px; flex-shrink:0;" data-toggle-autoopen>${state.autoOpenChests?'On':'Off'}</button>
+    </div>
+    ${state.lootBoxes.length === 0 ? `
+      <div class="card empty-state" style="padding:22px 14px;">
+        🎁 No unopened boxes yet — win fights to earn gear boxes across 8 equipment slots and 10 rarity tiers.
+      </div>
+    ` : `
+      <div class="lootbox-grid">
+        ${state.lootBoxes.map(box => {
+          const rarity = RARITY_TIERS[box.tier-1];
+          const vehicleIcon = box.isVehicle ? VEHICLE_CATEGORIES[box.vehicleCategory].icon : null;
+          return `
+            <div class="lootbox-card" data-open-box="${box.id}" style="border-color:${rarity.color};">
+              <div class="lootbox-icon">${box.isVehicle ? vehicleIcon : '🎁'}</div>
+              <div class="lootbox-tier" style="color:${rarity.color};">${rarity.name}</div>
+              ${box.isVehicle ? `<div class="lootbox-source">${VEHICLE_CATEGORIES[box.vehicleCategory].label}!</div>` : (box.source==='tierup' ? '<div class="lootbox-source">Tier-Up!</div>' : '')}
+            </div>
+          `;
+        }).join('')}
+      </div>
+    `}
+  `;
+}
+
+function renderCareerTab(){
+  const f = state.fighter;
+  const tier = currentTier();
+  const nextTier = TIERS.find(t => t.minWins > f.wins);
+  const eligible = isPrestigeEligible();
+  return `
+    <div class="panel-title">Career Ladder</div>
+    <div class="card">
+      <div style="font-family:'Oswald',sans-serif; font-size:16px; font-weight:600; color:var(--belt-gold);">${tier.name}</div>
+      <div style="font-size:12px; color:var(--text-muted); margin-top:4px;">
+        ${nextTier ? `${nextTier.minWins - f.wins} more win${nextTier.minWins-f.wins===1?'':'s'} to reach ${nextTier.name}` : 'You\'ve reached the top tier — Hall of Fame status'}
+      </div>
+    </div>
+
+    <div class="panel-title">Record</div>
+    <div class="card" style="display:flex; justify-content:space-around; text-align:center;">
+      <div><div style="font-family:'Oswald',sans-serif; font-size:22px; font-weight:700; color:var(--champ-teal);">${f.wins}</div><div style="font-size:11px; color:var(--text-muted);">Wins</div></div>
+      <div><div style="font-family:'Oswald',sans-serif; font-size:22px; font-weight:700; color:var(--corner-red);">${f.losses}</div><div style="font-size:11px; color:var(--text-muted);">Losses</div></div>
+      <div><div style="font-family:'Oswald',sans-serif; font-size:22px; font-weight:700; color:var(--belt-gold);">${f.wins+f.losses>0?Math.round(f.wins/(f.wins+f.losses)*100):0}%</div><div style="font-size:11px; color:var(--text-muted);">Win Rate</div></div>
+    </div>
+
+    <div class="panel-title">Prestige ${state.prestige.count > 0 ? `<span style="color:var(--belt-gold);">★ ${state.prestige.count}</span>` : ''}</div>
+    ${state.prestige.count > 0 ? `
+      <div class="card" style="border-color:var(--belt-gold); margin-bottom:8px;">
+        <div style="font-size:12px; color:var(--text-muted);">
+          Vehicle slots: ${state.prestige.vehicleSlots} • Partner slots: ${state.prestige.partnerSlots}
+        </div>
+      </div>
+    ` : ''}
+    ${state.prestige.count > 0 ? `
+      <div class="card" style="border-color:var(--belt-gold); margin-bottom:8px;">
+        <div style="display:flex; justify-content:space-between; align-items:center;">
+          <div style="font-family:'Oswald',sans-serif; font-weight:700; font-size:14px; color:var(--belt-gold);">💪 Prestige Stat Bonus</div>
+          <div style="font-size:11px; color:var(--champ-teal);">+${prestigeStatBonus()} all stats</div>
+        </div>
+        <div style="font-size:11px; color:var(--text-muted); margin-top:4px;">Every prestige permanently adds +${PRESTIGE_STAT_BONUS_PER_PRESTIGE} to all 8 stats — this stacks forever, no cap.</div>
+      </div>
+    ` : ''}
+    ${superPrestigeDifficultyTier() > 0 ? `
+      <div class="card" style="border-color:var(--champ-teal); margin-bottom:8px;">
+        <div style="display:flex; justify-content:space-between; align-items:center;">
+          <div style="font-family:'Oswald',sans-serif; font-weight:700; font-size:14px; color:var(--champ-teal);">🌟 Super Prestige Tier ${superPrestigeDifficultyTier()}</div>
+          <div style="font-size:11px; color:var(--belt-gold);">PvE range ±${(superPrestigeDifficultyTier()*SUPER_PRESTIGE_OPPONENT_REDUCTION_PER_TIER*100).toFixed(0)}% tighter</div>
+        </div>
+        <div style="font-size:11px; color:var(--text-muted); margin-top:4px;">${prestigesToNextSuperTier()} more prestige${prestigesToNextSuperTier()===1?'':'s'} to Tier ${superPrestigeDifficultyTier()+1}</div>
+        <div style="display:flex; flex-wrap:wrap; align-items:center; gap:5px; margin-top:8px;">
+          ${superPrestigeDifficultyTier() > 10 ? `<span style="font-size:10px; color:var(--text-muted);">+${superPrestigeDifficultyTier()-10} earlier •</span>` : ''}
+          ${Array.from({length: Math.min(10, superPrestigeDifficultyTier())}, (_, i) => superPrestigeDifficultyTier() - Math.min(10, superPrestigeDifficultyTier()) + i + 1).map(n => `
+            <span style="font-family:'Oswald',sans-serif; font-size:10px; font-weight:700; color:#082624; background:var(--champ-teal); padding:3px 8px; border-radius:999px;">SP:${n}</span>
+          `).join('')}
+        </div>
+      </div>
+    ` : (state.prestige.count > 0 ? `
+      <div class="card empty-state" style="padding:14px; margin-bottom:8px;">🌟 Reach prestige ${PRESTIGE_WINRATE_CAP_AT + SUPER_PRESTIGE_INTERVAL} for your first Super Prestige tier: PvE opponent power range narrows ${(SUPER_PRESTIGE_OPPONENT_REDUCTION_PER_TIER*100).toFixed(0)}% tighter on both ends, stacking every ${SUPER_PRESTIGE_INTERVAL} prestiges after that. (Held back until prestige ${PRESTIGE_WINRATE_CAP_AT} specifically so it doesn't double up with the win-rate ramp that's already easing things during your early prestiges.)</div>
+    ` : '')}
+    <div class="card" style="${eligible ? 'border-color:var(--belt-gold);' : ''}">
+      <div style="font-size:13px; color:${eligible?'var(--text-main)':'var(--text-muted)'};">
+        ${eligible
+          ? `You've reached Hall of Fame! Prestige to reset your career and carry forward <strong style="color:var(--belt-gold);">${(projectedRetainPct(winsSinceHallOfFame())*100).toFixed(1)}%</strong> of your stats (scales with wins earned SINCE reaching Hall of Fame — ${winsSinceHallOfFame()} so far: 150 ≈1%, 300 ≈2%, 600+ caps at 3% — keep fighting for a bigger cut if you're not in a rush). Every 10th prestige permanently grants an extra vehicle and partner slot.`
+          : 'Reach Hall of Fame to unlock Prestige — a permanent reset that keeps a slice of your stats (more wins this run = more retained) and unlocks long-term bonuses.'}
+      </div>
+      ${eligible ? `<button class="btn btn-gold btn-block" style="margin-top:10px;" data-do-prestige>🌟 Prestige Now</button>` : ''}
+    </div>
+
+    <div class="panel-title">Power-Ups <span style="color:var(--text-muted); font-size:11px;">(persist through prestige)</span></div>
+    ${renderBulkBuyToggle()}
+    ${Object.entries(POWER_UPS).map(([key, pu]) => {
+      const p = state.powerUps[key];
+      const qty = state.ui.bulkBuyQty === 'max' ? Infinity : state.ui.bulkBuyQty;
+      const preview = computeBulkBuy(p.level, p.baseCost, 1.85, qty, state.economy.cash);
+      const canAfford = preview.bought > 0;
+      return `
+        <div class="card loop-card">
+          <div class="loop-icon">${pu.icon}</div>
+          <div class="loop-info">
+            <div class="loop-title">${pu.name} <span style="color:var(--belt-gold); font-size:11px;">Lv.${p.level}</span></div>
+            <div class="loop-desc">${pu.desc}</div>
+          </div>
+          <button class="btn ${canAfford ? 'btn-gold' : 'btn-ghost'}" style="flex-shrink:0; padding:9px 12px; font-size:12px; text-align:center;" data-powerup-buy="${key}" ${canAfford?'':'disabled'}>
+            $${fmtNum(preview.totalCost)}${preview.bought>1?`<br><span style="font-size:9px;">×${preview.bought}</span>`:''}
+          </button>
+        </div>
+      `;
+    }).join('')}
+
+    <div class="panel-title">Tiers</div>
+    ${(() => {
+      const currentIdx = TIERS.findIndex(t => t.name === tier.name);
+      let windowStart = Math.max(0, currentIdx - 2);
+      const windowEnd = Math.min(TIERS.length, windowStart + 5);
+      windowStart = Math.max(0, windowEnd - 5);
+      const tiersShown = state.ui.tiersExpanded ? TIERS : TIERS.slice(windowStart, windowEnd);
+      return tiersShown.map(t => {
+        const reached = f.wins >= t.minWins;
+        const current = t.name === tier.name;
+        return `
+        <div class="card" style="display:flex; justify-content:space-between; align-items:center; opacity:${reached?1:0.45}; ${current?'border-color:var(--belt-gold);':''}">
+          <div>
+            <div style="font-family:'Oswald',sans-serif; font-weight:600; font-size:14px;">${t.name}${current?' 👑':''}</div>
+            <div style="font-size:11px; color:var(--text-muted);">Requires ${t.minWins} wins • ${t.cashMult}× cash</div>
+          </div>
+          <div style="font-size:20px;">${reached?'✅':'🔒'}</div>
+        </div>`;
+      }).join('') + (TIERS.length > 5 ? `
+        <button class="btn btn-ghost btn-block" data-toggle-tiers-expand style="margin-top:4px;">${state.ui.tiersExpanded ? '▲ Show Less' : '▼ Show All 10 Tiers'}</button>
+      ` : '');
+    })()}
+  `;
+}
+
+const GEAR_SLOT_DEFS = [
+  { key:'head',        label:'Head',      icon:'🪖' },
+  { key:'hands',       label:'Hands',     icon:'🥊' },
+  { key:'body',        label:'Body',      icon:'🦺' },
+  { key:'legs',        label:'Legs',      icon:'🩳' },
+  { key:'feet',        label:'Feet',      icon:'👟' },
+  { key:'accessory1',  label:'Accessory #1', icon:'⛓️' },
+  { key:'accessory2',  label:'Accessory #2', icon:'💍' },
+  { key:'trinket',     label:'Memento',      icon:'🔮' },
+];
+
+/* ========================================================================
+   LOOT SYSTEM — 10 rarity tiers across 8 gear slots.
+   ======================================================================== */
+// Stat-point ranges roughly doubled from the original tuning (and spread further at the top
+// end) so gear rolls feel meaningfully impactful, especially at Epic and above.
+const RARITY_TIERS = [
+  { tier:1,  name:'Common',   color:'#9494A8', statPointsMin:5,   statPointsMax:9   },
+  { tier:2,  name:'Uncommon', color:'#2DD4BF', statPointsMin:7,   statPointsMax:14  },
+  { tier:3,  name:'Rare',     color:'#5B6EE1', statPointsMin:14,  statPointsMax:25  },
+  { tier:4,  name:'Epic',     color:'#7C3AED', statPointsMin:25,  statPointsMax:43  },
+  { tier:5,  name:'Legendary',color:'#F2C744', statPointsMin:40,  statPointsMax:68  },
+  { tier:6,  name:'Mythic',   color:'#E8483C', statPointsMin:60,  statPointsMax:100 },
+  { tier:7,  name:'Ancient',  color:'#C2410C', statPointsMin:90,  statPointsMax:148 },
+  { tier:8,  name:'Divine',   color:'#FBBF24', statPointsMin:125, statPointsMax:207 },
+  { tier:9,  name:'Celestial',color:'#22D3EE', statPointsMin:180, statPointsMax:297 },
+  { tier:10, name:'Eternal',  color:'#F472B6', statPointsMin:260, statPointsMax:432 },
+];
+
+const STAT_KEYS_ALL = ['power','speed','defense','stamina','chin','technique','slip','mental'];
+
+// Rolls a random gear item for a given rarity tier. Stat points are split across 1-3 random
+// stats (favoring fewer stats at higher concentration, common items often single-stat).
+// Rolls the actual stat-point budget for an item within its tier's [min,max] range, so two
+// items of the same rarity aren't identical — there's a real "better roll" to chase within a tier.
+// Returns both the rolled amount and a 0-1 quality fraction (1 = hit the max of the range) for UI.
+function rollStatPointsForTier(rarity){
+  const amount = Math.round(rarity.statPointsMin + Math.random()*(rarity.statPointsMax-rarity.statPointsMin));
+  const quality = rarity.statPointsMax > rarity.statPointsMin
+    ? (amount - rarity.statPointsMin) / (rarity.statPointsMax - rarity.statPointsMin)
+    : 1;
+  return { amount, quality };
+}
+
+function generateLootItem(tierNum, forcedSlotKey=null, source='win'){
+  const rarity = RARITY_TIERS[tierNum-1];
+  const slot = forcedSlotKey ? GEAR_SLOT_DEFS.find(s=>s.key===forcedSlotKey) : GEAR_SLOT_DEFS[Math.floor(Math.random()*GEAR_SLOT_DEFS.length)];
+  const numStats = rarity.tier >= 7 ? 3 : (rarity.tier >= 4 ? (Math.random()<0.5?2:1) : 1);
+  const chosenStats = [...STAT_KEYS_ALL].sort(()=>Math.random()-0.5).slice(0, numStats);
+  const { amount: rolledPoints, quality } = rollStatPointsForTier(rarity);
+  const statBonuses = {};
+  let remaining = rolledPoints;
+  chosenStats.forEach((key, i) => {
+    const isLast = i === chosenStats.length-1;
+    const amount = isLast ? remaining : Math.max(1, Math.round(remaining * (0.4+Math.random()*0.4)));
+    statBonuses[key] = amount;
+    remaining -= amount;
+  });
+
+  return {
+    id: 'item_' + Math.random().toString(36).slice(2,10),
+    slotKey: slot.key,
+    icon: slot.icon,
+    tier: rarity.tier,
+    rarityName: rarity.name,
+    color: rarity.color,
+    statBonuses,
+    itemPower: Object.values(statBonuses).reduce((a,b)=>a+b,0),
+    rollQuality: quality,
+    source,
+  };
+}
+
+function itemDisplayName(item){
+  const slotLabel = GEAR_SLOT_DEFS.find(s=>s.key===item.slotKey).label;
+  return `${item.rarityName} ${slotLabel}`;
+}
+
+// Vehicle Garage — 6 category slots (Car, Plane, Boat, Motorcycle, Off-Road, Specialty), each
+// equipped independently and stacking stats together. Uses the same 10-tier rarity system and
+// loot pipeline as gear, but each category leans toward different stats for build variety.
+const VEHICLE_CATEGORIES = {
+  car:        { label:'Car',        icon:'🚗', leanStats:['power','technique'],  models:['Beat-Up Sedan','Used Hatchback','Sport Coupe','Tuned Coupe','Muscle Car','Luxury Sedan','Supercar','Hypercar','Custom Hypercar','One-of-One Concept'] },
+  motorcycle: { label:'Motorcycle', icon:'🏍️', leanStats:['speed','slip'],       models:['Rusty Dirt Bike','Commuter Scooter','Street 600','Sport 750','Naked Bike','Cafe Racer','Superbike','Track Superbike','Custom Chopper','Prototype Racer'] },
+  boat:       { label:'Boat',       icon:'🚤', leanStats:['stamina','chin'],     models:['Rowboat','Fishing Skiff','Pontoon','Bowrider','Speedboat','Cabin Cruiser','Offshore Racer','Yacht','Superyacht','One-of-One Yacht'] },
+  plane:      { label:'Plane',      icon:'✈️', leanStats:['technique','mental'], models:['Old Cessna','Trainer Plane','Prop Plane','Turboprop','Light Jet','Private Jet','Business Jet','Supersonic Jet','Stealth Jet','One-of-One Jet'] },
+  offroad:    { label:'Off-Road',   icon:'🚙', leanStats:['power','defense'],    models:['Beat-Up Jeep','Trail Truck','Lifted 4x4','Rock Crawler','Baja Truck','Armored Truck','Rally Truck','Desert Racer','Military Rig','One-of-One Rig'] },
+  specialty:  { label:'Specialty',  icon:'🛺', leanStats:['mental','slip'],      models:['Golf Cart','ATV','Go-Kart','Tank','Hovercraft','Monster Truck','Armored Limo','Helicopter','Submarine','One-of-One Rig'] },
+  helicopter: { label:'Helicopter', icon:'🚁', leanStats:['defense','mental'],   models:['Rusty News Chopper','Trainer Heli','Tour Chopper','Turbine Heli','Executive Heli','Luxury Heli','Combat Heli','Stealth Heli','Prototype Heli','One-of-One Heli'] },
+  rv:         { label:'RV',         icon:'🚐', leanStats:['stamina','slip'],     models:['Beat-Up Camper','Pop-Up Trailer','Class B RV','Class C RV','Toy Hauler','Luxury RV','Super RV','Armored RV','Custom Coach','One-of-One Coach'] },
+};
+
+function generateVehicleItem(category, tierNum, source='win'){
+  const rarity = RARITY_TIERS[tierNum-1];
+  const cat = VEHICLE_CATEGORIES[category];
+  const numStats = rarity.tier >= 7 ? 3 : (rarity.tier >= 4 ? (Math.random()<0.5?2:1) : 1);
+  // Lean stats are weighted to appear first/more often, but other stats can still roll in for variety.
+  const pool = [...cat.leanStats, ...STAT_KEYS_ALL.filter(k => !cat.leanStats.includes(k)).sort(()=>Math.random()-0.5)];
+  const chosenStats = pool.slice(0, numStats);
+  const { amount: rolledPoints, quality } = rollStatPointsForTier(rarity);
+  const statBonuses = {};
+  let remaining = rolledPoints;
+  chosenStats.forEach((key, i) => {
+    const isLast = i === chosenStats.length-1;
+    const amount = isLast ? remaining : Math.max(1, Math.round(remaining * (0.4+Math.random()*0.4)));
+    statBonuses[key] = amount;
+    remaining -= amount;
+  });
+  return {
+    id: 'veh_' + Math.random().toString(36).slice(2,10),
+    category,
+    name: cat.models[rarity.tier-1],
+    icon: cat.icon,
+    tier: rarity.tier,
+    rarityName: rarity.name,
+    color: rarity.color,
+    statBonuses,
+    itemPower: Object.values(statBonuses).reduce((a,b)=>a+b,0),
+    rollQuality: quality,
+    source,
+  };
+}
+function isVehicleUpgrade(candidate, current){
+  if(!current) return true;
+  return candidate.itemPower > current.itemPower;
+}
+function autoResolveVehicle(vehicle, announce=false){
+  const current = state.garage[vehicle.category];
+  const catLabel = VEHICLE_CATEGORIES[vehicle.category].label;
+  if(isVehicleUpgrade(vehicle, current)){
+    if(current) state.economy.cash += itemSellValue(current);
+    state.garage[vehicle.category] = vehicle;
+    if(announce){
+      pushLog(`${vehicle.icon} New ${catLabel.toLowerCase()}: ${vehicle.rarityName} ${vehicle.name} acquired!`, 'level');
+      showToast(`New ${catLabel}: ${vehicle.name}`);
+    }
+    return { equipped: true, soldValue: current ? itemSellValue(current) : 0 };
+  } else {
+    const sellValue = itemSellValue(vehicle);
+    state.economy.cash += sellValue;
+    if(announce){
+      pushLog(`Sold ${vehicle.rarityName} ${vehicle.name} for $${sellValue} (had a better ${catLabel.toLowerCase()})`, 'train');
+      showToast(`Sold for $${sellValue}`);
+    }
+    return { equipped: false, soldValue: sellValue };
+  }
+}
+
+// Sell value scales with tier — gives the player a reason to clear out lower-tier duplicates
+// rather than hoarding everything indefinitely.
+function itemSellValue(item){
+  return item.tier * item.tier * 8;
+}
+
+// Returns true if candidate is a strict upgrade over the currently equipped item in its slot
+// (compared by total itemPower; ties favor keeping the existing item to avoid pointless swaps).
+function isUpgrade(candidate, currentItem){
+  if(!currentItem) return true;
+  return candidate.itemPower > currentItem.itemPower;
+}
+
+// Shared resolution logic for a freshly-generated item: equip it if it's better than what's
+// in that slot, otherwise auto-sell it for cash. Used by both offline catch-up (every win,
+// silently) and manual box-opening (single item, with toast feedback).
+function autoResolveItem(item, announce=false){
+  const current = state.fighter.equipment[item.slotKey];
+  if(isUpgrade(item, current)){
+    if(current) state.economy.cash += itemSellValue(current); // sell the old one being replaced
+    state.fighter.equipment[item.slotKey] = item;
+    if(announce){
+      pushLog(`🎁 New gear: ${itemDisplayName(item)} equipped!`, 'level');
+      showToast(`Equipped: ${itemDisplayName(item)}`);
+    }
+    return { equipped: true, soldValue: current ? itemSellValue(current) : 0 };
+  } else {
+    const sellValue = itemSellValue(item);
+    state.economy.cash += sellValue;
+    if(announce){
+      pushLog(`Sold ${itemDisplayName(item)} for $${sellValue} (had better gear equipped)`, 'train');
+      showToast(`Sold for $${sellValue}`);
+    }
+    return { equipped: false, soldValue: sellValue };
+  }
+}
+
+// Drops a loot box at the given tier. If auto-open is enabled, resolves it immediately
+// (silent equip/sell, logged like offline loot) instead of queuing it for manual opening.
+function dropLootBox(tier, source){
+  const isVehicleDrop = Math.random() < 0.08; // ~8% of any drop is a vehicle instead of gear
+  const vehicleCategory = isVehicleDrop ? Object.keys(VEHICLE_CATEGORIES)[Math.floor(Math.random()*Object.keys(VEHICLE_CATEGORIES).length)] : null;
+  if(state.autoOpenChests){
+    if(isVehicleDrop){
+      autoResolveVehicle(generateVehicleItem(vehicleCategory, tier, source), true);
+    } else {
+      const item = generateLootItem(tier, null, source);
+      autoResolveItem(item, true);
+    }
+  } else {
+    state.lootBoxes.push({ id: 'box_'+Math.random().toString(36).slice(2,9), tier, source, isVehicle: isVehicleDrop, vehicleCategory });
+  }
+}
+
+// Shared "how many levels can I buy right now" calculator for Equipment Upgrades, Home Perks,
+// and Power-Ups — all three use the same baseCost * rate^level exponential cost curve, just with
+// different rates. Buys as many levels as affordable up to `quantity` (partial fill, not
+// all-or-nothing) — e.g. tapping "×100" when you can only afford 23 levels buys those 23 rather
+// than requiring the full 100 banked first, which is the more useful behavior for "I've been
+// idling a while and have a pile of cash, just spend it efficiently."
+function computeBulkBuy(startLevel, baseCost, rate, quantity, availableCash){
+  let level = startLevel, totalCost = 0, bought = 0;
+  while(bought < quantity){
+    const cost = Math.round(baseCost * Math.pow(rate, level));
+    if(totalCost + cost > availableCash) break;
+    totalCost += cost;
+    level++;
+    bought++;
+  }
+  return { bought, totalCost, endLevel: level };
+}
+
+// Renders the shared ×1/×10/×100/Max quantity toggle — one selection applies across whichever
+// upgrade list is currently on screen (Equipment Upgrades, Home Perks, or Power-Ups).
+function renderBulkBuyToggle(){
+  const options = [1, 10, 100, 'max'];
+  return `
+    <div class="card" style="display:flex; gap:6px; margin-bottom:10px; padding:8px;">
+      ${options.map(q => `
+        <button class="btn ${state.ui.bulkBuyQty===q?'btn-gold':'btn-ghost'}" style="flex:1; padding:8px 4px; font-size:12px;" data-set-bulk-qty="${q}">${q==='max'?'Max':'×'+q}</button>
+      `).join('')}
+    </div>
+  `;
+}
+
+const GYM_EQUIPMENT = {
+  gloves:  { icon:'🥊', name:'Training Gloves', desc:'Boosts striking power', statKey:'power',     statLabel:'Power' },
+  ropes:   { icon:'🪢', name:'Speed Ropes',      desc:'Boosts hand & foot speed', statKey:'speed',     statLabel:'Speed' },
+  mats:    { icon:'🛡️', name:'Grappling Mats',   desc:'Boosts defensive technique', statKey:'defense',   statLabel:'Defense' },
+  cardio:  { icon:'❤️‍🔥', name:'Cardio Machine',  desc:'Boosts stamina & endurance', statKey:'stamina',   statLabel:'Stamina' },
+  chinbag: { icon:'🥋', name:'Heavy Bag',       desc:'Boosts chin — more HP & damage reduction', statKey:'chin',      statLabel:'Chin' },
+  pads:    { icon:'🎯', name:'Focus Pads',      desc:'Boosts technique — higher critical hit chance', statKey:'technique', statLabel:'Technique' },
+  agility: { icon:'🌀', name:'Agility Ladder',  desc:'Boosts slip — higher dodge chance', statKey:'slip',      statLabel:'Slip' },
+  sports_psych: { icon:'🧠', name:'Sports Psychologist', desc:'Boosts mental — small chance to rally and heal mid-fight', statKey:'mental', statLabel:'Mental' },
+};
+
+function gymUpgradeCost(key){
+  const g = state.gym[key];
+  return Math.round(g.baseCost * Math.pow(1.5, g.level));
+}
+
+function purchaseGymUpgrade(key){
+  const g = state.gym[key];
+  const qty = state.ui.bulkBuyQty === 'max' ? Infinity : state.ui.bulkBuyQty;
+  const { bought, totalCost } = computeBulkBuy(g.level, g.baseCost, 1.5, qty, state.economy.cash);
+  if(bought === 0){ showToast('Not enough cash'); return; }
+  state.economy.cash -= totalCost;
+  g.level += bought;
+  state.fighter.stats[g.statKey] += g.bonusPerLevel * bought;
+  const equip = GYM_EQUIPMENT[key];
+  pushLog(`Upgraded ${equip.name} ${bought>1?`×${bought} `:''}to Lv.${g.level} (+${g.bonusPerLevel*bought} ${equip.statLabel})`, 'train');
+  render();
+  scheduleSave();
+}
+
+const HOME_PERKS = {
+  sofa:        { icon:'🛋️', name:'Leather Sofa',     desc:'Boosts cash earned per win', effectLabel:'Cash' },
+  office:      { icon:'🖥️', name:'Home Office',      desc:'Boosts XP earned per win', effectLabel:'XP' },
+  diningSet:   { icon:'🍽️', name:'Dining Set',       desc:'Boosts affection gained from chats & gifts', effectLabel:'Affection' },
+  homeGym:     { icon:'🏠', name:'Home Gym Corner',  desc:'Speeds up the training loop', effectLabel:'Train Speed' },
+  artWall:     { icon:'🖼️', name:'Art Wall',         desc:'Boosts critical hit chance in fights', effectLabel:'Crit Chance' },
+  securitySys: { icon:'🔒', name:'Security System',  desc:'Boosts loot box rarity odds', effectLabel:'Loot Quality' },
+};
+
+function homePerkCost(key){
+  const p = state.homePerks[key];
+  return Math.round(p.baseCost * Math.pow(1.6, p.level));
+}
+
+function purchaseHomePerk(key){
+  const p = state.homePerks[key];
+  const qty = state.ui.bulkBuyQty === 'max' ? Infinity : state.ui.bulkBuyQty;
+  const { bought, totalCost } = computeBulkBuy(p.level, p.baseCost, 1.6, qty, state.economy.cash);
+  if(bought === 0){ showToast('Not enough cash'); return; }
+  state.economy.cash -= totalCost;
+  p.level += bought;
+  const perk = HOME_PERKS[key];
+  pushLog(`Upgraded ${perk.name} ${bought>1?`×${bought} `:''}to Lv.${p.level} (+${p.bonusPerLevel*bought}% ${perk.effectLabel})`, 'train');
+  render();
+  scheduleSave();
+}
+
+/* ========================================================================
+   PRESTIGE SYSTEM
+   ======================================================================== */
+function isPrestigeEligible(){
+  return state.fighter.tier === 'Hall of Fame';
+}
+
+const POWER_UP_CAPS = { retainPct: 2, startCash: 2000, xpPct: 50, cashPct: 50 };
+
+function powerUpBonus(effectKey){
+  let total = 0;
+  Object.values(state.powerUps).forEach(p => {
+    if(p.effectKey === effectKey) total += p.level * p.bonusPerLevel;
+  });
+  const cap = POWER_UP_CAPS[effectKey];
+  return cap !== undefined ? Math.min(cap, total) : total;
+}
+
+function powerUpCost(key){
+  const p = state.powerUps[key];
+  return Math.round(p.baseCost * Math.pow(1.85, p.level));
+}
+
+function purchasePowerUp(key){
+  const p = state.powerUps[key];
+  const qty = state.ui.bulkBuyQty === 'max' ? Infinity : state.ui.bulkBuyQty;
+  const { bought, totalCost } = computeBulkBuy(p.level, p.baseCost, 1.85, qty, state.economy.cash);
+  if(bought === 0){ showToast('Not enough cash'); return; }
+  state.economy.cash -= totalCost;
+  p.level += bought;
+  pushLog(`Power-Up: ${POWER_UPS[key].name} ${bought>1?`×${bought} `:''}now Lv.${p.level}`, 'level');
+  render();
+  scheduleSave();
+}
+
+// Executes a prestige reset: retains 1-3% (boosted by the Iron Will power-up) of current stat
+// points, resets career/cash/gear/loot/Corner progress, but keeps power-ups and cosmetics.
+// Every 10th prestige permanently unlocks an extra vehicle slot and partner slot.
+//
+// Retention breakpoints (150/300/600) are based on wins earned SINCE reaching Hall of Fame, NOT
+// lifetime wins for the run — this was a real bug in the previous version: Hall of Fame itself
+// requires 360 wins, which is already past the 150 threshold and most of the way to 300, so
+// players were arriving at Hall of Fame already sitting near/at high retention with no real
+// incentive left to keep playing. Now everyone starts at ~0% the moment they first reach Hall of
+// Fame, and has to genuinely earn another 150/300/600 wins WITHIN Hall of Fame for 1%/2%/3% —
+// restoring the "prestige now for a small cut, or grind further for more" choice. Nothing stops
+// a player who misses a day or two (longer idle catch-up) from still climbing toward the cap;
+// this is purely about where the counter STARTS, not a punishment for time away.
+function winsSinceHallOfFame(){
+  if(state.fighter.tier === 'Hall of Fame' && state.fighter.hallOfFameEnteredAtWins === null){
+    // Migration safety net: catches saves from before this system existed (or any other edge
+    // case where we're in Hall of Fame but never caught the exact transition) — starts the
+    // counter from right now instead of leaving it permanently stuck unable to progress.
+    state.fighter.hallOfFameEnteredAtWins = state.fighter.wins;
+  }
+  if(state.fighter.hallOfFameEnteredAtWins === null) return 0;
+  return Math.max(0, state.fighter.wins - state.fighter.hallOfFameEnteredAtWins);
+}
+function projectedRetainPct(winsSinceHoF){
+  let baseRetainPct;
+  if(winsSinceHoF >= 600) baseRetainPct = 0.03;
+  else if(winsSinceHoF >= 300) baseRetainPct = 0.02 + (winsSinceHoF-300)/300 * 0.01;
+  else if(winsSinceHoF >= 150) baseRetainPct = 0.01 + (winsSinceHoF-150)/150 * 0.01;
+  else baseRetainPct = (winsSinceHoF/150) * 0.01;
+  return Math.min(0.03, baseRetainPct + powerUpBonus('retainPct')/100);
+}
+
+function executePrestige(){
+  if(!isPrestigeEligible()) return;
+
+  // Retention scales with wins earned SINCE reaching Hall of Fame, not total wins for the run:
+  // 150 ~1%, 300 ~2%, 600+ caps at 3%. Iron Will adds a small extra bump on top, still capped at 3%.
+  const retainPct = projectedRetainPct(winsSinceHallOfFame());
+
+  const retained = {};
+  STAT_KEYS_ALL.forEach(key => {
+    retained[key] = Math.max(0, Math.round(state.fighter.stats[key] * retainPct));
+  });
+
+  state.prestige.count++;
+  state.prestige.retainedStats = retained;
+  const slotMilestone = state.prestige.count % 10 === 0;
+  if(slotMilestone){
+    state.prestige.vehicleSlots++;
+    state.prestige.partnerSlots++;
+  }
+  // Super Prestige fanfare only fires when the PvE-easing tier ACTUALLY increments — which, due
+  // to the gate above, first happens at prestige 275 (250 + the first 25-interval step), not at
+  // every raw multiple of 25. Being a multiple of 25 alone doesn't yet mean anything changed.
+  const pastRampCap = state.prestige.count > PRESTIGE_WINRATE_CAP_AT;
+  const superPrestigeMilestone = pastRampCap && (state.prestige.count - PRESTIGE_WINRATE_CAP_AT) % SUPER_PRESTIGE_INTERVAL === 0;
+  if(superPrestigeMilestone){
+    const tier = superPrestigeDifficultyTier();
+    pushLog(`🌟 SUPER PRESTIGE #${state.prestige.count}! Tier ${tier} reached — PvE opponent range narrows further. +${PRESTIGE_STAT_BONUS_PER_PRESTIGE} to all stats permanently, as with every prestige.`, 'level');
+    showToast(`🌟 SUPER PRESTIGE! Tier ${tier} — PvE range tightened!`);
+  } else if(slotMilestone){
+    showToast(`Prestige ${state.prestige.count}! New vehicle + partner slot, +${PRESTIGE_STAT_BONUS_PER_PRESTIGE} to all stats.`);
+  } else {
+    showToast(`Prestiged! +${PRESTIGE_STAT_BONUS_PER_PRESTIGE} to all stats permanently, plus a fraction of your current stats carried forward.`);
+  }
+
+  // Reset career/fighter progress, but keep retained stats, power-ups, companions, cosmetics.
+  const startCashBonus = powerUpBonus('startCash');
+  state.fighter.wins = 0;
+  state.fighter.losses = 0;
+  state.fighter.level = 1;
+  state.fighter.xp = 0;
+  state.fighter.xpToNext = 50;
+  state.fighter.tier = 'Amateur';
+  state.fighter.hallOfFameEnteredAtWins = null; // fresh baseline for the NEXT time this run reaches Hall of Fame
+  state.ui.lastAckedLevel = 0; // otherwise the notif-bell badge stays wrongly suppressed until
+                                // the new run's level catches back up to the old run's level
+  STAT_KEYS_ALL.forEach(key => { state.fighter.stats[key] = 5 + retained[key]; });
+  state.fighter.equipment = { head:null, hands:null, body:null, legs:null, feet:null, accessory1:null, accessory2:null, trinket:null };
+  state.garage = { car:null, plane:null, boat:null, motorcycle:null, offroad:null, specialty:null, helicopter:null, rv:null };
+  state.lootBoxes = [];
+  state.economy.cash = 50 + startCashBonus;
+  Object.values(state.gym).forEach(g => g.level = 0);
+  Object.values(state.homePerks).forEach(p => p.level = 0);
+
+  // Corner (companion affection) progress resets too — deliberately, since rebuilding it is
+  // comparatively low-cost/fast next to career/gear, and the whole point of expanding to a
+  // 10-tier arc was to give each prestige cycle its own relationship-building project rather
+  // than a bonus that, once maxed, just sits there permanently forever after one playthrough.
+  state.companions = {};
+  state.activePartnerId = null;
+
+  pushLog(`🌟 PRESTIGED (#${state.prestige.count})! Stats reset with ${Math.round(retainPct*100)}% retained.`, 'level');
+  render();
+  saveLocal();
+  saveToCloud(true); // prestige is rare and high-stakes — worth a forced cloud backup right away
+                       // rather than waiting out the normal 90s throttle
+}
+
+const POWER_UPS = {
+  ironWill:    { icon:'🛡️', name:'Iron Will',    desc:'Increases stat retention % on prestige', effectLabel:'Retention' },
+  legacyVault: { icon:'🏦', name:'Legacy Vault',  desc:'Bonus starting cash after every prestige', effectLabel:'Start Cash' },
+  quickStudy:  { icon:'📚', name:'Quick Study',   desc:'Permanent XP gain boost, survives prestige', effectLabel:'XP' },
+  ringRust:    { icon:'⚙️', name:'Veteran Instinct', desc:'Permanent cash gain boost, survives prestige', effectLabel:'Cash' },
+};
+
+/* ========================================================================
+   SHOP MODULE — Teeth premium currency, chests, home items, cosmetics, ad-skips.
+   ======================================================================== */
+let activeShopTab = 'featured';
+
+const SHOP_CHESTS = [
+  { key:'bronze',  icon:'🎁', name:'Bronze Chest', tierRange:[1,4],  pulls:1, costTeeth:5 },
+  { key:'silver',  icon:'🎀', name:'Silver Chest', tierRange:[3,7],  pulls:3, costTeeth:12 },
+  { key:'gold',    icon:'💼', name:'Gold Chest',   tierRange:[5,10], pulls:5, costTeeth:25 },
+];
+
+const SHOP_COSMETICS = [
+  { key:'goldChain',   icon:'⛓️', name:'Gold Chain Trim',     desc:'Exclusive gold-trimmed gear accent', costTeeth:8 },
+  { key:'flameAura',   icon:'🔥', name:'Flame Entrance Aura', desc:'Cosmetic flame effect in your corner', costTeeth:10 },
+  { key:'diamondTatt', icon:'💠', name:'Diamond Tattoo Set',  desc:'Exclusive sparkling tattoo pattern', costTeeth:8 },
+  { key:'royalRobe',   icon:'👑', name:'Champion\'s Robe',    desc:'Exclusive entrance robe cosmetic', costTeeth:15 },
+];
+
+/* ========================================================================
+   ROULETTE WHEEL — spends Teeth for a random prize. The 8-segment prize pool
+   re-rolls every few days so there's always something new to chase.
+   ======================================================================== */
+const ROULETTE_SPIN_COST = 10;         // Teeth per spin
+const ROULETTE_REFRESH_MS = 3*24*60*60*1000; // prize set refreshes every 3 days
+
+// Finds the N stats currently lagging furthest behind the rest (by effective, gear-inclusive
+// value) — used by the roulette wheel's "Targeted Training" prize so it reinforces whatever a
+// fighter is actually behind on, rather than a flat/random stat.
+function findWeakestStats(count){
+  const eff = effectiveStats();
+  return STAT_KEYS_ALL.slice().sort((a,b) => eff[a]-eff[b]).slice(0, count);
+}
+
+const ROULETTE_PRIZE_POOL = [
+  { type:'cash',      icon:'💰', weight:24, label:()=>{ const amt = 150+Math.floor(Math.random()*350); return `$${amt} Cash`; } },
+  { type:'teeth',     icon:'🦷', weight:20, label:()=>{ const amt = 5+Math.floor(Math.random()*11); return `${amt} Teeth`; } },
+  { type:'timeSkip',  icon:'⏩', weight:18, label:()=>{ const mins = [10,20,30][Math.floor(Math.random()*3)]; return `${mins}m Time Skip`; } },
+  { type:'statBoost', icon:'📈', weight:14, label:()=>{ const n = 3+Math.floor(Math.random()*2); return `Targeted Training (${n} stats)`; } },
+  { type:'freeWins',  icon:'🏆', weight:12, label:()=>'10 Free Wins' },
+  { type:'gear',      icon:'🎁', weight:12, label:()=>'Specialty Gear' },
+  { type:'jackpot',   icon:'💎', weight:4,  label:()=>'JACKPOT: 40 Teeth' },
+];
+
+// Rolls (or returns the cached) prize set for the current cycle. Re-rolled amounts/order every
+// ROULETTE_REFRESH_MS so the wheel feels fresh without changing the underlying prize categories.
+function getRouletteSegments(){
+  const now = Date.now();
+  const r = state.roulette;
+  if(!r.segments || !r.cycleStart || (now - r.cycleStart) > ROULETTE_REFRESH_MS){
+    r.cycleStart = now;
+    // Shuffle pool order and pre-roll each label so amounts stay fixed for the whole cycle.
+    const shuffled = [...ROULETTE_PRIZE_POOL].sort(()=>Math.random()-0.5);
+    r.segments = shuffled.map(p => ({ type:p.type, icon:p.icon, weight:p.weight, label:p.label() }));
+    scheduleSave();
+  }
+  return r.segments;
+}
+
+function rouletteTimeUntilRefresh(){
+  const r = state.roulette;
+  if(!r.cycleStart) return ROULETTE_REFRESH_MS;
+  return Math.max(0, ROULETTE_REFRESH_MS - (Date.now() - r.cycleStart));
+}
+
+function pickRouletteSegmentIndex(segments){
+  const totalWeight = segments.reduce((sum,s) => sum + s.weight, 0);
+  let roll = Math.random() * totalWeight;
+  for(let i=0; i<segments.length; i++){
+    roll -= segments[i].weight;
+    if(roll <= 0) return i;
+  }
+  return segments.length - 1;
+}
+
+// Applies the reward for a chosen segment and returns a short result description for the modal.
+function applyRoulettePrize(segment){
+  const tier = currentTier();
+  switch(segment.type){
+    case 'cash': {
+      const amt = parseInt(segment.label.replace(/\D/g,''));
+      state.economy.cash += amt;
+      return `+$${amt} Cash added to your bankroll`;
+    }
+    case 'teeth': {
+      const amt = parseInt(segment.label.replace(/\D/g,''));
+      state.economy.teeth += amt;
+      return `+${amt} 🦷 Teeth added`;
+    }
+    case 'jackpot': {
+      state.economy.teeth += 40;
+      return `💎 JACKPOT! +40 🦷 Teeth`;
+    }
+    case 'timeSkip': {
+      const mins = parseInt(segment.label);
+      const now = Date.now();
+      state.meta.lastTick = now - mins*60*1000;
+      processOfflineProgress();
+      return `Skipped ahead ${mins} minutes of training & fighting`;
+    }
+    case 'freeWins': {
+      for(let i=0; i<10; i++){
+        state.fighter.wins++;
+        state.economy.cash += applyCashGain((8 + state.fighter.level*2) * tier.cashMult);
+        gainXp(Math.round(10 * tier.xpMult));
+      }
+      addWeeklyWins(10);
+      const newTier = currentTier();
+      if(newTier.name !== state.fighter.tier) state.fighter.tier = newTier.name;
+      return `+10 Wins credited instantly (with cash & XP)`;
+    }
+    case 'statBoost': {
+      const match = segment.label.match(/\((\d+)/);
+      const n = match ? parseInt(match[1]) : 3;
+      const pointsPerStat = 5;
+      const targets = findWeakestStats(n);
+      targets.forEach(k => { state.fighter.stats[k] += pointsPerStat; });
+      const names = targets.map(k => k.charAt(0).toUpperCase()+k.slice(1)).join(', ');
+      return `+${pointsPerStat} each to your weakest stats: ${names}`;
+    }
+    case 'gear': {
+      const careerTierIndex = TIERS.findIndex(t => t.name === tier.name) + 1;
+      const gearTier = Math.max(6, Math.min(10, careerTierIndex + 2));
+      const item = generateLootItem(gearTier, null, 'roulette');
+      const result = autoResolveItem(item, false);
+      return `${itemDisplayName(item)}: ${result.equipped ? 'Equipped!' : `Sold for $${result.soldValue}`}`;
+    }
+  }
+  return '';
+}
+
+function spinRoulette(){
+  if(state.economy.teeth < ROULETTE_SPIN_COST){ showToast('Not enough Teeth'); return; }
+  const segments = getRouletteSegments();
+  spendTeeth(ROULETTE_SPIN_COST);
+  const winIndex = pickRouletteSegmentIndex(segments);
+  const segment = segments[winIndex];
+
+  // Spin the wheel visually, then reveal the prize once the CSS transition finishes.
+  const wheelEl = document.getElementById('roulette-wheel');
+  if(wheelEl){
+    const segAngle = 360 / segments.length;
+    const targetAngle = 360*5 + (360 - (winIndex*segAngle + segAngle/2)); // land the pointer on the chosen segment after 5 full spins
+    wheelEl.style.transition = 'none';
+    wheelEl.style.transform = 'rotate(0deg)';
+    void wheelEl.offsetWidth; // force reflow so the reset above takes effect before the spin starts
+    requestAnimationFrame(() => {
+      wheelEl.style.transition = 'transform 3.2s cubic-bezier(0.15,0.68,0.2,1)';
+      wheelEl.style.transform = `rotate(${targetAngle}deg)`;
+    });
+    document.querySelectorAll('[data-spin-roulette]').forEach(b => b.disabled = true);
+    setTimeout(() => {
+      const resultText = applyRoulettePrize(segment);
+      pushLog(`🎡 Roulette: ${segment.label} — ${resultText}`, 'level');
+      render();
+      showRouletteResult(segment, resultText);
+    }, 3300);
+  } else {
+    const resultText = applyRoulettePrize(segment);
+    pushLog(`🎡 Roulette: ${segment.label} — ${resultText}`, 'level');
+    render();
+    showRouletteResult(segment, resultText);
+  }
+  render();
+}
+
+function showRouletteResult(segment, resultText){
+  document.getElementById('shop-modal-body').innerHTML = `
+    <div class="reveal-card">
+      <div class="reveal-icon">${segment.icon}</div>
+      <div class="reveal-rarity" style="color:var(--belt-gold);">${segment.label}</div>
+      <div class="reveal-outcome equipped">${resultText}</div>
+      <button class="btn btn-ghost btn-block" style="margin-top:14px;" data-shop-back-to-roulette>← Back to Roulette</button>
+    </div>
+  `;
+  const backBtn = document.querySelector('[data-shop-back-to-roulette]');
+  if(backBtn) backBtn.addEventListener('click', () => renderShopBody());
+}
+
+function renderShopRoulette(){
+  const segments = getRouletteSegments();
+  const segAngle = 360 / segments.length;
+  const canSpin = state.economy.teeth >= ROULETTE_SPIN_COST;
+  const refreshMs = rouletteTimeUntilRefresh();
+  const refreshHrs = Math.ceil(refreshMs / 3600000);
+  const wheelSlices = segments.map((s,i) => {
+    const startPct = (i/segments.length)*100, endPct = ((i+1)/segments.length)*100;
+    const hue = (i * (360/segments.length));
+    return `hsl(${hue},55%,${i%2===0?32:22}%) ${startPct}% ${endPct}%`;
+  }).join(', ');
+  return `
+    <div class="panel-title">Prize Wheel</div>
+    <div style="font-size:11px; color:var(--text-muted); margin-bottom:10px;">
+      ${ROULETTE_SPIN_COST} 🦷 per spin. New prize set in ${refreshHrs}h.
+    </div>
+    <div class="roulette-wrap">
+      <div class="roulette-pointer">▼</div>
+      <div id="roulette-wheel" class="roulette-wheel" style="background:conic-gradient(${wheelSlices});">
+        ${segments.map((s,i) => {
+          const midAngle = i*segAngle + segAngle/2;
+          return `<div class="roulette-seg-label" style="transform:rotate(${midAngle}deg) translate(0,-88px) rotate(${-midAngle}deg);">${s.icon}</div>`;
+        }).join('')}
+      </div>
+    </div>
+    <button class="btn btn-gold btn-block" style="margin-top:14px;" data-spin-roulette ${canSpin?'':'disabled'}>
+      ${canSpin ? `🎡 SPIN — 🦷 ${ROULETTE_SPIN_COST}` : 'Not Enough Teeth'}
+    </button>
+    <div class="panel-title" style="margin-top:16px;">This Cycle's Prizes</div>
+    ${segments.map(s => `
+      <div class="shop-item-card">
+        <div class="shop-item-icon">${s.icon}</div>
+        <div class="shop-item-info"><div class="shop-item-name">${s.label}</div></div>
+      </div>
+    `).join('')}
+  `;
+}
+
+function buyTeethPack(amount, costLabel){
+  // Placeholder for real-money purchase — in a shipped app this would hook into a payment SDK.
+  if(realPurchasesLocked()){ showToast('🔒 Real-money purchases are locked for testing'); return; }
+  const price = parseFloat(costLabel.replace(/[^0-9.]/g, ''));
+  if(!canSpendRealMoney(price)){
+    showToast(`Daily spend cap reached ($${DAILY_SPEND_CAP_USD}) — try again tomorrow`);
+    return;
+  }
+  showConfirm('Confirm Purchase', `Buy ${amount} Teeth for ${costLabel}?`, () => {
+    recordRealMoneySpend(price);
+    state.economy.teeth += amount;
+    pushLog(`Purchased ${amount} 🦷 Teeth (${costLabel})`, 'level');
+    showToast(`+${amount} Teeth`);
+    render();
+    renderShopBody();
+    scheduleSave();
+  });
+}
+
+// Central real-money spend gate. Caps cumulative spend at $50/day across EVERY real-money path
+// (Teeth Packs, Diamond in the Rough, instant ad-skip, and Cash Bundles all route through this) —
+// not just bundles. The one exception is the Founder's Bundle below, a one-time first-purchase
+// offer that's allowed to exceed the daily cap since it can, by definition, only ever fire once.
+const DAILY_SPEND_CAP_USD = 50;
+
+function canSpendRealMoney(amountUSD, { isFirstPurchaseOffer=false } = {}){
+  ensureDailyReset();
+  if(state.economy.spendCapDisabled) return true; // QAUNLIMITED testing override
+  if(isFirstPurchaseOffer && !state.economy.everSpentReal) return true;
+  return (state.daily.spendUSD + amountUSD) <= DAILY_SPEND_CAP_USD + 0.001; // epsilon for cent rounding
+}
+
+// Real-money purchases are locked by default — every "Buy" button right now is a placeholder
+// that grants the reward for free (no Play Billing wired up yet), so leaving this unlocked for
+// real testers/players would let anyone farm free Teeth/cash from what will eventually be actual
+// paid purchases. Redeem QAPURCHASE on dev/QA devices only to unlock for testing the flow itself.
+function realPurchasesLocked(){
+  return !state.economy.realPurchasesUnlocked;
+}
+
+function recordRealMoneySpend(amountUSD){
+  ensureDailyReset();
+  state.daily.spendUSD += amountUSD;
+  state.economy.everSpentReal = true;
+}
+
+// Scaling $10-increment bundles. Teeth/cash rewards are a PERCENTAGE of the player's current
+// totalPower() rather than a flat number, so the bundle stays proportionally meaningful whether
+// you're a fresh Amateur or a geared-out Hall of Famer — with a flat floor underneath so early
+// game purchases aren't trivial before power has ramped up. Percentages strictly increase with
+// price so tier ordering (a $50 bundle always beats a $10 one) holds at any power level.
+// IMPORTANT: exactly like Teeth Packs / Diamond in the Rough above, this is a placeholder — there
+// is no real payment processor wired in here (no Stripe, no Google Play Billing, no App Store
+// StoreKit). Clicking "Buy" grants the reward immediately for free; shipping this for real money
+// means rebuilding it against a real billing SDK once this is a published app, outside what an
+// HTML artifact can do.
+const CASH_BUNDLES = [
+  { key:'bundle10', price:10, label:'Starter Bundle',   icon:'🥉', teethPct:0.35, teethFloor:150,  cashPct:0,    cashFloor:0,    bankedMinutes:30,  chestPulls:0  },
+  { key:'bundle20', price:20, label:'Fighter Bundle',   icon:'🥈', teethPct:0.60, teethFloor:350,  cashPct:0.80, cashFloor:500,  bankedMinutes:70,  chestPulls:3  },
+  { key:'bundle30', price:30, label:'Contender Bundle', icon:'🥇', teethPct:1.00, teethFloor:600,  cashPct:1.40, cashFloor:1000, bankedMinutes:120, chestPulls:5  },
+  { key:'bundle40', price:40, label:'Champion Bundle',  icon:'🏆', teethPct:1.50, teethFloor:900,  cashPct:2.20, cashFloor:2000, bankedMinutes:180, chestPulls:8  },
+  { key:'bundle50', price:50, label:'Legend Bundle',    icon:'👑', teethPct:2.20, teethFloor:1300, cashPct:3.20, cashFloor:3500, bankedMinutes:300, chestPulls:12 },
+];
+
+// One-time "welcome" offer: a bigger bundle than the daily cap allows, available ONLY before the
+// player's first-ever real-money purchase (any purchase, not just this one, locks it out for
+// good) — the standard "first purchase bonus" pattern, explicitly exempted from DAILY_SPEND_CAP_USD.
+const FOUNDER_BUNDLE = {
+  key:'bundleFounder', price:75, label:"Founder's Welcome Bundle", icon:'🎉',
+  teethPct:5.0, teethFloor:2500, cashPct:6.0, cashFloor:6000, bankedMinutes:480, chestPulls:20,
+  isFirstPurchaseOffer:true,
+};
+
+// Hidden by default — only appears once the VIPACCESS dev code (or any future promo code with
+// the same unlock key) has been redeemed. Still subject to the normal daily spend cap, unlike
+// the Founder's Bundle above, since this isn't a first-purchase exception.
+const PROMO_BUNDLES = [
+  { key:'bundleVip', price:25, label:'VIP Bundle', icon:'🎟️',
+    teethPct:1.3, teethFloor:800, cashPct:1.9, cashFloor:1500, bankedMinutes:150, chestPulls:6,
+    requiresPromoUnlock:'vipBundle' },
+];
+
+function bundleRewardAmounts(bundle){
+  const power = totalPower();
+  return {
+    teeth: Math.max(bundle.teethFloor, Math.round(power * bundle.teethPct)),
+    cash: bundle.cashPct > 0 ? Math.max(bundle.cashFloor, Math.round(power * bundle.cashPct)) : 0,
+  };
+}
+
+function renderShopBundles(){
+  const spent = state.daily.spendUSD || 0;
+  const showFounder = !state.economy.everSpentReal;
+  const locked = realPurchasesLocked();
+  return `
+    <div style="font-size:11px; color:var(--text-muted); margin-bottom:10px;">
+      These are placeholder buttons — there's no real payment processing in this build (no
+      Stripe/Play Billing/App Store), so tapping "Buy" grants the reward instantly for free
+      rather than charging anything. Rewards scale with your current total power (${fmtNum(totalPower())}),
+      so bundles stay worthwhile at any stage of your career.
+    </div>
+    ${locked ? `
+      <div class="card" style="margin-bottom:10px; border-color:var(--corner-red);">
+        <div style="font-size:12px; color:var(--corner-red); font-weight:600;">🔒 Real-money purchases are locked</div>
+        <div style="font-size:11px; color:var(--text-muted); margin-top:4px;">This keeps testers from farming free Teeth/cash from what will eventually be real purchases. A dev/QA code unlocks this for testing the flow itself.</div>
+      </div>
+    ` : ''}
+    ${state.economy.spendCapDisabled ? `
+      <div class="card" style="margin-bottom:10px; border-color:var(--corner-red);">
+        <div style="font-size:12px; color:var(--corner-red);">⚠️ Daily spend cap disabled (QAUNLIMITED testing code active)</div>
+      </div>
+    ` : `
+      <div class="card" style="margin-bottom:10px; ${spent>=DAILY_SPEND_CAP_USD?'border-color:var(--corner-red);':''}">
+        <div style="display:flex; justify-content:space-between; align-items:center;">
+          <div style="font-size:12px; color:var(--text-muted);">Daily spend cap</div>
+          <div style="font-family:'Oswald',sans-serif; font-weight:700; font-size:14px; color:${spent>=DAILY_SPEND_CAP_USD?'var(--corner-red)':'var(--belt-gold)'};">$${spent.toFixed(2)} / $${DAILY_SPEND_CAP_USD}</div>
+        </div>
+        <div class="bar-track" style="margin-top:6px;"><div class="bar-fill xp" style="width:${clamp((spent/DAILY_SPEND_CAP_USD)*100,0,100)}%"></div></div>
+      </div>
+    `}
+    ${showFounder ? `
+      <div class="panel-title">🎉 One-Time Welcome Offer</div>
+      <div class="shop-item-card" style="border-left:3px solid var(--champ-teal); background:linear-gradient(135deg, var(--bg-panel-raised) 0%, rgba(45,212,191,0.08) 100%);">
+        <div class="shop-item-icon">${FOUNDER_BUNDLE.icon}</div>
+        <div class="shop-item-info">
+          <div class="shop-item-name" style="color:var(--champ-teal);">${FOUNDER_BUNDLE.label}</div>
+          <div class="shop-item-desc">
+            ${(() => { const r = bundleRewardAmounts(FOUNDER_BUNDLE); return `🦷${fmtNum(r.teeth)} • $${fmtNum(r.cash)} cash • ⚡${FOUNDER_BUNDLE.bankedMinutes}m speed boost • 🎁${FOUNDER_BUNDLE.chestPulls} chest pulls`; })()}
+            <br>One-time only — exempt from the daily spend cap.
+          </div>
+        </div>
+        <button class="shop-buy-btn real" data-buy-bundle="${FOUNDER_BUNDLE.key}" ${locked?'disabled':''}>${locked?'🔒 Locked':`$${FOUNDER_BUNDLE.price}`}</button>
+      </div>
+    ` : ''}
+    ${(() => {
+      const unlocked = state.economy.unlockedPromoOffers || [];
+      const available = PROMO_BUNDLES.filter(b => unlocked.includes(b.requiresPromoUnlock));
+      if(available.length === 0) return '';
+      return `
+        <div class="panel-title">🎟️ Promo Unlocks</div>
+        ${available.map(b => {
+          const r = bundleRewardAmounts(b);
+          const wouldExceedCap = !canSpendRealMoney(b.price);
+          const btnDisabled = locked || wouldExceedCap;
+          return `
+            <div class="shop-item-card" style="border-left:3px solid var(--corner-red); ${wouldExceedCap?'opacity:0.5;':''}">
+              <div class="shop-item-icon">${b.icon}</div>
+              <div class="shop-item-info">
+                <div class="shop-item-name">${b.label}</div>
+                <div class="shop-item-desc">🦷${fmtNum(r.teeth)} • $${fmtNum(r.cash)} cash • ⚡${b.bankedMinutes}m speed boost • 🎁${b.chestPulls} chest pulls</div>
+              </div>
+              <button class="shop-buy-btn real" data-buy-bundle="${b.key}" ${btnDisabled?'disabled':''}>${locked?'🔒 Locked':(wouldExceedCap?'Cap reached':`$${b.price}`)}</button>
+            </div>
+          `;
+        }).join('')}
+      `;
+    })()}
+    <div class="panel-title">Bundles</div>
+    ${CASH_BUNDLES.map(b => {
+      const r = bundleRewardAmounts(b);
+      const wouldExceedCap = !canSpendRealMoney(b.price);
+      const btnDisabled = locked || wouldExceedCap;
+      return `
+        <div class="shop-item-card" style="border-left:3px solid var(--belt-gold); ${wouldExceedCap?'opacity:0.5;':''}">
+          <div class="shop-item-icon">${b.icon}</div>
+          <div class="shop-item-info">
+            <div class="shop-item-name">${b.label}</div>
+            <div class="shop-item-desc">
+              🦷${fmtNum(r.teeth)}${r.cash?` • $${fmtNum(r.cash)} cash`:''} • ⚡${b.bankedMinutes}m speed boost${b.chestPulls?` • 🎁${b.chestPulls} chest pulls`:''}
+            </div>
+          </div>
+          <button class="shop-buy-btn real" data-buy-bundle="${b.key}" ${btnDisabled?'disabled':''}>${locked?'🔒 Locked':(wouldExceedCap?'Cap reached':`$${b.price}`)}</button>
+        </div>
+      `;
+    }).join('')}
+  `;
+}
+
+function buyCashBundle(key){
+  const bundle = key === FOUNDER_BUNDLE.key ? FOUNDER_BUNDLE : (CASH_BUNDLES.find(b => b.key === key) || PROMO_BUNDLES.find(b => b.key === key));
+  if(!bundle) return;
+  if(bundle.requiresPromoUnlock && !(state.economy.unlockedPromoOffers||[]).includes(bundle.requiresPromoUnlock)){
+    showToast('This offer is locked'); return;
+  }
+  if(realPurchasesLocked()){ showToast('🔒 Real-money purchases are locked for testing'); return; }
+  if(bundle.isFirstPurchaseOffer && state.economy.everSpentReal){ showToast('Welcome offer already used'); renderShopBody(); return; }
+  if(!canSpendRealMoney(bundle.price, { isFirstPurchaseOffer: !!bundle.isFirstPurchaseOffer })){
+    showToast(`Daily spend cap reached ($${DAILY_SPEND_CAP_USD}) — try again tomorrow`);
+    return;
+  }
+
+  const { teeth: previewTeeth, cash: previewCash } = bundleRewardAmounts(bundle);
+  showConfirm(
+    'Confirm Purchase',
+    `Buy ${bundle.label} for $${bundle.price}? You'll get 🦷${fmtNum(previewTeeth)}${previewCash?`, $${fmtNum(previewCash)} cash`:''}${bundle.chestPulls?`, ${bundle.chestPulls} chest pulls`:''}, and ${bundle.bankedMinutes}m of banked speed boost.`,
+    () => {
+      recordRealMoneySpend(bundle.price);
+
+      const { teeth, cash } = bundleRewardAmounts(bundle);
+      state.economy.teeth += teeth;
+      if(cash) state.economy.cash += cash;
+      if(!state.speedBoost.noAdsOwned && bundle.bankedMinutes){
+        state.speedBoost.bankedMs = Math.min(SPEED_BOOST_BANK_MAX_MS, state.speedBoost.bankedMs + bundle.bankedMinutes*60000);
+      }
+
+      const results = [];
+      for(let i=0; i<bundle.chestPulls; i++){
+        const tier = Math.floor(5 + Math.random()*6); // matches Gold Chest's tier 5-10 range
+        const isVehiclePull = Math.random() < 0.08;
+        if(isVehiclePull){
+          const category = Object.keys(VEHICLE_CATEGORIES)[Math.floor(Math.random()*Object.keys(VEHICLE_CATEGORIES).length)];
+          const vehicle = generateVehicleItem(category, Math.min(10,tier), 'shop');
+          results.push({ type:'vehicle', item:vehicle, result:autoResolveVehicle(vehicle, false) });
+        } else {
+          const item = generateLootItem(Math.min(10,tier), null, 'shop');
+          results.push({ type:'gear', item, result:autoResolveItem(item, false) });
         }
-        return response;
-      }).catch(() => cached); // offline and not cached: fail gracefully rather than throwing
-    })
+      }
+
+      pushLog(`Purchased ${bundle.label} ($${bundle.price}): 🦷${fmtNum(teeth)}${cash?`, $${fmtNum(cash)}`:''}${bundle.chestPulls?`, ${bundle.chestPulls} chest pulls`:''}`, 'level');
+      render();
+      if(results.length > 0){
+        showShopMultiPullResult({ name: bundle.label, pulls: bundle.chestPulls }, results, 'bundles');
+      } else {
+        showToast(`${bundle.label} purchased!`);
+        renderShopBody();
+      }
+      scheduleSave();
+    }
   );
+}
+
+function buyChest(chestKey){
+  const chest = SHOP_CHESTS.find(c => c.key === chestKey);
+  if(state.economy.teeth < chest.costTeeth){ showToast('Not enough Teeth'); return; }
+  spendTeeth(chest.costTeeth);
+  const results = [];
+  for(let i=0; i<chest.pulls; i++){
+    const tier = Math.floor(chest.tierRange[0] + Math.random()*(chest.tierRange[1]-chest.tierRange[0]+1));
+    const isVehiclePull = Math.random() < 0.08;
+    if(isVehiclePull){
+      const category = Object.keys(VEHICLE_CATEGORIES)[Math.floor(Math.random()*Object.keys(VEHICLE_CATEGORIES).length)];
+      const vehicle = generateVehicleItem(category, Math.min(10,tier), 'shop');
+      results.push({ type:'vehicle', item:vehicle, result:autoResolveVehicle(vehicle, false) });
+    } else {
+      const item = generateLootItem(Math.min(10,tier), null, 'shop');
+      results.push({ type:'gear', item, result:autoResolveItem(item, false) });
+    }
+  }
+  pushLog(`Opened ${chest.name}: ${chest.pulls} pulls`, 'level');
+  render();
+  showShopMultiPullResult(chest, results);
+  scheduleSave();
+}
+
+function showShopMultiPullResult(chest, results, backTab='chests'){
+  const backLabel = backTab === 'bundles' ? 'Bundles' : 'Chests';
+  document.getElementById('shop-modal-body').innerHTML = `
+    <div class="panel-title">${chest.name} Results</div>
+    ${results.map(r => {
+      const rarity = RARITY_TIERS[r.item.tier-1];
+      const name = r.type === 'vehicle' ? `${r.item.rarityName} ${r.item.name}` : itemDisplayName(r.item);
+      return `
+        <div class="shop-item-card" style="border-left:3px solid ${rarity.color};">
+          <div class="shop-item-icon">${r.item.icon}</div>
+          <div class="shop-item-info">
+            <div class="shop-item-name" style="color:${rarity.color};">${name}</div>
+            <div class="shop-item-desc">${r.result.equipped ? 'Equipped!' : `Sold for $${r.result.soldValue}`} • Power ${r.item.itemPower}</div>
+          </div>
+        </div>
+      `;
+    }).join('')}
+    <button class="btn btn-ghost btn-block" style="margin-top:10px;" data-shop-back-to-chests="${backTab}">← Back to ${backLabel}</button>
+  `;
+  attachShopHandlers(); // this bypasses renderShopBody(), which normally wires these up — without
+                        // this call, the "Back" button (and anything else here) would render but
+                        // have no click listener attached, exactly the bug this fixes.
+}
+
+function buyHomeItemWithTeeth(perkKey){
+  // Teeth-purchased instant perk level-up — a premium shortcut alongside the cash-based Home tab.
+  const p = state.homePerks[perkKey];
+  const teethCost = 3;
+  if(state.economy.teeth < teethCost){ showToast('Not enough Teeth'); return; }
+  spendTeeth(teethCost);
+  p.level++;
+  pushLog(`Shop: instantly upgraded ${HOME_PERKS[perkKey].name} to Lv.${p.level} (🦷${teethCost})`, 'level');
+  render();
+  renderShopBody();
+  scheduleSave();
+}
+
+function buyCosmetic(key){
+  const cos = SHOP_COSMETICS.find(c => c.key === key);
+  if(!state.purchasedCosmetics) state.purchasedCosmetics = [];
+  if(state.purchasedCosmetics.includes(key)){ showToast('Already owned'); return; }
+  if(state.economy.teeth < cos.costTeeth){ showToast('Not enough Teeth'); return; }
+  spendTeeth(cos.costTeeth);
+  state.purchasedCosmetics.push(key);
+  pushLog(`Shop: purchased ${cos.name}`, 'level');
+  showToast(`Purchased: ${cos.name}`);
+  render();
+  renderShopBody();
+  scheduleSave();
+}
+
+const SPEED_BOOST_BANK_MAX_MS = 8*60*60*1000;  // 8 hours banked cap
+const SPEED_BOOST_AD_INCREMENT_MS = 10*60*1000; // +10 minutes per ad watched
+
+// Watching an ad banks 10 more minutes of 2x speed (stacking up to an 8-hour cap). Ignored
+// entirely if the player already owns permanent 2x speed via Diamond in the Rough.
+function watchAdForSpeedBoost(){
+  const sb = state.speedBoost;
+  if(sb.noAdsOwned){ showToast('2x Speed is already permanently active!'); return; }
+  sb.bankedMs = Math.min(SPEED_BOOST_BANK_MAX_MS, sb.bankedMs + SPEED_BOOST_AD_INCREMENT_MS);
+  pushLog(`📺 Watched an ad: +10 min of 2x Speed banked (${Math.round(sb.bankedMs/60000)}m total)`, 'level');
+  showToast('+10 min of 2x Speed!');
+  render();
+  renderShopBody();
+  scheduleSave();
+}
+
+// "Diamond in the Rough" — the no-ads investment pack. Grants permanent 2x speed (no banking
+// needed, never runs out) and removes ads; in exchange, every fight has a small chance to drop
+// a bit of bonus Teeth, so the game still has a light monetization trickle without interruptions.
+function buyDiamondInTheRough(){
+  if(state.speedBoost.noAdsOwned){ showToast('Already owned'); return; }
+  if(realPurchasesLocked()){ showToast('🔒 Real-money purchases are locked for testing'); return; }
+  if(!canSpendRealMoney(14.99)){
+    showToast(`Daily spend cap reached ($${DAILY_SPEND_CAP_USD}) — try again tomorrow`);
+    return;
+  }
+  showConfirm('Confirm Purchase', 'Buy Diamond in the Rough for $14.99? Removes ads forever and permanently doubles idle/training speed.', () => {
+    recordRealMoneySpend(14.99);
+    state.speedBoost.noAdsOwned = true;
+    state.economy.teeth += 20; // small welcome bonus so the purchase feels immediately rewarding
+    pushLog(`💎 Purchased Diamond in the Rough! Permanent 2x Speed + no ads, +20 🦷`, 'level');
+    showToast('Diamond in the Rough activated!');
+    render();
+    renderShopBody();
+    scheduleSave();
+  });
+}
+
+function useAdSkip(method){
+  const now = Date.now();
+  const onCooldown = (now - state.adSkip.lastUsedAt) < state.adSkip.cooldownMs;
+  if(method === 'ad' && onCooldown){ showToast('Ad skip on cooldown'); return; }
+  if(method === 'teeth' && state.economy.teeth < 5){ showToast('Not enough Teeth'); return; }
+  if(method === 'money'){
+    if(realPurchasesLocked()){ showToast('🔒 Real-money purchases are locked for testing'); return; }
+    if(!canSpendRealMoney(10)){
+      showToast(`Daily spend cap reached ($${DAILY_SPEND_CAP_USD}) — try again tomorrow`);
+      return;
+    }
+    showConfirm('Confirm Purchase', 'Spend $10 to instantly skip ahead 10 minutes, no cooldown?', () => {
+      recordRealMoneySpend(10);
+      executeAdSkip(method, now);
+    });
+    return;
+  }
+  executeAdSkip(method, now);
+}
+
+function executeAdSkip(method, now){
+  if(method === 'teeth') spendTeeth(5);
+  if(method === 'ad') state.adSkip.lastUsedAt = now;
+  // Simulate 10 minutes of idle progress instantly via the same offline-catchup math.
+  state.meta.lastTick = now - 10*60*1000;
+  processOfflineProgress();
+  pushLog(`⏩ Skipped ahead 10 minutes (${method === 'ad' ? 'watched ad' : method === 'teeth' ? 'spent 5 Teeth' : 'real-money skip'})`, 'level');
+  render();
+  renderShopBody();
+  scheduleSave();
+}
+
+function renderShopBody(){
+  const body = document.getElementById('shop-modal-body');
+  if(!body) return;
+  if(activeShopTab === 'featured') body.innerHTML = renderShopFeatured();
+  else if(activeShopTab === 'chests') body.innerHTML = renderShopChests();
+  else if(activeShopTab === 'home') body.innerHTML = renderShopHome();
+  else if(activeShopTab === 'cosmetics') body.innerHTML = renderShopCosmetics();
+  else if(activeShopTab === 'roulette') body.innerHTML = renderShopRoulette();
+  else if(activeShopTab === 'bundles') body.innerHTML = renderShopBundles();
+  else if(activeShopTab === 'idle') body.innerHTML = renderShopIdle();
+  attachShopHandlers();
+}
+
+function renderShopFeatured(){
+  const owned = state.speedBoost.noAdsOwned;
+  const locked = realPurchasesLocked();
+  const diamondCapped = !owned && !canSpendRealMoney(14.99);
+  const realBtn = (price, capped) => locked ? { disabled:true, label:'🔒 Locked' } : { disabled:capped, label: capped ? 'Cap reached' : `$${price}` };
+  return `
+    <div class="panel-title">💎 Diamond in the Rough</div>
+    <div class="shop-item-card" style="border-left:3px solid var(--champ-teal); ${owned?'':'background:linear-gradient(135deg, var(--bg-panel-raised) 0%, rgba(45,212,191,0.08) 100%);'}">
+      <div class="shop-item-icon">💎</div>
+      <div class="shop-item-info">
+        <div class="shop-item-name" style="color:var(--champ-teal);">No Ads + Permanent 2x Speed</div>
+        <div class="shop-item-desc">Removes ads forever, permanently doubles idle/training speed, and every fight has a small chance to drop bonus Teeth.</div>
+      </div>
+      <button class="shop-buy-btn real" data-buy-diamond ${(owned||locked||diamondCapped)?'disabled':''}>${owned?'Owned':realBtn('14.99', diamondCapped).label}</button>
+    </div>
+
+    <div class="panel-title">Teeth Packs</div>
+    <div class="shop-item-card">
+      <div class="shop-item-icon">🦷</div>
+      <div class="shop-item-info"><div class="shop-item-name">50 Teeth</div><div class="shop-item-desc">Small pack</div></div>
+      <button class="shop-buy-btn real" data-buy-teeth-pack="50,$0.99" ${realBtn('0.99', !canSpendRealMoney(0.99)).disabled?'disabled':''}>${realBtn('0.99', !canSpendRealMoney(0.99)).label}</button>
+    </div>
+    <div class="shop-item-card">
+      <div class="shop-item-icon">🦷</div>
+      <div class="shop-item-info"><div class="shop-item-name">300 Teeth</div><div class="shop-item-desc">Best value — +20% bonus</div></div>
+      <button class="shop-buy-btn real" data-buy-teeth-pack="300,$4.99" ${realBtn('4.99', !canSpendRealMoney(4.99)).disabled?'disabled':''}>${realBtn('4.99', !canSpendRealMoney(4.99)).label}</button>
+    </div>
+    <div class="shop-item-card">
+      <div class="shop-item-icon">🦷</div>
+      <div class="shop-item-info"><div class="shop-item-name">700 Teeth</div><div class="shop-item-desc">+40% bonus</div></div>
+      <button class="shop-buy-btn real" data-buy-teeth-pack="700,$9.99" ${realBtn('9.99', !canSpendRealMoney(9.99)).disabled?'disabled':''}>${realBtn('9.99', !canSpendRealMoney(9.99)).label}</button>
+    </div>
+    <div class="panel-title">Gold Chest</div>
+    <div class="shop-item-card">
+      <div class="shop-item-icon">💼</div>
+      <div class="shop-item-info"><div class="shop-item-name">Gold Chest (5 pulls)</div><div class="shop-item-desc">Tier 5-10 gear/car odds</div></div>
+      <button class="shop-buy-btn teeth" data-buy-chest="gold">🦷 25</button>
+    </div>
+  `;
+}
+
+function renderShopChests(){
+  return SHOP_CHESTS.map(chest => `
+    <div class="shop-item-card">
+      <div class="shop-item-icon">${chest.icon}</div>
+      <div class="shop-item-info">
+        <div class="shop-item-name">${chest.name}</div>
+        <div class="shop-item-desc">${chest.pulls} pull${chest.pulls>1?'s':''} • Tier ${chest.tierRange[0]}-${chest.tierRange[1]}</div>
+      </div>
+      <button class="shop-buy-btn teeth" data-buy-chest="${chest.key}" ${state.economy.teeth<chest.costTeeth?'disabled':''}>🦷 ${chest.costTeeth}</button>
+    </div>
+  `).join('') + `<div id="shop-back-anchor"></div>`;
+}
+
+function renderShopHome(){
+  return `
+    <div class="panel-title">Instant Home Upgrades</div>
+    <div style="font-size:11px; color:var(--text-muted); margin-bottom:8px;">Skip the cash grind — instantly add a level to any Home perk for Teeth.</div>
+    ${Object.entries(HOME_PERKS).map(([key, perk]) => `
+      <div class="shop-item-card">
+        <div class="shop-item-icon">${perk.icon}</div>
+        <div class="shop-item-info">
+          <div class="shop-item-name">${perk.name} <span style="color:var(--belt-gold);">Lv.${state.homePerks[key].level}</span></div>
+          <div class="shop-item-desc">${perk.desc}</div>
+        </div>
+        <button class="shop-buy-btn teeth" data-buy-home-teeth="${key}" ${state.economy.teeth<3?'disabled':''}>🦷 3</button>
+      </div>
+    `).join('')}
+  `;
+}
+
+function renderShopCosmetics(){
+  const owned = state.purchasedCosmetics || [];
+  return SHOP_COSMETICS.map(cos => `
+    <div class="shop-item-card">
+      <div class="shop-item-icon">${cos.icon}</div>
+      <div class="shop-item-info">
+        <div class="shop-item-name">${cos.name}</div>
+        <div class="shop-item-desc">${cos.desc}</div>
+      </div>
+      <button class="shop-buy-btn teeth" data-buy-cosmetic="${cos.key}" ${owned.includes(cos.key)?'disabled':''}>${owned.includes(cos.key) ? 'Owned' : `🦷 ${cos.costTeeth}`}</button>
+    </div>
+  `).join('');
+}
+
+function renderShopIdle(){
+  const now = Date.now();
+  const onCooldown = (now - state.adSkip.lastUsedAt) < state.adSkip.cooldownMs;
+  const remainMin = onCooldown ? Math.ceil((state.adSkip.cooldownMs - (now - state.adSkip.lastUsedAt))/60000) : 0;
+  const sb = state.speedBoost;
+  const bankedHrs = (sb.bankedMs/3600000).toFixed(1);
+  return `
+    <div class="panel-title">Idle Window</div>
+    <div style="font-size:11px; color:var(--text-muted); margin-bottom:10px;">
+      Away time is simulated for up to ${(idleCapMs()/3600000).toFixed(2)}h (2h base, +30s per prestige, capped at 48h — currently ${state.prestige.count} prestige${state.prestige.count===1?'':'s'}).
+    </div>
+
+    <div class="panel-title">2x Speed Boost</div>
+    ${sb.noAdsOwned ? `
+      <div class="shop-item-card" style="border-left:3px solid var(--champ-teal);">
+        <div class="shop-item-icon">💎</div>
+        <div class="shop-item-info"><div class="shop-item-name" style="color:var(--champ-teal);">2x Speed: Permanent</div><div class="shop-item-desc">Diamond in the Rough active — no ads, always on</div></div>
+      </div>
+    ` : `
+      <div style="font-size:11px; color:var(--text-muted); margin-bottom:10px;">Doubles training & fighting speed while banked time remains. Stacks up to 8 hours, 10 minutes per ad.</div>
+      <div class="shop-item-card">
+        <div class="shop-item-icon">⚡</div>
+        <div class="shop-item-info"><div class="shop-item-name">Banked: ${bankedHrs}h / 8h</div><div class="shop-item-desc">${sb.bankedMs>0 ? '2x Speed is currently ACTIVE' : 'Watch an ad to bank +10 min'}</div></div>
+        <button class="shop-buy-btn real" data-watch-speed-ad ${sb.bankedMs>=SPEED_BOOST_BANK_MAX_MS?'disabled':''}>${sb.bankedMs>=SPEED_BOOST_BANK_MAX_MS?'Full':'📺 +10m'}</button>
+      </div>
+    `}
+
+    <div class="panel-title">Skip Ahead 10 Minutes</div>
+    <div style="font-size:11px; color:var(--text-muted); margin-bottom:10px;">Instantly simulates 10 minutes of training & fighting, just like being away.</div>
+    <div class="shop-item-card">
+      <div class="shop-item-icon">📺</div>
+      <div class="shop-item-info"><div class="shop-item-name">Watch an Ad</div><div class="shop-item-desc">${onCooldown ? `Cooldown: ${remainMin}m` : 'Free — 30 min cooldown'}</div></div>
+      <button class="shop-buy-btn real" data-adskip="ad" ${onCooldown?'disabled':''}>${onCooldown?'⏳':'Watch'}</button>
+    </div>
+    <div class="shop-item-card">
+      <div class="shop-item-icon">🦷</div>
+      <div class="shop-item-info"><div class="shop-item-name">Spend Teeth</div><div class="shop-item-desc">No cooldown</div></div>
+      <button class="shop-buy-btn teeth" data-adskip="teeth" ${state.economy.teeth<5?'disabled':''}>🦷 5</button>
+    </div>
+    <div class="shop-item-card">
+      <div class="shop-item-icon">💳</div>
+      <div class="shop-item-info"><div class="shop-item-name">Instant Skip</div><div class="shop-item-desc">Real money, no cooldown</div></div>
+      <button class="shop-buy-btn real" data-adskip="money" ${(realPurchasesLocked()||!canSpendRealMoney(10))?'disabled':''}>${realPurchasesLocked() ? '🔒 Locked' : (canSpendRealMoney(10)?'$10':'Cap reached')}</button>
+    </div>
+  `;
+}
+
+function attachShopHandlers(){
+  document.querySelectorAll('[data-buy-teeth-pack]').forEach(btn => {
+    btn.addEventListener('click', () => {
+      const [amount, label] = btn.dataset.buyTeethPack.split(',');
+      buyTeethPack(parseInt(amount), label);
+    });
+  });
+  document.querySelectorAll('[data-buy-chest]').forEach(btn => {
+    btn.addEventListener('click', () => buyChest(btn.dataset.buyChest));
+  });
+  document.querySelectorAll('[data-buy-home-teeth]').forEach(btn => {
+    btn.addEventListener('click', () => buyHomeItemWithTeeth(btn.dataset.buyHomeTeeth));
+  });
+  document.querySelectorAll('[data-buy-cosmetic]').forEach(btn => {
+    btn.addEventListener('click', () => buyCosmetic(btn.dataset.buyCosmetic));
+  });
+  document.querySelectorAll('[data-adskip]').forEach(btn => {
+    btn.addEventListener('click', () => useAdSkip(btn.dataset.adskip));
+  });
+  const watchSpeedAdBtn = document.querySelector('[data-watch-speed-ad]');
+  if(watchSpeedAdBtn) watchSpeedAdBtn.addEventListener('click', watchAdForSpeedBoost);
+  const buyDiamondBtn = document.querySelector('[data-buy-diamond]');
+  if(buyDiamondBtn) buyDiamondBtn.addEventListener('click', buyDiamondInTheRough);
+  const spinBtn = document.querySelector('[data-spin-roulette]');
+  if(spinBtn) spinBtn.addEventListener('click', spinRoulette);
+  const backBtn = document.querySelector('[data-shop-back-to-chests]');
+  if(backBtn) backBtn.addEventListener('click', () => { activeShopTab = backBtn.dataset.shopBackToChests || 'chests'; renderShopBody(); });
+  document.querySelectorAll('[data-buy-bundle]').forEach(btn => {
+    btn.addEventListener('click', () => buyCashBundle(btn.dataset.buyBundle));
+  });
+}
+
+const HOME_PERK_CAPS = { cashPct:0.40, xpPct:0.40, affectionPct:0.60, trainSpeedPct:0.40, critPct:0.25, lootPct:0.30 };
+function homePerkBonus(effectKey){
+  let total = 0;
+  Object.entries(state.homePerks).forEach(([key, p]) => {
+    if(HOME_PERKS[key] && getHomePerkEffectKey(key) === effectKey){
+      total += p.level * getHomePerkBonusPerLevel(key);
+    }
+  });
+  const pct = total / 100;
+  const cap = HOME_PERK_CAPS[effectKey];
+  return cap !== undefined ? Math.min(cap, pct) : pct;
+}
+function getHomePerkEffectKey(key){
+  const map = { sofa:'cashPct', office:'xpPct', diningSet:'affectionPct', homeGym:'trainSpeedPct', artWall:'critPct', securitySys:'lootPct' };
+  return map[key];
+}
+function getHomePerkBonusPerLevel(key){
+  return state.homePerks[key].bonusPerLevel;
+}
+
+// Applies the Home Sofa cash% bonus on top of a base cash amount. Centralized so every
+// cash-awarding code path (live win/loss, offline win/loss) stays consistent automatically.
+function applyCashGain(baseAmount){
+  return Math.round(baseAmount * (1 + homePerkBonus('cashPct') + powerUpBonus('cashPct')/100 + membershipBonusPct()/100));
+}
+
+// Resets the Teeth Spent counter on a weekly boundary — independent of league membership, since
+// this leaderboard is open to everyone, not just gym members.
+function ensureTeethSpendWeeklyReset(){
+  const wk = getWeekKey();
+  if(state.economy.teethSpentWeekKey === wk) return;
+  state.economy.teethSpentWeekKey = wk;
+  state.economy.teethSpentThisWeek = 0;
+}
+
+// Every Teeth purchase should route through here instead of decrementing state.economy.teeth
+// directly — it's the single place that both spends AND tracks spend for the weekly leaderboard.
+function spendTeeth(amount){
+  state.economy.teeth -= amount;
+  ensureTeethSpendWeeklyReset();
+  state.economy.teethSpentThisWeek += amount;
+  pushTeethSpendHeartbeat();
+}
+
+// Throttled shared write (same pattern/interval as the league weekly-XP push) — each player only
+// ever writes their OWN key, avoiding any shared-counter race.
+let lastTeethSpendPushAt = 0;
+async function pushTeethSpendHeartbeat(){
+  if(!state.social.playerId) return;
+  if(Date.now() - lastTeethSpendPushAt < 60000) return; // throttled to once/minute, like the weekly XP push
+  lastTeethSpendPushAt = Date.now();
+  ensureTeethSpendWeeklyReset();
+  try {
+    const key = `teethspend_weekly:${state.economy.teethSpentWeekKey}:${state.social.playerId}`;
+    await window.storage.set(key, JSON.stringify({
+      name: state.social.displayName || 'Unnamed',
+      amount: state.economy.teethSpentThisWeek,
+      updatedAt: Date.now(),
+    }), true);
+  } catch(e){ /* best-effort — next spend (or the next interval tick) will retry */ }
+}
+
+function toggleGearCosmetic(key){
+  state.fighter.appearance[key] = !state.fighter.appearance[key];
+  render();
+  scheduleSave();
+}
+
+function renameFighter(rawName){
+  const name = rawName.trim().slice(0, 24);
+  if(!name){ showToast('Enter a name first'); return; }
+  state.fighter.name = name;
+  state.ui.editingFighterName = false;
+  pushLog(`Renamed to ${name}`, 'level');
+  showToast(`Renamed to ${name}`);
+  render();
+  scheduleSave();
+}
+
+/* ========================================================================
+   LEAGUES / MEMBERSHIP / DAILY QUESTS MODULE
+   Lightweight social layer built on window.storage's shared key/value store.
+   No accounts, no server-side validation — see the in-app disclaimer text
+   on the League tab. Membership tiers and quests are fully client-side and
+   safe from that limitation; only the shared roster/member-count is "social".
+   ======================================================================== */
+const LEAGUES = [
+  { id:'redcorner',  name:'Grim Corner Athletics', icon:'🥋' },
+  { id:'ironfist',   name:'Iron Fist Gym',        icon:'👊' },
+  { id:'goldenbelt', name:'Golden Belt Academy',  icon:'🏅' },
+  { id:'blackout',   name:'Blackout Boxing Club', icon:'🥊' },
+  { id:'ironwolf',   name:'Iron Wolf Fight Team', icon:'🐺' },
+  { id:'stormfront', name:'Stormfront MMA',       icon:'⛈️' },
+  { id:'grindhouse', name:'Grindhouse Gym',       icon:'🏋️' },
+  { id:'apexring',   name:'Apex Ring',            icon:'🔺' },
+  { id:'nightshift', name:'Night Shift Fighters', icon:'🌙' },
+  { id:'lionheart',  name:'Lionheart Combat',     icon:'🦁' },
+];
+
+// Membership tier thresholds are lifetime XP contributed while a member of your CURRENT league
+// (resets if you switch leagues). Bonus stacks with Home Perks / Power-Ups on cash & XP gain.
+const MEMBERSHIP_TIERS = [
+  { name:'Rookie',  minXp:0,    bonusPct:0  },
+  { name:'Member',  minXp:150,  bonusPct:2  },
+  { name:'Regular', minXp:400,  bonusPct:4  },
+  { name:'Veteran', minXp:900,  bonusPct:6  },
+  { name:'Captain', minXp:1800, bonusPct:9  },
+  { name:'Legend',  minXp:3200, bonusPct:12 },
+];
+
+function currentMembershipTier(){
+  let t = MEMBERSHIP_TIERS[0];
+  for(const tier of MEMBERSHIP_TIERS){ if(state.social.contributedXp >= tier.minXp) t = tier; }
+  return t;
+}
+function nextMembershipTier(){
+  return MEMBERSHIP_TIERS.find(t => t.minXp > state.social.contributedXp) || null;
+}
+function membershipBonusPct(){
+  return state.social.leagueId ? currentMembershipTier().bonusPct : 0;
+}
+
+// Gyms start at a 100-member base cap. Once a gym is actually up against that limit, its level
+// (see the Gym Level system) keeps raising the ceiling: +10 more capacity every 10 gym levels,
+// uncapped — so a genuinely thriving, high-level gym can keep growing past 100 indefinitely.
+const LEAGUE_MEMBER_CAP = 100;
+function leagueMemberCapForLevel(level){
+  return LEAGUE_MEMBER_CAP + Math.floor((level||1)/10)*10;
+}
+
+// Members get pruned after being inactive too long (see pushActivityHeartbeat). There's no real
+// backend/cron here, so this isn't a live guarantee — pruning happens opportunistically whenever
+// ANY member's client calls refreshLeagueRosterDetail() (e.g. opening the League tab). Coaches
+// and the Head Coach get a longer 7-day grace window than regular Trainers/Members (48h), since
+// losing gym leadership is more disruptive than losing a rank-and-file member.
+const INACTIVE_KICK_MS = 48*60*60*1000;        // Trainer/Member
+const INACTIVE_KICK_MS_LEADERSHIP = 7*24*60*60*1000; // Coach/Head Coach
+function kickThresholdForRole(role){
+  return (role === 'head_coach' || role === 'coach') ? INACTIVE_KICK_MS_LEADERSHIP : INACTIVE_KICK_MS;
+}
+
+// Role hierarchy within a gym. The first person to ever join an empty gym becomes its Head
+// Coach — capped at 1 per gym. Head Coach AND Coaches can promote/demote other members (checked
+// client-side against state.social.role — same "no real security" caveat as everything else in
+// this shared-storage social layer applies: a determined player could still forge their own role).
+// Coaches can't appoint other Coaches or a second Head Coach — only Head Coach can do that.
+const ROLE_LABELS = { head_coach:'Head Coach', coach:'Coach', prize_fighter:'Prize Fighter', trainer:'Trainer', member:'Member', janitor:'Janitor' };
+const ROLE_ICONS  = { head_coach:'👑', coach:'🥊', prize_fighter:'🏆', trainer:'💪', member:'🤝', janitor:'🧹' };
+const ROLE_RANK   = { head_coach:0, coach:1, prize_fighter:2, trainer:3, member:4, janitor:5 };
+// New joiners (anyone but the very first, who becomes Head Coach) start as Janitor for their
+// first 3 days — a lighthearted "prove you're sticking around" probation period — then
+// automatically graduate to regular Member status. See graduateJanitors() in
+// refreshLeagueRosterDetail for the auto-promotion.
+const JANITOR_DURATION_DAYS = 3;
+const ROLE_CAPS   = { head_coach:1, coach:10, prize_fighter:20, trainer:30 }; // 'member' is uncapped
+
+/* ========================================================================
+   ROSTER & STAFF SCALING LOGIC (pure logic only — no UI wired up yet)
+   ------------------------------------------------------------------------
+   Base state: 1,000 total slots across all 10 gyms (100 per gym × 10).
+   Every time TOTAL capacity across all gyms doubles (2,000 → 4,000 → 8,000...),
+   Coach/Prize Fighter/Trainer caps each grow +50% (floored). Every 2nd doubling
+   additionally raises the max number of Head Coaches a gym can have by 1.
+
+   IMPORTANT INTEGRATION NOTE: total gym capacity is inherently SHARED/GLOBAL
+   data (it depends on all 10 gyms' real levels, stored in Firestore, not on
+   any single player's device) — NOT something safe to track as an
+   independent per-player counter, since two players' clients could then
+   disagree about the "true" doubling count. Two versions are provided below:
+   a simple tracked-variable version matching the literal spec (fine for a
+   quick wire-up / testing), and computeGlobalDoublingCount(), which DERIVES
+   the count from real aggregate gym data instead — that's the one I'd
+   actually recommend using for anything real, since it can't drift out of sync.
+   ======================================================================== */
+
+const TOTAL_SLOTS_BASE = 1000; // 100 (LEAGUE_MEMBER_CAP) × 10 gyms
+const ROLE_CAP_GROWTH_ROLES = ['coach', 'prize_fighter', 'trainer']; // head_coach scales separately, see below
+
+// --- Option A: simple tracked-variable version (matches the literal spec) ---
+// Expects a `state` object with: state.doublingCount (number), state.maxHeadCoaches (number),
+// state.currentHeadCoaches (number). Call this any time total capacity might have changed.
+function updateRosterScalingState(state, totalCapacityAcrossAllGyms){
+  const doublingCount = Math.max(0, Math.floor(Math.log2(totalCapacityAcrossAllGyms / TOTAL_SLOTS_BASE)));
+  state.doublingCount = doublingCount;
+
+  // Coach/Prize Fighter/Trainer caps: +50% per doubling, compounding, floored to whole numbers.
+  const growthMultiplier = Math.pow(1.5, doublingCount);
+  state.roleCaps = state.roleCaps || {};
+  ROLE_CAP_GROWTH_ROLES.forEach(role => {
+    state.roleCaps[role] = Math.floor(ROLE_CAPS[role] * growthMultiplier);
+  });
+
+  // Head Coach cap: +1 every 2nd doubling. floor(doublingCount/2) already only increases every
+  // TWO steps on its own (0,0,1,1,2,2,3...) — do NOT gate this behind "doublingCount % 2 === 0",
+  // that was a real bug caught while testing: it zeroed the bonus back out at every ODD doubling
+  // count instead of holding steady, so the cap would regress (e.g. unlock a 2nd Head Coach slot
+  // at doubling 2, then incorrectly drop back to 1 at doubling 3) instead of staying unlocked.
+  const bonusHeadCoachSlots = Math.floor(doublingCount / 2);
+  state.maxHeadCoaches = ROLE_CAPS.head_coach + bonusHeadCoachSlots;
+
+  return state;
+}
+
+// --- Option B: derived version (recommended for real integration) ---
+// Computes total capacity by summing leagueMemberCapForLevel(level) across all 10 real gyms,
+// using whatever level data is already fetched (e.g. allGymLevelsCache.levels from the Gym Wars
+// module) — no independent counter to keep in sync, the number IS the real aggregate every time.
+function computeGlobalDoublingCount(gymLevelsById){
+  const totalCapacity = LEAGUES.reduce((sum, lg) => {
+    const level = (gymLevelsById && gymLevelsById[lg.id]) || 1;
+    return sum + leagueMemberCapForLevel(level);
+  }, 0);
+  return {
+    totalCapacity,
+    doublingCount: Math.max(0, Math.floor(Math.log2(totalCapacity / TOTAL_SLOTS_BASE))),
+  };
+}
+
+/* ------------------------------------------------------------------------
+   HEAD COACH APPOINTMENT LOGIC
+   Operates on a roster array shaped like the existing league_roster entries:
+   { playerId, name, role, isPrimaryHeadCoach? }. Only ONE entry should ever
+   have isPrimaryHeadCoach:true — that's the gym's original founder, and the
+   only one allowed to promote/demote OTHER Head Coaches (additional Head
+   Coaches created via promotion are NOT primary, and can't promote/demote
+   each other — prevents any of them from locking out the founder).
+   ------------------------------------------------------------------------ */
+
+// Returns {ok:true, roster} on success, or {ok:false, reason} on failure — deliberately doesn't
+// throw, so calling code can show the reason directly as a toast/message.
+function promoteToHeadCoach(roster, actorPlayerId, targetStaffId, state){
+  const actor = roster.find(m => m.playerId === actorPlayerId);
+  if(!actor || !actor.isPrimaryHeadCoach){
+    return { ok:false, reason:'Only the primary Head Coach can appoint additional Head Coaches.' };
+  }
+  const target = roster.find(m => m.playerId === targetStaffId);
+  if(!target){
+    return { ok:false, reason:'That staff member was not found.' };
+  }
+  if(target.role !== 'coach'){
+    return { ok:false, reason:'Only a Coach can be promoted to Head Coach.' };
+  }
+  const currentHeadCoaches = roster.filter(m => m.role === 'head_coach').length;
+  const maxHeadCoaches = state.maxHeadCoaches ?? ROLE_CAPS.head_coach;
+  if(currentHeadCoaches >= maxHeadCoaches){
+    return { ok:false, reason:`Head Coach is full (${maxHeadCoaches} max) — needs another capacity doubling to raise it.` };
+  }
+  target.role = 'head_coach';
+  target.isPrimaryHeadCoach = false; // promoted Head Coaches are never primary
+  state.currentHeadCoaches = currentHeadCoaches + 1;
+  return { ok:true, roster };
+}
+
+// Strips a NON-primary Head Coach back down to Coach. The primary Head Coach can never be
+// demoted through this function — same reasoning as the existing UI's "no hand-off" rule:
+// a mis-click shouldn't be able to leave a gym with zero leadership at all.
+function demoteHeadCoach(roster, actorPlayerId, targetStaffId, state){
+  const actor = roster.find(m => m.playerId === actorPlayerId);
+  if(!actor || !actor.isPrimaryHeadCoach){
+    return { ok:false, reason:'Only the primary Head Coach can demote another Head Coach.' };
+  }
+  const target = roster.find(m => m.playerId === targetStaffId);
+  if(!target){
+    return { ok:false, reason:'That staff member was not found.' };
+  }
+  if(target.playerId === actorPlayerId){
+    return { ok:false, reason:"You can't demote yourself." };
+  }
+  if(target.role !== 'head_coach' || target.isPrimaryHeadCoach){
+    return { ok:false, reason:'That person is not a demotable (non-primary) Head Coach.' };
+  }
+  target.role = 'coach';
+  state.currentHeadCoaches = Math.max(0, (state.currentHeadCoaches ?? 1) - 1);
+  return { ok:true, roster };
+}
+
+const ROLE_DESCRIPTIONS = {
+  head_coach: 'Runs the gym. Can promote/demote anyone into any role, including other Coaches. Limited to 1 per gym.',
+  coach: 'Can promote/demote Prize Fighters, Trainers, and Members — but not appoint other Coaches or a Head Coach. Up to 10 per gym.',
+  prize_fighter: 'A special title recognizing a gym\'s top performers. Purely a title — assigned by Head Coach or Coach. Up to 20 per gym.',
+  trainer: 'A special title for dedicated members who help others train. Up to 30 per gym.',
+  member: 'Everyone else — tracked by how long they\'ve been in the gym instead of a special title (see tenure tiers).',
+  janitor: `Every new joiner starts here (except the very first, who becomes Head Coach) — a ${JANITOR_DURATION_DAYS}-day probation before graduating to regular Member automatically. Not assignable by promotion.`,
+};
+
+// Roles a Coach is allowed to assign — deliberately excludes 'coach' and 'head_coach', so only
+// the Head Coach can create more Coaches or hand off their own seat.
+const COACH_ASSIGNABLE_ROLES = ['prize_fighter', 'trainer', 'member'];
+// Roles the Head Coach can assign to others (excludes 'head_coach' itself — see setMemberRole's
+// comment on why that specific handoff isn't offered through this UI at all).
+const HEAD_COACH_ASSIGNABLE_ROLES = ['coach', 'prize_fighter', 'trainer', 'member'];
+
+// Tenure tier — purely based on how long you've been in your CURRENT gym (state.social.joinedAt),
+// no shared data needed. This is what a regular "Member" (no special role) is classified by
+// instead of a title — a longer list so there's always a next milestone to reach for.
+const TENURE_TIERS = [
+  { name:'New Member',      minDays:0   },
+  { name:'Active Member',   minDays:3   },
+  { name:'Committed Member',minDays:7   },
+  { name:'Regular',         minDays:14  },
+  { name:'Veteran Member',  minDays:30  },
+  { name:'Senior Member',   minDays:60  },
+  { name:'Elder',           minDays:100 },
+  { name:'Gym Legacy',      minDays:180 },
+  { name:'Founding Spirit', minDays:365 },
+];
+function daysInGym(){
+  if(!state.social.leagueId || !state.social.joinedAt) return 0;
+  return Math.floor((Date.now() - state.social.joinedAt) / 86400000);
+}
+function currentTenureTier(){
+  const days = daysInGym();
+  let t = TENURE_TIERS[0];
+  for(const tier of TENURE_TIERS){ if(days >= tier.minDays) t = tier; }
+  return t;
+}
+
+// Gym leveling — the GYM itself levels up from cumulative "Gym XP" contributed by ALL its
+// members via completing daily quests (each tier of DAILY_QUEST_TIERS carries its own gymXp
+// value — see claimQuest). Every member gets a small flat stat bonus based on the CURRENT gym
+// level, applied in effectiveStats(). Uses the same per-player-key + aggregate-at-read pattern
+// as the weekly leaderboard to avoid shared-counter races: each player only ever writes their
+// OWN lifetime contribution.
+//
+// Curve is deliberately steep (3x the original) specifically so a single very active gym can't
+// blow through the whole named-tier ladder in a day or two — climbing should feel like a
+// multi-day-to-multi-week project, not something that maxes out on day one.
+function gymXpForLevel(level){ return 600 * level * level; } // cumulative XP needed to REACH this level
+// Retuned alongside the 10-tier daily quest expansion below — together these hit roughly:
+// Level 10 in ~2-4 days, Level 50 in ~60-90 days, Level 100 in ~4-11 months, across a realistic
+// 30-40 daily-active-member gym. Was 1500 (way steeper) before this pass — at that rate, even a
+// fairly active 20-member gym was looking at 586+ days just to reach Level 50.
+
+// Named milestones layered on top of the raw level number, so "Gym Level 37" also reads as
+// something like "Regional Powerhouse" — gives the climb real texture instead of just a number
+// that keeps counting up forever.
+const GYM_LEVEL_TITLES = [
+  { minLevel:1,   title:'Backyard Gym' },
+  { minLevel:5,   title:'Neighborhood Gym' },
+  { minLevel:10,  title:'Local Gym' },
+  { minLevel:15,  title:'City Gym' },
+  { minLevel:20,  title:'Respected Gym' },
+  { minLevel:30,  title:'Regional Powerhouse' },
+  { minLevel:40,  title:'State Champion Gym' },
+  { minLevel:50,  title:'National Contender' },
+  { minLevel:65,  title:'Elite Training Camp' },
+  { minLevel:80,  title:'Legendary Dojo' },
+  { minLevel:100, title:'World-Renowned Academy' },
+  { minLevel:130, title:'Hall of Fame Gym' },
+  { minLevel:160, title:'Mythic Fight Camp' },
+  { minLevel:200, title:'Immortal Gym' },
+];
+function gymLevelTitle(level){
+  let t = GYM_LEVEL_TITLES[0];
+  for(const x of GYM_LEVEL_TITLES){ if(level >= x.minLevel) t = x; }
+  return t.title;
+}
+
+function gymLevelForXp(xp){
+  let level = 1;
+  while(gymXpForLevel(level+1) <= xp) level++;
+  return level;
+}
+// Gym Level bonus is a PERCENTAGE multiplier, not a flat point add — capped at +20%, reached by
+// level 51 (0.4% per level above 1). Two deliberate design reasons for this over a flat bonus:
+// (1) it scales WITH a player's own trained stats/gear rather than being a flat number that could
+// dwarf a fresh player's stats or eclipse personal investment in a big, long-lived gym, and
+// (2) it's capped, rather than growing forever alongside Gym Level (which is itself uncapped).
+function gymLevelBonusPct(){
+  return Math.min(0.20, Math.max(0, (state.social.knownGymLevel||1) - 1) * 0.004);
+}
+
+// Daily quests are now a fixed 10-tier ladder (expanded from 5), shown in full every day (not a
+// random pick). Each tier escalates in difficulty, cash/Teeth reward, AND Gym XP contribution —
+// doubling the ladder depth roughly doubles the daily Gym XP a fully-active player can generate,
+// which combined with the retuned gymXpForLevel curve above is what actually fixes gym-leveling
+// pacing — quest COUNT alone wouldn't have been enough without also softening the XP curve.
+const DAILY_QUEST_TIERS = [
+  { tier:1,  id:'tier1',  label:'Win 5 fights',              type:'winsToday',  goal:5,    rewardCash:100, rewardTeeth:0, gymXp:15  },
+  { tier:2,  id:'tier2',  label:'Complete 15 training reps', type:'trainToday', goal:15,   rewardCash:150, rewardTeeth:1, gymXp:25  },
+  { tier:3,  id:'tier3',  label:'Win 15 fights',             type:'winsToday',  goal:15,   rewardCash:200, rewardTeeth:0, gymXp:30  },
+  { tier:4,  id:'tier4',  label:'Complete 40 training reps', type:'trainToday', goal:40,   rewardCash:350, rewardTeeth:1, gymXp:45  },
+  { tier:5,  id:'tier5',  label:'Earn $1,000 from fights',   type:'cashToday',  goal:1000, rewardCash:0,   rewardTeeth:2, gymXp:40  },
+  { tier:6,  id:'tier6',  label:'Land 6 knockouts',          type:'critsToday', goal:6,    rewardCash:400, rewardTeeth:2, gymXp:55  },
+  { tier:7,  id:'tier7',  label:'Earn $3,000 from fights',   type:'cashToday',  goal:3000, rewardCash:0,   rewardTeeth:3, gymXp:70  },
+  { tier:8,  id:'tier8',  label:'Land 18 knockouts',         type:'critsToday', goal:18,   rewardCash:900, rewardTeeth:4, gymXp:100 },
+  { tier:9,  id:'tier9',  label:'Win 25 fights',             type:'winsToday',  goal:25,   rewardCash:0,   rewardTeeth:4, gymXp:90  },
+  { tier:10, id:'tier10', label:'Win 70 fights',             type:'winsToday',  goal:70,   rewardCash:0,   rewardTeeth:8, gymXp:160 },
+];
+
+function getDateKey(d = new Date()){
+  return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`;
+}
+
+// Coarse weekly bucket (not true ISO-8601 week numbering, just a consistent 7-day grouping) —
+// good enough for resetting the weekly league leaderboard on a predictable cadence.
+function getWeekKey(d = new Date()){
+  const start = new Date(d.getFullYear(), 0, 1);
+  const diffDays = Math.floor((d - start) / 86400000);
+  const week = Math.floor(diffDays / 7);
+  return `${d.getFullYear()}-W${week}`;
+}
+
+function ensureWeeklyReset(){
+  const wk = getWeekKey();
+  if(state.social.weekKey === wk) return;
+  state.social.weekKey = wk;
+  state.social.weeklyXp = 0;
+  state.social.weeklyWins = 0; // tracked separately from state.fighter.wins specifically because
+                                 // THAT resets on prestige mid-week — see addWeeklyWins() below.
+}
+
+// Wins earned THIS CALENDAR WEEK, immune to prestige resets — unlike state.fighter.wins (which
+// resets to 0 every prestige), this is the correct basis for the Gym Wars plausibility check.
+// Real bug this fixes: pushWeeklyStats() used to submit state.fighter.wins/level (tiny right
+// after a prestige) alongside state.social.weeklyXp (correctly NOT reset by prestige, since it's
+// week-scoped) — comparing a post-prestige near-zero wins count against a full week's
+// accumulated XP guaranteed a false "implausible" flag on every prestige.
+function addWeeklyWins(n){
+  if(!state.social.leagueId) return;
+  ensureWeeklyReset();
+  state.social.weeklyWins = (state.social.weeklyWins||0) + n;
+}
+
+// Resets daily counters + rolls new quests whenever the local date changes. Cheap to call often —
+// only does work on an actual day rollover.
+// Bumps whenever DAILY_QUEST_TIERS itself changes shape/count (like 5→10 tiers) — forces
+// ensureDailyReset() to re-init questIds immediately on next load, rather than a player being
+// stuck on a stale, shorter quest list until their next actual midnight rollover just because
+// their local dateKey already matched today's date before the update went live.
+const QUEST_SCHEME_VERSION = 2;
+
+function ensureDailyReset(){
+  const today = getDateKey();
+  if(state.daily.dateKey === today && state.daily.questSchemeVersion === QUEST_SCHEME_VERSION) return;
+  const isFirstEver = state.daily.dateKey === '';
+  const isSchemeChangeOnly = state.daily.dateKey === today && state.daily.questSchemeVersion !== QUEST_SCHEME_VERSION;
+  state.daily.dateKey = today;
+  state.daily.questSchemeVersion = QUEST_SCHEME_VERSION;
+  state.daily.questIds = DAILY_QUEST_TIERS.map(q => q.id); // fixed 10-tier ladder, same every day
+  // A pure scheme-version bump (same day, quest system itself changed) keeps today's actual
+  // progress counters and claimed-quest history intact — only a real day change wipes those.
+  if(!isSchemeChangeOnly){
+    state.daily.winsToday = 0;
+    state.daily.cashToday = 0;
+    state.daily.critsToday = 0;
+    state.daily.trainToday = 0;
+    state.daily.questProgress = {};
+    state.daily.questsClaimed = [];
+    state.daily.spendUSD = 0;
+  }
+  if(!isFirstEver && !isSchemeChangeOnly){
+    fireLocalNotification('🎯 New Daily Quests!', 'Fresh quests are up in the League tab.');
+  }
+}
+
+function questDef(id){ return DAILY_QUEST_TIERS.find(q => q.id === id); }
+
+function questProgressValue(quest){
+  return state.daily[quest.type] || 0;
+}
+
+function claimQuest(id){
+  ensureDailyReset();
+  const quest = questDef(id);
+  if(!quest || !state.daily.questIds.includes(id)) return;
+  if(state.daily.questsClaimed.includes(id)){ showToast('Already claimed today'); return; }
+  if(questProgressValue(quest) < quest.goal){ showToast('Quest not complete yet'); return; }
+  state.economy.cash += quest.rewardCash;
+  state.economy.teeth += quest.rewardTeeth;
+  state.daily.questsClaimed.push(id);
+  const rewardParts = [];
+  if(quest.rewardCash) rewardParts.push(`+$${quest.rewardCash}`);
+  if(quest.rewardTeeth) rewardParts.push(`+🦷${quest.rewardTeeth}`);
+  if(state.social.leagueId){
+    state.social.gymXpContributed += quest.gymXp;
+    pushGymXpContribution();
+    rewardParts.push(`+${quest.gymXp} Gym XP`);
+  }
+  pushLog(`✅ Tier ${quest.tier} complete: ${quest.label} (${rewardParts.join(' ')})`, 'level');
+  showToast(`Tier ${quest.tier} claimed! ${rewardParts.join(' ')}`);
+  render();
+  scheduleSave();
+}
+
+function ensurePlayerId(){
+  if(!state.social.playerId){
+    state.social.playerId = 'p_' + Math.random().toString(36).slice(2,10) + Date.now().toString(36);
+  }
+}
+
+// Enforces unique display names via a shared registry (lowercased name -> playerId). This is a
+// real uniqueness check (not just cosmetic) but still has no real auth behind it — anyone who
+// knows your playerId could theoretically contest it. Good enough to stop accidental collisions
+// and casual impersonation, not a security boundary.
+let nameClaimError = null;
+async function claimDisplayName(rawName){
+  const name = rawName.trim().slice(0, 20);
+  if(!name){ showToast('Enter a name first'); return; }
+  const key = 'name_registry';
+  try {
+    let registry = {};
+    try {
+      const res = await window.storage.get(key, true);
+      registry = res && res.value ? JSON.parse(res.value) : {};
+      if(typeof registry !== 'object' || registry === null) registry = {};
+    } catch(e){ registry = {}; }
+
+    const lower = name.toLowerCase();
+    const owner = registry[lower];
+    if(owner && owner !== state.social.playerId){
+      nameClaimError = `"${name}" is already taken — try another name.`;
+      showToast(nameClaimError);
+      render();
+      return;
+    }
+    // Release any previous name this player held before claiming the new one.
+    if(state.social.displayName){
+      const oldLower = state.social.displayName.toLowerCase();
+      if(registry[oldLower] === state.social.playerId && oldLower !== lower) delete registry[oldLower];
+    }
+    registry[lower] = state.social.playerId;
+    await window.storage.set(key, JSON.stringify(registry), true);
+    nameClaimError = null;
+    state.social.displayName = name;
+    state.ui.editingLeagueName = false;
+    showToast(`Name claimed: ${name}`);
+    render();
+    scheduleSave();
+  } catch(e){
+    showToast('Could not verify name uniqueness — check your connection and try again');
+  }
+}
+
+// In-memory cache of member counts per league, refreshed on tab open / periodically. Not part of
+// `state` since it's ephemeral, re-fetchable data, not something worth persisting or saving.
+// Tracks whether the last batch of League-tab storage calls actually reached the backend.
+// Flips false the moment any of the auto-refresh functions below hits a connection failure (as
+// opposed to an expected "key doesn't exist yet" case), and true again once one succeeds — so a
+// persistent, unmissable banner can show in renderLeagueTab instead of a toast that vanishes
+// before anyone notices what actually failed.
+let leagueStorageOk = true;
+
+let leagueRosterCache = {};
+let leagueRosterLoading = false;
+
+async function refreshLeagueRosters(){
+  if(leagueRosterLoading) return;
+  leagueRosterLoading = true;
+  try {
+    const counts = {};
+    let anySuccess = false;
+    await Promise.all(LEAGUES.map(async (lg) => {
+      try {
+        const res = await window.storage.get('league_roster:'+lg.id, true);
+        const arr = res && res.value ? JSON.parse(res.value) : [];
+        counts[lg.id] = Array.isArray(arr) ? arr.length : 0;
+        anySuccess = true;
+      } catch(e){
+        // get() throws both for "this gym has no members yet" (totally normal) and for a real
+        // connection failure — can't fully distinguish per-call, so the signal is "did ANY of
+        // the 10 succeed": all ten failing at once is connectivity, not ten coincidental empties.
+        counts[lg.id] = 0;
+      }
+    }));
+    leagueRosterCache = counts;
+    leagueStorageOk = anySuccess;
+  } catch(e){
+    console.error('League roster refresh failed:', e);
+    leagueStorageOk = false;
+  } finally {
+    leagueRosterLoading = false;
+    if(activeTab === 'league') render();
+  }
+}
+
+async function removeFromRoster(leagueId, playerId){
+  try {
+    const key = 'league_roster:'+leagueId;
+    const res = await window.storage.get(key, true);
+    let arr = res && res.value ? JSON.parse(res.value) : [];
+    if(!Array.isArray(arr)) arr = [];
+    arr = arr.filter(m => m.playerId !== playerId);
+    await window.storage.set(key, JSON.stringify(arr), true);
+  } catch(e){ /* key may not exist yet — nothing to remove */ }
+}
+
+async function joinLeague(leagueId){
+  if(!state.social.displayName){ showToast('Set a display name first'); return; }
+  if(state.social.leagueId === leagueId) return;
+  try {
+    if(state.social.leagueId){
+      await removeFromRoster(state.social.leagueId, state.social.playerId);
+    }
+    const key = 'league_roster:'+leagueId;
+    let arr = [];
+    try {
+      const res = await window.storage.get(key, true);
+      arr = res && res.value ? JSON.parse(res.value) : [];
+      if(!Array.isArray(arr)) arr = [];
+    } catch(e){ arr = []; }
+    arr = arr.filter(m => m.playerId !== state.social.playerId);
+
+    // Cap scales with the TARGET gym's own level (see leagueMemberCapForLevel) — a level-30 gym
+    // can hold 190 members, not just the flat starting 100 — so fetch its current level here
+    // before deciding whether there's room.
+    let targetGymLevel = 1;
+    try {
+      const gymXp = await aggregateGymXpForLeague(leagueId);
+      targetGymLevel = gymXp.level;
+    } catch(e){ /* fall back to the base 100-cap assumption if this fetch fails */ }
+    const cap = leagueMemberCapForLevel(targetGymLevel);
+
+    if(arr.length >= cap){
+      showToast(`${LEAGUES.find(l=>l.id===leagueId).name} is full (${arr.length}/${cap} members)`);
+      return;
+    }
+    const isFounder = arr.length === 0;
+    const role = isFounder ? 'head_coach' : 'janitor';
+    arr.push({ playerId: state.social.playerId, name: state.social.displayName, joinedAt: Date.now(), lastActiveAt: Date.now(), power: totalPower(), role, isPrimaryHeadCoach: isFounder });
+    await window.storage.set(key, JSON.stringify(arr), true);
+
+    state.social.leagueId = leagueId;
+    state.social.contributedXp = 0;
+    state.social.weekKey = getWeekKey();
+    state.social.weeklyXp = 0;
+    state.social.joinedAt = Date.now();
+    state.social.role = role;
+    state.social.gymXpContributed = 0;
+    state.social.knownGymLevel = 1;
+    pushLog(`🏋️ Joined ${LEAGUES.find(l=>l.id===leagueId).name}${role==='head_coach'?' as Head Coach!':'!'}`, 'level');
+    showToast(`Joined ${LEAGUES.find(l=>l.id===leagueId).name}${role==='head_coach'?' as Head Coach!':'!'}`);
+    scheduleSave();
+    render();
+    refreshLeagueRosters();
+    refreshLeagueRosterDetail();
+    refreshLeagueGymXp();
+    refreshJoinCode();
+  } catch(e){
+    showToast('Could not join league — check your connection and try again');
+  }
+}
+
+/* ------------------------------------------------------------------------
+   CROSS-DEVICE SYNC — recovery code
+   IMPORTANT HONESTY NOTE: there's no real login here (no email/password,
+   no Google account, no server-verified session — this artifact has no
+   backend capable of any of that). This is the closest honest substitute:
+   a long random code that maps to a full snapshot of your save in shared
+   storage. Anyone who has the code can read or overwrite that save, so
+   it's "don't share it" security, not real account security.
+   ------------------------------------------------------------------------ */
+function generateRecoveryCode(){
+  const chars = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789'; // no 0/O/1/I to avoid transcription errors
+  let code = '';
+  for(let i=0;i<12;i++){
+    if(i>0 && i%4===0) code += '-';
+    code += chars[Math.floor(Math.random()*chars.length)];
+  }
+  return code;
+}
+
+async function pushRecoverySnapshot(){
+  if(!state.social.recoveryCode) state.social.recoveryCode = generateRecoveryCode();
+  try {
+    await window.storage.set('recovery:'+state.social.recoveryCode, JSON.stringify(state), true);
+    showToast('Sync code updated — save it somewhere safe');
+    render();
+    scheduleSave();
+  } catch(e){
+    showToast('Could not push sync snapshot — try again');
+  }
+}
+
+async function restoreFromRecoveryCode(rawCode){
+  const code = rawCode.trim().toUpperCase();
+  if(!code){ showToast('Enter a sync code first'); return; }
+  try {
+    const res = await window.storage.get('recovery:'+code, true);
+    if(!res || !res.value){ showToast('No save found for that code'); return; }
+    const loaded = JSON.parse(res.value);
+    deepMerge(state, loaded);
+    state.social.recoveryCode = code;
+    showConfirm(
+      'Restore this save?',
+      'This replaces your current fighter, cash, gear, and league progress with the data from that sync code. This cannot be undone.',
+      () => { render(); scheduleSave(); showToast('Save restored!'); }
+    );
+  } catch(e){
+    showToast('No save found for that code, or connection failed');
+  }
+}
+
+/* ------------------------------------------------------------------------
+   WEEKLY LEAGUE XP AGGREGATION (Gym Wars groundwork) + soft anti-cheat
+   Each player writes ONLY their own key (league_weekly:{league}:{week}:{playerId})
+   so there's no shared-counter race condition. Aggregation happens at READ
+   time by listing + summing all of a league's keys for the current week.
+   "Flagged" is recomputed independently from each entry's own reported
+   wins/level rather than trusted from the writer — a real cheater could still
+   fake every field consistently, so this is a plausibility filter, not
+   security. Flagged entries are shown, just marked, not hidden or blocked.
+   ------------------------------------------------------------------------ */
+let lastWeeklyPushAt = 0;
+async function pushWeeklyStats(){
+  if(!state.social.leagueId || !state.social.playerId) return;
+  ensureWeeklyReset();
+  const key = `league_weekly:${state.social.leagueId}:${state.social.weekKey}:${state.social.playerId}`;
+  try {
+    await window.storage.set(key, JSON.stringify({
+      name: state.social.displayName,
+      weeklyXp: state.social.weeklyXp,
+      wins: state.social.weeklyWins || 0, // week-scoped, survives prestige — NOT state.fighter.wins
+      updatedAt: Date.now(),
+    }), true);
+    lastWeeklyPushAt = Date.now();
+  } catch(e){ /* best-effort — will retry on the next interval */ }
+}
+
+// Flat weekly XP ceiling — deliberately generous, well above what even a very active week of
+// nonstop play could realistically produce (roughly 2,000 XP/hour at high tiers from wins alone,
+// so ~60,000/week even at a dedicated 30 hours/week — this is set well above that). Purely a
+// sanity check to catch a corrupted or wildly-out-of-range value, not fine-grained anti-cheat.
+//
+// FIXED TWICE: this used to correlate against self-reported wins/level, both of which reset on
+// prestige (guaranteed false-flag right after prestiging). Fixing THAT surfaced a second, separate
+// false-positive path: training grants flat XP independent of wins entirely (see gainXp's flat +3
+// per tick), so even a prestige-immune wins counter could still be legitimately low relative to
+// weeklyXp for anyone who trains heavily rather than fights. Rather than keep patching new
+// exceptions into a wins-correlation formula, dropped the correlation entirely — it never added
+// real anti-cheat value anyway, since self-reported wins can be spoofed exactly as easily as XP.
+const WEEKLY_XP_PLAUSIBLE_CEILING = 100000;
+function isImplausibleWeeklyEntry(entry){
+  return (entry.weeklyXp||0) > WEEKLY_XP_PLAUSIBLE_CEILING;
+}
+
+let leagueWeeklyCache = { leagueId: null, weekKey: null, entries: [], totalXp: 0, loading: false };
+async function refreshLeagueWeekly(){
+  if(!state.social.leagueId) return;
+  ensureWeeklyReset();
+  const leagueId = state.social.leagueId, weekKey = state.social.weekKey;
+  leagueWeeklyCache.loading = true;
+  try {
+    const prefix = `league_weekly:${leagueId}:${weekKey}:`;
+    const listRes = await window.storage.list(prefix, true);
+    const keys = (listRes && listRes.keys) || [];
+    const entries = [];
+    await Promise.all(keys.map(async (k) => {
+      try {
+        const res = await window.storage.get(k, true);
+        if(res && res.value){
+          const parsed = JSON.parse(res.value);
+          entries.push({ ...parsed, flagged: isImplausibleWeeklyEntry(parsed) });
+        }
+      } catch(e){ /* skip unreadable entry */ }
+    }));
+    entries.sort((a,b) => (b.weeklyXp||0) - (a.weeklyXp||0));
+    leagueWeeklyCache = {
+      leagueId, weekKey, entries,
+      totalXp: entries.reduce((sum,e) => sum + (e.weeklyXp||0), 0),
+      loading: false,
+    };
+  } catch(e){
+    leagueWeeklyCache.loading = false;
+  }
+  if(activeTab === 'league') render();
+}
+
+/* ------------------------------------------------------------------------
+   GYM WARS — cross-league weekly ranking + Teeth payouts. Builds on the same
+   per-player weekly keys as the single-league leaderboard above, just reads
+   across ALL leagues instead of one. There's no server to run a "week ended,
+   pay everyone out" job, so payouts are settled lazily and per-player: each
+   player's own client checks (when they open the League tab) whether last
+   week has been paid out yet, computes the finalized standings for that
+   (now-frozen, nobody's still writing to it) week, and grants ONLY THAT
+   PLAYER their own reward if they qualified. No single point ever pays out
+   on someone else's behalf, so there's no risk of a client paying the wrong
+   person — worst case, a player just doesn't discover a payout until the
+   next time they open the League tab.
+   ------------------------------------------------------------------------ */
+const GYM_WARS_LEAGUE_REWARDS = { 1:60, 2:35, 3:20 };
+const GYM_WARS_INDIVIDUAL_REWARDS = { 1:50, 2:40, 3:30, 4:22, 5:16, 6:12, 7:9, 8:7, 9:5, 10:3 };
+
+function previousWeekKey(){
+  return getWeekKey(new Date(Date.now() - 7*24*60*60*1000));
+}
+
+/* ------------------------------------------------------------------------
+   TEETH SPENT LEADERBOARD — tracks spend, not skill or earnings. Open to
+   everyone regardless of gym membership (unlike Gym Wars/weekly XP, which
+   need a league). Resets weekly; top 5 get a small % REBATE OF THEIR OWN
+   SPEND back the following week, self-settled the same lazy, per-player way
+   as Gym Wars payouts — no shared counter, no risk of paying the wrong person.
+   ------------------------------------------------------------------------ */
+const TEETH_SPEND_REWARDS = { 1:0.03, 2:0.02, 3:0.01, 4:0.0075, 5:0.005 }; // 3%, 2%, 1%, 0.75%, 0.5%
+
+async function aggregateTeethSpendForWeek(weekKey){
+  const listRes = await window.storage.list(`teethspend_weekly:${weekKey}:`, true);
+  const keys = (listRes && listRes.keys) || [];
+  const entries = [];
+  await Promise.all(keys.map(async (k) => {
+    try {
+      const res = await window.storage.get(k, true);
+      if(res && res.value){
+        const parsed = JSON.parse(res.value);
+        const playerId = k.split(':')[2];
+        entries.push({ playerId, name: parsed.name || 'Unnamed', amount: parsed.amount || 0 });
+      }
+    } catch(e){ /* skip unreadable entry */ }
+  }));
+  entries.sort((a,b) => b.amount - a.amount);
+  return entries;
+}
+
+let teethSpendLeaderboardCache = { weekKey: null, entries: [], loading: false };
+async function refreshTeethSpendLeaderboard(){
+  const weekKey = getWeekKey();
+  teethSpendLeaderboardCache = { ...teethSpendLeaderboardCache, loading: true };
+  try {
+    const entries = await aggregateTeethSpendForWeek(weekKey);
+    teethSpendLeaderboardCache = { weekKey, entries, loading: false };
+  } catch(e){
+    teethSpendLeaderboardCache = { ...teethSpendLeaderboardCache, loading: false };
+  }
+  if(activeTab === 'league') render();
+}
+
+async function checkTeethSpendPayout(){
+  if(!state.social.playerId) return;
+  const prevWeek = previousWeekKey();
+  if(state.economy.lastTeethSpendPayoutWeekKey === prevWeek) return;
+  let entries;
+  try {
+    entries = await aggregateTeethSpendForWeek(prevWeek);
+  } catch(e){ return; } // fetch failed — try again next visit
+
+  state.economy.lastTeethSpendPayoutWeekKey = prevWeek;
+  const myRank = entries.findIndex(e => e.playerId === state.social.playerId) + 1;
+  if(myRank >= 1 && myRank <= 5 && entries[myRank-1].amount > 0){
+    const pct = TEETH_SPEND_REWARDS[myRank];
+    const rebate = Math.max(1, Math.round(entries[myRank-1].amount * pct));
+    state.economy.teeth += rebate;
+    pushLog(`🦷 Teeth Spent Leaderboard: #${myRank} last week! +${rebate} Teeth rebate (${(pct*100).toFixed(2)}% of your spend)`, 'level');
+    showToast(`Teeth Leaderboard payout: +${rebate} Teeth! (#${myRank} last week)`);
+    fireLocalNotification('🦷 Teeth Leaderboard Payout!', `#${myRank} last week — +${rebate} Teeth rebate`);
+  }
+  render();
+  scheduleSave();
+}
+
+let gymWarsCache = { weekKey: null, leagueRankings: [], individualRankings: [], loading: false };
+
+// Pure aggregation for a given week — does NOT touch gymWarsCache, so it's safe to call for a
+// DIFFERENT week (payout settlement uses last week) without racing/clobbering whatever the UI's
+// live "current week" cache is showing. Lists all `league_weekly:` keys rather than one league's
+// prefix, then filters by the week segment — note this means storage usage grows unboundedly
+// over time (old weeks are never pruned), which is exactly the kind of cleanup job a real
+// backend/cron would normally handle.
+async function aggregateGymWarsForWeek(weekKey){
+  const listRes = await window.storage.list('league_weekly:', true);
+  const keys = (listRes && listRes.keys) || [];
+  const relevantKeys = keys.filter(k => k.split(':')[2] === weekKey);
+  const entries = [];
+  await Promise.all(relevantKeys.map(async (k) => {
+    try {
+      const res = await window.storage.get(k, true);
+      if(res && res.value){
+        const leagueId = k.split(':')[1];
+        const parsed = JSON.parse(res.value);
+        entries.push({ ...parsed, leagueId, flagged: isImplausibleWeeklyEntry(parsed) });
+      }
+    } catch(e){ /* skip unreadable entry */ }
+  }));
+
+  // Flagged entries are excluded from league TOTALS (so one implausible outlier can't hand a
+  // league a win it didn't earn) but still shown, marked, in the individual list.
+  const leagueTotals = {};
+  entries.forEach(e => { if(!e.flagged) leagueTotals[e.leagueId] = (leagueTotals[e.leagueId]||0) + (e.weeklyXp||0); });
+  const leagueRankings = LEAGUES
+    .map(lg => ({ leagueId: lg.id, name: lg.name, icon: lg.icon, totalXp: leagueTotals[lg.id] || 0 }))
+    .sort((a,b) => b.totalXp - a.totalXp);
+
+  const individualRankings = entries.slice().sort((a,b) => (b.weeklyXp||0) - (a.weeklyXp||0));
+
+  return { weekKey, leagueRankings, individualRankings };
+}
+
+// UI-facing refresh for the CURRENT week's live standings — this is the only function that
+// writes to gymWarsCache, so the live display can never be clobbered by the payout settlement
+// aggregating a different (past) week concurrently.
+async function refreshGymWars(){
+  const weekKey = getWeekKey();
+  gymWarsCache = { ...gymWarsCache, loading: true };
+  try {
+    const result = await aggregateGymWarsForWeek(weekKey);
+    gymWarsCache = { ...result, loading: false };
+    leagueStorageOk = true; // list() succeeding (even with zero matches) means the backend is reachable
+  } catch(e){
+    // Unlike get() on a single key, list() on a prefix isn't expected to throw just because
+    // nothing matches yet — it should return an empty keys array instead. A thrown error here is
+    // a stronger real-connectivity signal than the per-league gets in refreshLeagueRosters.
+    gymWarsCache = { ...gymWarsCache, loading: false };
+    leagueStorageOk = false;
+  }
+  if(activeTab === 'league') render();
+}
+
+// Lifetime level for ALL 10 gyms at once (not just the one you're in) — powers the "Gym Growth"
+// comparison view (weekly XP growth alongside each gym's overall level, side by side). Separate
+// from the weekly Gym Wars aggregation since this reads `league_gymxp:` (lifetime) rather than
+// `league_weekly:` (this week only).
+let allGymLevelsCache = { levels: {}, loading: false };
+async function refreshAllGymLevels(){
+  allGymLevelsCache = { ...allGymLevelsCache, loading: true };
+  try {
+    const levels = {};
+    await Promise.all(LEAGUES.map(async (lg) => {
+      try {
+        const { level } = await aggregateGymXpForLeague(lg.id);
+        levels[lg.id] = level;
+      } catch(e){ levels[lg.id] = 1; }
+    }));
+    allGymLevelsCache = { levels, loading: false };
+  } catch(e){
+    allGymLevelsCache = { ...allGymLevelsCache, loading: false };
+  }
+  if(activeTab === 'league') render();
+}
+
+// Settles LAST week's Gym Wars payout for this player only, once, the first time they open the
+// League tab after the week rolls over. Ranks exclude flagged entries when assigning individual
+// placement (so a flagged entry doesn't block a legitimate player from a top-10 spot), but a
+// flagged entry is never PAID either way. Uses its own aggregation pass (not gymWarsCache) so it
+// never races with the live current-week display.
+async function checkGymWarsPayout(){
+  if(!state.social.playerId) return;
+  const prevWeek = previousWeekKey();
+  if(state.social.lastPayoutWeekKey === prevWeek) return; // already settled
+
+  if(!state.social.leagueId){
+    state.social.lastPayoutWeekKey = prevWeek; // nothing to pay out, but stop rechecking every visit
+    scheduleSave();
+    return;
+  }
+
+  let standings;
+  try {
+    standings = await aggregateGymWarsForWeek(prevWeek);
+  } catch(e){ return; } // fetch failed — try again next visit
+
+  let teethWon = 0;
+  const rewardParts = [];
+
+  const leagueRank = standings.leagueRankings.findIndex(l => l.leagueId === state.social.leagueId) + 1;
+  if(leagueRank >= 1 && leagueRank <= 3 && standings.leagueRankings[leagueRank-1].totalXp > 0){
+    const reward = GYM_WARS_LEAGUE_REWARDS[leagueRank];
+    teethWon += reward;
+    rewardParts.push(`#${leagueRank} gym (+${reward}🦷)`);
+  }
+
+  const unflagged = standings.individualRankings.filter(e => !e.flagged);
+  const myRank = unflagged.findIndex(e => e.playerId === state.social.playerId) + 1;
+  if(myRank >= 1 && myRank <= 10){
+    const reward = GYM_WARS_INDIVIDUAL_REWARDS[myRank];
+    teethWon += reward;
+    rewardParts.push(`#${myRank} globally (+${reward}🦷)`);
+  }
+
+  state.social.lastPayoutWeekKey = prevWeek;
+  if(teethWon > 0){
+    state.economy.teeth += teethWon;
+    pushLog(`🏆 Gym Wars results: ${rewardParts.join(', ')} — +${teethWon} Teeth total`, 'level');
+    showToast(`Gym Wars payout: +${teethWon} Teeth!`);
+    fireLocalNotification('🏆 Gym Wars Results!', rewardParts.join(', ') + ` — +${teethWon} Teeth`);
+  }
+  render();
+  scheduleSave();
+}
+
+/* ------------------------------------------------------------------------
+   GYM LEVEL AGGREGATION — each player writes only their OWN lifetime Gym XP
+   contribution key (avoids the shared-counter race the weekly leaderboard
+   also avoids); the gym's total/level is computed by summing all of them
+   at read time. The resulting level is cached into state.social.knownGymLevel
+   (persisted) so the stat bonus in effectiveStats() works even without a
+   fresh network read on every combat tick.
+   ------------------------------------------------------------------------ */
+async function pushGymXpContribution(){
+  if(!state.social.leagueId || !state.social.playerId) return;
+  const key = `league_gymxp:${state.social.leagueId}:${state.social.playerId}`;
+  try {
+    await window.storage.set(key, JSON.stringify({
+      name: state.social.displayName,
+      xp: state.social.gymXpContributed,
+      updatedAt: Date.now(),
+    }), true);
+  } catch(e){ /* best-effort — next quest claim will retry */ }
+}
+
+let leagueGymCache = { leagueId: null, totalXp: 0, level: 1, loading: false };
+// Pure aggregation for ANY league (not just the one you've joined) — used both by the cached
+// refresh below (for your own gym) and by joinLeague's cap check (for whichever gym you're
+// trying to join, which needs its level BEFORE you're a member of it).
+async function aggregateGymXpForLeague(leagueId){
+  const prefix = `league_gymxp:${leagueId}:`;
+  const listRes = await window.storage.list(prefix, true);
+  const keys = (listRes && listRes.keys) || [];
+  let totalXp = 0;
+  await Promise.all(keys.map(async (k) => {
+    try {
+      const res = await window.storage.get(k, true);
+      if(res && res.value) totalXp += (JSON.parse(res.value).xp || 0);
+    } catch(e){ /* skip unreadable entry */ }
+  }));
+  return { totalXp, level: gymLevelForXp(totalXp) };
+}
+
+async function refreshLeagueGymXp(){
+  if(!state.social.leagueId) return;
+  const leagueId = state.social.leagueId;
+  leagueGymCache.loading = true;
+  try {
+    const { totalXp, level } = await aggregateGymXpForLeague(leagueId);
+    leagueGymCache = { leagueId, totalXp, level, loading: false };
+    if(state.social.knownGymLevel !== level){
+      state.social.knownGymLevel = level;
+      scheduleSave();
+    }
+  } catch(e){
+    leagueGymCache.loading = false;
+  }
+  if(activeTab === 'league') render();
+}
+
+/* ------------------------------------------------------------------------
+   GYM ROSTER + ROLES — fetches the full member list (not just the count) for
+   the CURRENTLY JOINED gym so the roster/roles UI has something to show.
+   Only the Head Coach can change other members' roles, checked against
+   state.social.role client-side — same no-real-security caveat as
+   everything else built on this shared storage layer.
+   ------------------------------------------------------------------------ */
+let leagueRosterDetailCache = { leagueId: null, members: [], loading: false };
+async function refreshLeagueRosterDetail(){
+  if(!state.social.leagueId) return;
+  const leagueId = state.social.leagueId;
+  leagueRosterDetailCache.loading = true;
+  try {
+    const key = 'league_roster:'+leagueId;
+    const res = await window.storage.get(key, true);
+    let arr = res && res.value ? JSON.parse(res.value) : [];
+    if(!Array.isArray(arr)) arr = [];
+
+    const now = Date.now();
+    // Touch our OWN heartbeat before checking anyone's inactivity, so simply opening the League
+    // tab after being away never self-kicks the very player who just showed up to look.
+    const myIdx = arr.findIndex(m => m.playerId === state.social.playerId);
+    if(myIdx !== -1) arr[myIdx].lastActiveAt = now;
+
+    // Graduate any Janitor past their probation window to regular Member — same lazy,
+    // opportunistic pattern as inactivity pruning below (no cron to run this on a real clock,
+    // so it resolves whenever anyone's client happens to fetch the roster).
+    let graduatedCount = 0;
+    arr.forEach(m => {
+      if(m.role === 'janitor' && (now - (m.joinedAt||now)) >= JANITOR_DURATION_DAYS*86400000){
+        m.role = 'member';
+        graduatedCount++;
+      }
+    });
+
+    const survivors = arr.filter(m => (now - (m.lastActiveAt || m.joinedAt || now)) <= kickThresholdForRole(m.role || 'member'));
+    const kickedCount = arr.length - survivors.length;
+
+    if(kickedCount > 0 && !survivors.some(m => m.role === 'head_coach') && survivors.length > 0){
+      // Succession goes to whoever has been active the LONGEST (earliest joinedAt among current
+      // survivors) — a pure tenure rule, not a rank hand-me-down — so the gym is never left
+      // leaderless just because the old Head Coach's 7-day grace window ran out.
+      survivors.sort((a,b) => (a.joinedAt||0) - (b.joinedAt||0));
+      survivors[0].role = 'head_coach';
+      survivors[0].isPrimaryHeadCoach = true; // inherited leadership counts as primary going forward
+    }
+    survivors.sort((a,b) => (ROLE_RANK[a.role||'member'] - ROLE_RANK[b.role||'member']) || ((a.joinedAt||0)-(b.joinedAt||0)));
+
+    if(kickedCount > 0 || graduatedCount > 0 || myIdx !== -1){
+      await window.storage.set(key, JSON.stringify(survivors), true);
+    }
+
+    leagueRosterDetailCache = { leagueId, members: survivors, loading: false };
+
+    const me = survivors.find(m => m.playerId === state.social.playerId);
+    if(!me){
+      // We were pruned (by this pass, or an earlier one on someone else's device) before we
+      // could touch our own heartbeat — e.g. our very first refresh after being away too long.
+      const leagueName = LEAGUES.find(l => l.id === leagueId)?.name || 'your gym';
+      const windowDays = kickThresholdForRole(state.social.role) === INACTIVE_KICK_MS_LEADERSHIP ? '7 days' : '48 hours';
+      showToast(`You were removed from ${leagueName} for inactivity`);
+      pushLog(`Removed from ${leagueName} for inactivity (${windowDays}+)`, 'level');
+      state.social.leagueId = null;
+      state.social.role = 'member';
+      scheduleSave();
+    } else if(me.role && me.role !== state.social.role){
+      state.social.role = me.role;
+      scheduleSave();
+    }
+  } catch(e){
+    leagueRosterDetailCache.loading = false;
+  }
+  if(activeTab === 'league') render();
+}
+
+// Periodic "I'm still here" ping — see pushWeeklyStats' throttle in the game loop, which calls
+// this alongside it. Without this, an active player who never opens the League tab would still
+// eventually get auto-kicked, which isn't the intent (auto-kick is for genuinely inactive players).
+async function pushActivityHeartbeat(){
+  if(!state.social.leagueId || !state.social.playerId) return;
+  try {
+    const key = 'league_roster:'+state.social.leagueId;
+    const res = await window.storage.get(key, true);
+    let arr = res && res.value ? JSON.parse(res.value) : [];
+    if(!Array.isArray(arr)) arr = [];
+    const idx = arr.findIndex(m => m.playerId === state.social.playerId);
+    if(idx !== -1){
+      arr[idx].lastActiveAt = Date.now();
+      arr[idx].power = totalPower(); // piggybacks on this existing write — feeds the gym preview's "top 5 by power"
+      await window.storage.set(key, JSON.stringify(arr), true);
+    }
+  } catch(e){ /* best-effort — next interval will retry */ }
+}
+
+// Only Prize Fighter/Trainer/Member are ever assignable to a Coach; Head Coach can additionally
+// hand out Coach. Deliberately NOT letting anyone hand off Head Coach itself through this UI —
+// a mis-click could leave a gym with zero (or two) Head Coaches with no clean way to resolve it
+// given there's no real backend arbitrating this.
+async function setMemberRole(targetPlayerId, newRole){
+  if(!state.social.leagueId) return;
+  const actorRole = state.social.role;
+  if(actorRole !== 'head_coach' && actorRole !== 'coach'){
+    showToast('Only the Head Coach or a Coach can change roles');
+    return;
+  }
+  const allowedRoles = actorRole === 'head_coach' ? HEAD_COACH_ASSIGNABLE_ROLES : COACH_ASSIGNABLE_ROLES;
+  if(!allowedRoles.includes(newRole)){
+    showToast(actorRole === 'coach' ? 'Coaches can\'t appoint other Coaches' : 'That role can\'t be assigned here');
+    return;
+  }
+  if(targetPlayerId === state.social.playerId){ showToast("You can't change your own role"); return; }
+  try {
+    const key = 'league_roster:'+state.social.leagueId;
+    const res = await window.storage.get(key, true);
+    let arr = res && res.value ? JSON.parse(res.value) : [];
+    if(!Array.isArray(arr)) arr = [];
+    const idx = arr.findIndex(m => m.playerId === targetPlayerId);
+    if(idx === -1){ showToast('Member not found — try refreshing'); return; }
+
+    // Enforce the role cap (head_coach/coach/prize_fighter/trainer) — count everyone ELSE
+    // currently holding that role and reject if it's already full.
+    if(ROLE_CAPS[newRole] !== undefined){
+      const currentHolders = arr.filter((m,i) => i !== idx && (m.role||'member') === newRole).length;
+      if(currentHolders >= ROLE_CAPS[newRole]){
+        showToast(`${ROLE_LABELS[newRole]} is full (${ROLE_CAPS[newRole]} max)`);
+        return;
+      }
+    }
+
+    arr[idx].role = newRole;
+    await window.storage.set(key, JSON.stringify(arr), true);
+    showToast(`${arr[idx].name || 'Member'} is now ${ROLE_LABELS[newRole]}`);
+    refreshLeagueRosterDetail();
+  } catch(e){
+    showToast('Could not update role — check your connection and try again');
+  }
+}
+
+// Shows the full role hierarchy with caps and current fill counts — uses whatever roster data is
+// already cached (no extra fetch) so it's instant, but that also means it reflects however
+// recently the roster was last refreshed rather than a guaranteed-live count.
+function openRolesInfo(){
+  const roleCounts = {};
+  (leagueRosterDetailCache.members||[]).forEach(m => { const r = m.role||'member'; roleCounts[r] = (roleCounts[r]||0)+1; });
+  const body = document.getElementById('roles-info-modal-body');
+  const roleOrder = ['head_coach','coach','prize_fighter','trainer','member','janitor'];
+  body.innerHTML = `
+    <div style="font-size:11px; color:var(--text-muted); margin-bottom:10px;">
+      Special roles (everything but Member) are assigned by promotion, never automatically —
+      see each role's description for who can assign it.
+    </div>
+    ${roleOrder.map(r => `
+      <div class="card">
+        <div style="display:flex; justify-content:space-between; align-items:center;">
+          <div style="font-family:'Oswald',sans-serif; font-weight:700; font-size:14px;">${ROLE_ICONS[r]} ${ROLE_LABELS[r]}</div>
+          <div style="font-size:11px; color:var(--belt-gold); flex-shrink:0; margin-left:8px;">${ROLE_CAPS[r]!==undefined ? `${roleCounts[r]||0} / ${ROLE_CAPS[r]}` : 'Uncapped'}</div>
+        </div>
+        <div style="font-size:11px; color:var(--text-muted); margin-top:6px;">${ROLE_DESCRIPTIONS[r]}</div>
+      </div>
+    `).join('')}
+    <div class="panel-title">Member Tenure Tiers</div>
+    <div class="card">
+      <div style="font-size:11px; color:var(--text-muted); margin-bottom:8px;">Members (no special role) are tracked by time in the gym instead of a title:</div>
+      ${TENURE_TIERS.map(t => `
+        <div style="display:flex; justify-content:space-between; padding:3px 0; font-size:12px;">
+          <span>${t.name}</span><span style="color:var(--text-muted);">${t.minDays}+ days</span>
+        </div>
+      `).join('')}
+    </div>
+  `;
+  document.getElementById('roles-info-modal').style.display = 'flex';
+}
+
+/* ------------------------------------------------------------------------
+   INVITE / JOIN CODES — generated by a Head Coach or Coach, let anyone enter
+   a short code to join that specific gym directly (still subject to the
+   100-member cap and normal role assignment via joinLeague). Regenerating
+   invalidates the previous code by deleting its lookup entry.
+   ------------------------------------------------------------------------ */
+let leagueJoinCodeCache = { leagueId: null, code: null, loading: false };
+
+async function refreshJoinCode(){
+  if(!state.social.leagueId) return;
+  const leagueId = state.social.leagueId;
+  leagueJoinCodeCache.loading = true;
+  try {
+    const res = await window.storage.get('league_joincode_active:'+leagueId, true);
+    leagueJoinCodeCache = { leagueId, code: (res && res.value) || null, loading: false };
+  } catch(e){
+    leagueJoinCodeCache = { leagueId, code: null, loading: false };
+  }
+  if(activeTab === 'league') render();
+}
+
+async function generateJoinCode(){
+  if(!state.social.leagueId) return;
+  if(!['head_coach','coach'].includes(state.social.role)){
+    showToast('Only the Head Coach or Coaches can generate invite codes');
+    return;
+  }
+  const leagueId = state.social.leagueId;
+  try {
+    // Invalidate the previous code (if any) so it stops working once a new one is issued.
+    const activeKey = 'league_joincode_active:'+leagueId;
+    try {
+      const oldRes = await window.storage.get(activeKey, true);
+      if(oldRes && oldRes.value) await window.storage.delete('league_joincode_lookup:'+oldRes.value, true);
+    } catch(e){ /* no previous code — fine */ }
+
+    const chars = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
+    let code = '';
+    for(let i=0;i<6;i++) code += chars[Math.floor(Math.random()*chars.length)];
+
+    await window.storage.set('league_joincode_lookup:'+code, JSON.stringify({ leagueId }), true);
+    await window.storage.set(activeKey, code, true);
+    leagueJoinCodeCache = { leagueId, code, loading: false };
+    showToast('New invite code generated!');
+    render();
+  } catch(e){
+    showToast('Could not generate a code — check your connection and try again');
+  }
+}
+
+async function joinLeagueByCode(rawCode){
+  const code = rawCode.trim().toUpperCase();
+  if(!code){ showToast('Enter a code first'); return; }
+  if(!state.social.displayName){ showToast('Set a display name first'); return; }
+  try {
+    const res = await window.storage.get('league_joincode_lookup:'+code, true);
+    if(!res || !res.value){ showToast('Invalid or expired code'); return; }
+    const { leagueId } = JSON.parse(res.value);
+    if(!LEAGUES.find(l => l.id === leagueId)){ showToast('That gym no longer exists'); return; }
+    await joinLeague(leagueId); // reuses the normal cap-check + role-assignment logic
+  } catch(e){
+    showToast('Invalid or expired code, or connection failed');
+  }
+}
+
+// Consolidates every League-tab data fetch into one action — used both when the tab is first
+// opened and by the single "Refresh All" button (replacing what used to be five separate
+// per-section refresh buttons).
+// GYM PREVIEW — lets a player peek at a gym's level and top members BEFORE joining. Read-only:
+// fetches that gym's roster and lifetime Gym XP directly (shared storage is readable by anyone,
+// membership isn't required to read it), so no special permission needed. "Power" per member
+// relies on aggregateGymXpForLeague and each member's `power` field, which is only as fresh as
+// their last heartbeat (~60s while playing, plus on join) — so it's a snapshot, not fully live.
+async function openGymPreview(leagueId){
+  const league = LEAGUES.find(l => l.id === leagueId);
+  if(!league) return;
+  document.getElementById('gympreview-modal-title').textContent = `${league.icon} ${league.name}`;
+  const body = document.getElementById('gympreview-modal-body');
+  body.innerHTML = `<div class="empty-state" style="padding:20px;">Loading gym details…</div>`;
+  document.getElementById('gympreview-modal').style.display = 'flex';
+
+  try {
+    const [rosterRes, gymXp] = await Promise.all([
+      window.storage.get('league_roster:'+leagueId, true).catch(() => null),
+      aggregateGymXpForLeague(leagueId).catch(() => ({ level: 1 })),
+    ]);
+    let members = rosterRes && rosterRes.value ? JSON.parse(rosterRes.value) : [];
+    if(!Array.isArray(members)) members = [];
+    const cap = leagueMemberCapForLevel(gymXp.level);
+    const topByPower = members.slice().sort((a,b) => (b.power||0) - (a.power||0)).slice(0, 5);
+
+    body.innerHTML = `
+      <div class="card" style="border-color:var(--belt-gold); margin-bottom:10px;">
+        <div style="display:flex; justify-content:space-between; align-items:center;">
+          <div>
+            <div style="font-family:'Oswald',sans-serif; font-weight:700; font-size:16px; color:var(--belt-gold);">Level ${gymXp.level}</div>
+            <div style="font-size:11px; color:var(--text-muted);">${gymLevelTitle(gymXp.level)}</div>
+          </div>
+          <div style="font-size:12px; color:var(--text-muted);">${members.length} / ${cap} members</div>
+        </div>
+      </div>
+      <div class="panel-title">Top 5 by Power</div>
+      ${topByPower.length === 0 ? `<div class="card empty-state" style="padding:16px;">No members yet — be the first to join!</div>` : topByPower.map((m,i) => `
+        <div class="card" style="display:flex; justify-content:space-between; align-items:center;">
+          <div style="display:flex; align-items:center; gap:8px; min-width:0;">
+            <div style="font-family:'Oswald',sans-serif; font-weight:700; color:var(--belt-gold); width:18px; flex-shrink:0;">${i+1}</div>
+            <div style="font-size:13px; font-weight:600; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;">${ROLE_ICONS[m.role||'member']||'🤝'} ${escapeHtml(m.name||'Unnamed')}</div>
+          </div>
+          <div style="font-family:'Oswald',sans-serif; font-weight:700; color:var(--champ-teal); flex-shrink:0;">${m.power ? fmtNum(m.power) : '—'}</div>
+        </div>
+      `).join('')}
+      <button class="btn btn-gold btn-block" style="margin-top:10px;" data-join-league-from-preview="${leagueId}">Join This Gym</button>
+    `;
+    const joinBtn = document.querySelector('[data-join-league-from-preview]');
+    if(joinBtn) joinBtn.addEventListener('click', () => {
+      document.getElementById('gympreview-modal').style.display = 'none';
+      joinLeague(leagueId);
+    });
+  } catch(e){
+    body.innerHTML = `<div class="empty-state" style="padding:20px;">Couldn't load this gym's details — check your connection and try again.</div>`;
+  }
+}
+
+function refreshAllLeagueData(){
+  refreshLeagueRosters();
+  refreshLeagueWeekly();
+  refreshLeagueGymXp();
+  refreshLeagueRosterDetail();
+  refreshJoinCode();
+  refreshGymWars();
+  refreshAllGymLevels();
+  refreshTeethSpendLeaderboard();
+  checkGymWarsPayout();
+  checkTeethSpendPayout();
+}
+
+function renderLeagueTab(){
+  ensureDailyReset();
+  ensureWeeklyReset();
+
+  if(!state.social.playerId) ensurePlayerId();
+
+  const anyLeagueDataLoading = leagueRosterLoading || leagueWeeklyCache.loading || leagueGymCache.loading || leagueRosterDetailCache.loading || gymWarsCache.loading || allGymLevelsCache.loading || teethSpendLeaderboardCache.loading;
+
+  const storageBannerHtml = !leagueStorageOk ? `
+    <div class="card" style="border-color:var(--corner-red); margin-bottom:12px;">
+      <div style="font-size:12px; color:var(--corner-red); font-weight:700;">⚠️ Can't reach shared storage</div>
+      <div style="font-size:11px; color:var(--text-muted); margin-top:4px;">
+        Joining, rosters, leaderboards, Gym Wars, and invite/sync codes all need this to work and
+        won't right now. This is a platform connectivity issue, not something broken in-game —
+        your fighter, training, and everything outside the League tab is unaffected.
+      </div>
+    </div>
+  ` : '';
+
+  const syncHtml = `
+    <div class="panel-title">Sync Across Devices</div>
+    <div class="card">
+      <div style="font-size:11px; color:var(--text-muted); margin-bottom:10px;">
+        There's no real login here — no email, no Google account, nothing this artifact could
+        actually verify. This code is the honest substitute: it points at a snapshot of your save
+        in shared storage. Anyone with the code can load (or overwrite) it, so keep it private.
+      </div>
+      ${state.social.recoveryCode ? `
+        <div style="font-family:'Oswald',sans-serif; font-size:16px; font-weight:700; letter-spacing:1px; color:var(--belt-gold); text-align:center; padding:10px; background:var(--bg-panel-raised); border-radius:8px; margin-bottom:8px;">${state.social.recoveryCode}</div>
+      ` : ''}
+      <button class="btn btn-gold btn-block" data-push-recovery style="margin-bottom:10px;">${state.social.recoveryCode ? '🔄 Update Sync Code' : '🔑 Generate Sync Code'}</button>
+      <div style="font-size:11px; color:var(--text-muted); margin:10px 0 6px 0;">Restore a save from another device:</div>
+      <div style="display:flex; gap:8px;">
+        <input type="text" id="recovery-code-input" class="ob-input" style="flex:1; padding:9px 12px; font-size:13px; text-transform:uppercase;" placeholder="XXXX-XXXX-XXXX">
+        <button class="btn btn-ghost" id="recovery-code-submit" style="flex-shrink:0;">Restore</button>
+      </div>
+    </div>
+  `;
+
+  const nameCardHtml = `
+    <div class="card" style="margin-bottom:12px;">
+      ${(!state.social.displayName || state.ui.editingLeagueName) ? `
+        <div style="font-size:11px; color:var(--text-muted); margin-bottom:8px;">
+          ${state.social.displayName
+            ? "Checked against everyone else's name for uniqueness when you save."
+            : "Pick a display name to join a gym — checked against everyone else so you get a unique one. Runs on shared, unauthenticated storage, so don't use anything private."}
+        </div>
+        <div style="display:flex; gap:8px;">
+          <input type="text" id="league-name-edit-input" class="ob-input" style="flex:1; padding:9px 12px; font-size:13px;" placeholder="Display name" maxlength="20" value="${escapeAttr(state.social.displayName||'')}">
+          <button class="btn btn-primary" id="league-name-edit-submit" style="flex-shrink:0;">${state.social.displayName ? 'Save' : 'Claim Name'}</button>
+          ${state.social.displayName ? `<button class="btn btn-ghost" data-cancel-league-name style="flex-shrink:0;">✕</button>` : ''}
+        </div>
+        ${nameClaimError ? `<div style="font-size:12px; color:var(--corner-red); margin-top:8px;">${escapeHtml(nameClaimError)}</div>` : ''}
+      ` : `
+        <div style="display:flex; justify-content:space-between; align-items:center;">
+          <div style="font-size:13px; color:var(--text-muted);">Fighting as <strong style="color:var(--text-main);">${escapeHtml(state.social.displayName)}</strong></div>
+          <button class="btn btn-ghost" data-edit-league-name style="padding:6px 14px; font-size:11px;">✏️ Rename</button>
+        </div>
+      `}
+    </div>
+  `;
+
+  const questsHtml = `
+    <div class="panel-title">Daily Quests <span style="color:var(--text-muted); font-size:11px;">(10-tier ladder, resets daily, same for everyone)</span></div>
+    ${state.daily.questIds.map(id => {
+      const quest = questDef(id);
+      if(!quest) return '';
+      const progress = questProgressValue(quest);
+      const pct = clamp((progress/quest.goal)*100, 0, 100);
+      const done = progress >= quest.goal;
+      const claimed = state.daily.questsClaimed.includes(id);
+      const rewardParts = [];
+      if(quest.rewardCash) rewardParts.push(`$${quest.rewardCash}`);
+      if(quest.rewardTeeth) rewardParts.push(`🦷${quest.rewardTeeth}`);
+      rewardParts.push(`+${quest.gymXp} Gym XP`);
+      return `
+        <div class="card" style="${claimed?'opacity:0.55;':''}">
+          <div style="display:flex; justify-content:space-between; align-items:center;">
+            <div style="font-size:13px; font-weight:600;"><span style="color:var(--belt-gold);">Tier ${quest.tier}</span> — ${quest.label}</div>
+            <div style="font-size:11px; color:var(--belt-gold); flex-shrink:0; margin-left:8px; text-align:right;">${rewardParts.join(' + ')}</div>
+          </div>
+          <div class="bar-track" style="margin-top:8px;"><div class="bar-fill xp" style="width:${pct}%"></div></div>
+          <div style="display:flex; justify-content:space-between; align-items:center; margin-top:6px;">
+            <div style="font-size:11px; color:var(--text-muted);">${Math.min(progress,quest.goal)} / ${quest.goal}</div>
+            <button class="btn ${claimed ? 'btn-ghost' : (done ? 'btn-gold' : 'btn-ghost')}" style="padding:6px 14px; font-size:11px;" data-claim-quest="${id}" ${(!done||claimed)?'disabled':''}>
+              ${claimed ? 'Claimed' : (done ? 'Claim' : 'In Progress')}
+            </button>
+          </div>
+        </div>
+      `;
+    }).join('')}
+  `;
+
+  const gymWarsStale = gymWarsCache.weekKey !== getWeekKey();
+  const gymWarsHtml = `
+    <div class="panel-title">🏆 Gym Wars <span style="color:var(--text-muted); font-size:11px;">(this week, live across all 10 gyms)</span></div>
+    <div class="card" style="margin-bottom:8px;">
+      <div style="font-size:11px; color:var(--text-muted); margin-bottom:8px;">
+        Top 3 gyms and top 10 players get Teeth when the week ends. Payouts settle automatically
+        the next time you open this tab after Monday — there's no server to push them to you.
+      </div>
+    </div>
+    ${!gymWarsStale ? `
+      <div class="panel-title" style="margin-top:4px;">Top Gyms</div>
+      ${gymWarsCache.leagueRankings.slice(0,3).map((lg,i) => `
+        <div class="card" style="display:flex; justify-content:space-between; align-items:center; ${lg.leagueId===state.social.leagueId?'border-color:var(--belt-gold);':''}">
+          <div style="display:flex; align-items:center; gap:8px;">
+            <div style="font-family:'Oswald',sans-serif; font-weight:700; color:var(--belt-gold); width:18px;">${i+1}</div>
+            <div style="font-size:13px; font-weight:600;">${lg.icon} ${lg.name}</div>
+          </div>
+          <div style="text-align:right;">
+            <div style="font-family:'Oswald',sans-serif; font-weight:700; color:var(--champ-teal);">${fmtNum(lg.totalXp)} XP</div>
+            <div style="font-size:10px; color:var(--belt-gold);">+${GYM_WARS_LEAGUE_REWARDS[i+1]}🦷 to every member</div>
+          </div>
+        </div>
+      `).join('')}
+
+      <div class="panel-title" style="margin-top:10px;">Gym Growth This Week <span style="color:var(--text-muted); font-size:11px;">(all 10 gyms — level + weekly XP)</span></div>
+      ${allGymLevelsCache.loading && Object.keys(allGymLevelsCache.levels).length === 0
+        ? `<div class="card empty-state" style="padding:16px;">Loading gym levels…</div>`
+        : gymWarsCache.leagueRankings.map((lg,i) => `
+          <div class="card" style="display:flex; justify-content:space-between; align-items:center; ${lg.leagueId===state.social.leagueId?'border-color:var(--belt-gold);':''}">
+            <div style="display:flex; align-items:center; gap:8px;">
+              <div style="font-family:'Oswald',sans-serif; font-weight:700; color:var(--text-muted); width:18px;">${i+1}</div>
+              <div style="font-size:13px; font-weight:600;">${lg.icon} ${lg.name}</div>
+            </div>
+            <div style="text-align:right;">
+              <div style="font-family:'Oswald',sans-serif; font-weight:700;">Level ${allGymLevelsCache.levels[lg.leagueId] ?? '…'}</div>
+              <div style="font-size:10px; color:var(--champ-teal);">+${fmtNum(lg.totalXp)} XP this week</div>
+            </div>
+          </div>
+        `).join('')}
+
+      <div class="panel-title" style="margin-top:10px;">Top Players Globally</div>
+      ${gymWarsCache.individualRankings.filter(e=>!e.flagged).slice(0,10).length === 0
+        ? `<div class="card empty-state" style="padding:16px;">No qualifying activity yet this week.</div>`
+        : gymWarsCache.individualRankings.filter(e=>!e.flagged).slice(0,10).map((e,i) => `
+          <div class="card" style="display:flex; justify-content:space-between; align-items:center; ${e.playerId===state.social.playerId?'border-color:var(--belt-gold);':''}">
+            <div style="display:flex; align-items:center; gap:8px; min-width:0;">
+              <div style="font-family:'Oswald',sans-serif; font-weight:700; color:var(--text-muted); width:18px; flex-shrink:0;">${i+1}</div>
+              <div style="font-size:13px; font-weight:600; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;">${escapeHtml(e.name||'Unnamed')}</div>
+            </div>
+            <div style="text-align:right; flex-shrink:0;">
+              <div style="font-family:'Oswald',sans-serif; font-weight:700; color:var(--belt-gold);">${fmtNum(e.weeklyXp||0)}</div>
+              <div style="font-size:10px; color:var(--champ-teal);">+${GYM_WARS_INDIVIDUAL_REWARDS[i+1]}🦷</div>
+            </div>
+          </div>
+        `).join('')}
+    ` : `<div class="card empty-state" style="padding:16px;">${gymWarsCache.loading ? 'Loading standings…' : 'Tap refresh to load this week\'s standings.'}</div>`}
+  `;
+
+  const teethSpendStale = teethSpendLeaderboardCache.weekKey !== getWeekKey();
+  const teethSpendHtml = `
+    <div class="panel-title">🦷 Teeth Spent Leaderboard <span style="color:var(--text-muted); font-size:11px;">(tracks spend, not skill — resets weekly)</span></div>
+    <div class="card" style="margin-bottom:8px;">
+      <div style="font-size:11px; color:var(--text-muted);">
+        Top 5 spenders each week get a small % of THEIR OWN spend rebated in Teeth the following
+        week: #1 3%, #2 2%, #3 1%, #4 0.75%, #5 0.5%. Open to everyone, no gym required.
+      </div>
+    </div>
+    ${teethSpendStale
+      ? `<div class="card empty-state" style="padding:16px;">${teethSpendLeaderboardCache.loading ? 'Loading…' : 'Tap Refresh All above to load this week\'s standings.'}</div>`
+      : (teethSpendLeaderboardCache.entries.length === 0
+        ? `<div class="card empty-state" style="padding:16px;">No Teeth spent by anyone yet this week.</div>`
+        : teethSpendLeaderboardCache.entries.slice(0,5).map((e,i) => `
+          <div class="card" style="display:flex; justify-content:space-between; align-items:center; ${e.playerId===state.social.playerId?'border-color:var(--belt-gold);':''}">
+            <div style="display:flex; align-items:center; gap:8px; min-width:0;">
+              <div style="font-family:'Oswald',sans-serif; font-weight:700; color:var(--text-muted); width:18px; flex-shrink:0;">${i+1}</div>
+              <div style="font-size:13px; font-weight:600; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;">${escapeHtml(e.name||'Unnamed')}</div>
+            </div>
+            <div style="text-align:right; flex-shrink:0;">
+              <div style="font-family:'Oswald',sans-serif; font-weight:700; color:var(--belt-gold);">🦷${fmtNum(e.amount)}</div>
+              <div style="font-size:10px; color:var(--champ-teal);">${(TEETH_SPEND_REWARDS[i+1]*100).toFixed(2)}% rebate</div>
+            </div>
+          </div>
+        `).join(''))}
+  `;
+
+  if(!state.social.leagueId){
+    return `
+      ${storageBannerHtml}
+      <div class="panel-title">Choose a Gym League</div>
+      <button class="btn btn-ghost btn-block" data-refresh-all-league style="margin-bottom:10px;">${anyLeagueDataLoading ? 'Refreshing everything…' : '🔄 Refresh All'}</button>
+      ${nameCardHtml}
+      <div class="card" style="margin-bottom:12px;">
+        <div style="font-size:12px; color:var(--text-muted); margin-bottom:8px;">Have an invite code from a Head Coach or Coach?</div>
+        <div style="display:flex; gap:8px;">
+          <input type="text" id="join-code-input" class="ob-input" style="flex:1; padding:9px 12px; font-size:13px; text-transform:uppercase;" placeholder="Enter code" maxlength="6">
+          <button class="btn btn-gold" id="join-code-submit" style="flex-shrink:0;">Join</button>
+        </div>
+      </div>
+      <div style="font-size:11px; color:var(--text-muted); margin:-4px 0 8px 0;">Member counts are shared across all players — no accounts, so treat this as informal. These 10 gyms are fixed/preset, not player-created. Tap a gym to preview its level and top members.</div>
+      ${LEAGUES.map(lg => `
+        <div class="card" style="display:flex; justify-content:space-between; align-items:center; cursor:pointer;" data-preview-gym="${lg.id}">
+          <div>
+            <div style="font-family:'Oswald',sans-serif; font-weight:600; font-size:14px;">${lg.icon} ${lg.name}</div>
+            <div style="font-size:11px; color:var(--text-muted);">${leagueRosterCache[lg.id] ?? '…'} / ${LEAGUE_MEMBER_CAP}+ members</div>
+          </div>
+          <button class="btn btn-gold" style="padding:8px 14px; font-size:12px;" data-join-league="${lg.id}">Join</button>
+        </div>
+      `).join('')}
+      ${gymWarsHtml}
+      ${teethSpendHtml}
+      ${questsHtml}
+      ${syncHtml}
+    `;
+  }
+
+  const league = LEAGUES.find(l => l.id === state.social.leagueId);
+  const tier = currentMembershipTier();
+  const nextTier = nextMembershipTier();
+  const tierPct = nextTier ? clamp((state.social.contributedXp / nextTier.minXp) * 100, 0, 100) : 100;
+  const tenure = currentTenureTier();
+
+  const gymLevelStale = leagueGymCache.leagueId !== state.social.leagueId;
+  const gymLevel = gymLevelStale ? state.social.knownGymLevel : leagueGymCache.level;
+  const gymXpTotal = gymLevelStale ? null : leagueGymCache.totalXp;
+  const gymNextThreshold = gymXpForLevel(gymLevel+1);
+  const gymPrevThreshold = gymXpForLevel(gymLevel);
+  const gymPct = gymXpTotal === null ? 0 : clamp(((gymXpTotal-gymPrevThreshold)/(gymNextThreshold-gymPrevThreshold))*100, 0, 100);
+  const gymLevelHtml = `
+    <div class="panel-title">Gym Level <span style="color:var(--text-muted); font-size:11px;">(fueled by every member's daily quests)</span></div>
+    <div class="card" style="border-color:var(--belt-gold); margin-bottom:8px;">
+      <div style="display:flex; justify-content:space-between; align-items:center;">
+        <div>
+          <div style="font-family:'Oswald',sans-serif; font-weight:700; font-size:16px; color:var(--belt-gold);">🏋️ Level ${gymLevel}</div>
+          <div style="font-size:11px; color:var(--text-muted);">${gymLevelTitle(gymLevel)}</div>
+        </div>
+        <div style="font-size:11px; color:var(--champ-teal);">+${(gymLevelBonusPct()*100).toFixed(1)}% all stats</div>
+      </div>
+      <div class="bar-track" style="margin-top:8px;"><div class="bar-fill xp" style="width:${gymPct}%"></div></div>
+      <div style="font-size:11px; color:var(--text-muted); margin-top:6px;">
+        ${gymXpTotal === null ? (leagueGymCache.loading ? 'Loading gym XP…' : 'Tap Refresh All below to load this gym\'s total XP') : `${fmtNum(gymXpTotal)} / ${fmtNum(gymNextThreshold)} Gym XP to Level ${gymLevel+1}`}
+      </div>
+    </div>
+  `;
+
+  const roleTenureHtml = `
+    <div class="panel-title">Your Role</div>
+    <div class="card" style="display:flex; justify-content:space-between; align-items:center;">
+      <div>
+        <div style="font-family:'Oswald',sans-serif; font-weight:600; font-size:14px;">${ROLE_ICONS[state.social.role]||'🤝'} ${ROLE_LABELS[state.social.role]||'Member'}</div>
+        <div style="font-size:11px; color:var(--text-muted); margin-top:2px;">${tenure.name} • ${daysInGym()} day${daysInGym()===1?'':'s'} in this gym</div>
+      </div>
+    </div>
+  `;
+
+  const canManageInvites = ['head_coach','coach'].includes(state.social.role);
+  const inviteCodeHtml = canManageInvites ? `
+    <div class="panel-title">Invite Code <span style="color:var(--text-muted); font-size:11px;">(Head Coach / Coach only)</span></div>
+    <div class="card" style="margin-bottom:8px;">
+      ${leagueJoinCodeCache.leagueId === state.social.leagueId && leagueJoinCodeCache.code ? `
+        <div style="font-family:'Oswald',sans-serif; font-size:18px; font-weight:700; letter-spacing:2px; color:var(--belt-gold); text-align:center; padding:10px; background:var(--bg-panel-raised); border-radius:8px; margin-bottom:8px;">${leagueJoinCodeCache.code}</div>
+      ` : `<div style="font-size:11px; color:var(--text-muted); margin-bottom:8px;">${leagueJoinCodeCache.loading ? 'Loading…' : 'No active code yet.'}</div>`}
+      <button class="btn btn-gold btn-block" data-generate-joincode>${leagueJoinCodeCache.code ? '🔄 Regenerate Code' : '🔑 Generate Code'}</button>
+      <div style="font-size:11px; color:var(--text-muted); margin-top:8px;">Regenerating invalidates the old code immediately.</div>
+    </div>
+  ` : '';
+
+  const rosterStale = leagueRosterDetailCache.leagueId !== state.social.leagueId;
+  const rosterAll = leagueRosterDetailCache.members;
+  const rosterShown = state.ui.rosterExpanded ? rosterAll : rosterAll.slice(0, 5);
+  const rosterHtml = `
+    <div class="panel-title">Gym Roster <span style="color:var(--text-muted); font-size:11px;">(${leagueRosterCache[league.id] ?? '…'} / ${leagueMemberCapForLevel(state.social.knownGymLevel)})</span></div>
+    <div class="card" style="margin-bottom:8px;">
+      <div style="font-size:11px; color:var(--text-muted); margin-bottom:8px;">Inactive 48h+ (Trainers/Members) or 7 days+ (Coaches/Head Coach) get auto-removed on refresh.</div>
+      <button class="btn btn-ghost btn-block" data-open-roles-info>ℹ️ View Roles &amp; Caps</button>
+    </div>
+    ${(() => {
+      const roleCounts = {};
+      rosterAll.forEach(m => { const r = m.role||'member'; roleCounts[r] = (roleCounts[r]||0)+1; });
+      return (!rosterStale && rosterAll.length > 0) ? rosterShown.map(m => {
+      const isMe = m.playerId === state.social.playerId;
+      const role = m.role || 'member';
+      const memberDays = Math.floor((Date.now()-(m.joinedAt||Date.now()))/86400000);
+      let mTier = TENURE_TIERS[0];
+      for(const t of TENURE_TIERS){ if(memberDays >= t.minDays) mTier = t; }
+      const canManage = (state.social.role === 'head_coach' || state.social.role === 'coach') && !isMe;
+      const assignable = state.social.role === 'head_coach' ? HEAD_COACH_ASSIGNABLE_ROLES : COACH_ASSIGNABLE_ROLES;
+      return `
+        <div class="card" style="${isMe?'border-color:var(--belt-gold);':''}">
+          <div style="display:flex; justify-content:space-between; align-items:center;">
+            <div style="min-width:0;">
+              <div style="font-size:13px; font-weight:600; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;">${ROLE_ICONS[role]||'🤝'} ${escapeHtml(m.name||'Unnamed')}${isMe?' (you)':''}</div>
+              <div style="font-size:11px; color:var(--text-muted); margin-top:1px;">${ROLE_LABELS[role]||'Member'} • ${mTier.name} • ${memberDays}d</div>
+            </div>
+          </div>
+          ${canManage ? `
+            <div style="display:flex; gap:5px; margin-top:8px; flex-wrap:wrap;">
+              ${assignable.filter(r=>r!==role).map(r => {
+                const atCap = ROLE_CAPS[r] !== undefined && (roleCounts[r]||0) >= ROLE_CAPS[r];
+                return `<button class="btn btn-ghost" style="flex:1 1 30%; font-size:10px; padding:6px 4px;" data-set-role="${m.playerId}" data-role-value="${r}" ${atCap?'disabled':''}>→ ${ROLE_LABELS[r]}${ROLE_CAPS[r]!==undefined?` (${roleCounts[r]||0}/${ROLE_CAPS[r]})`:''}</button>`;
+              }).join('')}
+            </div>
+          ` : ''}
+        </div>
+      `;
+      }).join('') : (!rosterStale ? `<div class="card empty-state" style="padding:16px;">Roster's empty or still loading — try refreshing.</div>` : '');
+    })()}
+    ${(!rosterStale && rosterAll.length > 5) ? `
+      <button class="btn btn-ghost btn-block" data-toggle-roster-expand style="margin-top:4px;">${state.ui.rosterExpanded ? '▲ Show Less' : `▼ Show All ${rosterAll.length} Members`}</button>
+    ` : ''}
+  `;
+
+  const weeklyStale = leagueWeeklyCache.leagueId !== state.social.leagueId || leagueWeeklyCache.weekKey !== state.social.weekKey;
+  const weeklyHtml = `
+    <div class="panel-title">This Week in ${league.name} <span style="color:var(--text-muted); font-size:11px;">(resets weekly — Gym Wars groundwork)</span></div>
+    <div class="card" style="margin-bottom:8px;">
+      <div style="display:flex; justify-content:space-between; align-items:center;">
+        <div style="font-size:12px; color:var(--text-muted);">Total league XP this week</div>
+        <div style="font-family:'Oswald',sans-serif; font-weight:700; font-size:16px; color:var(--champ-teal);">${weeklyStale && !leagueWeeklyCache.loading ? '…' : fmtNum(leagueWeeklyCache.totalXp)}</div>
+      </div>
+    </div>
+    ${(!weeklyStale && leagueWeeklyCache.entries.length > 0) ? leagueWeeklyCache.entries.slice(0,10).map((e,i) => `
+      <div class="card" style="display:flex; justify-content:space-between; align-items:center; ${e.playerId===state.social.playerId?'border-color:var(--belt-gold);':''}">
+        <div style="display:flex; align-items:center; gap:8px; min-width:0;">
+          <div style="font-family:'Oswald',sans-serif; font-weight:700; color:var(--text-muted); width:18px; flex-shrink:0;">${i+1}</div>
+          <div style="min-width:0;">
+            <div style="font-size:13px; font-weight:600; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;">${escapeHtml(e.name||'Unnamed')}${e.flagged ? ' ⚠️' : ''}</div>
+            ${e.flagged ? `<div style="font-size:10px; color:var(--corner-red);">Flagged: implausible for reported weekly wins</div>` : ''}
+          </div>
+        </div>
+        <div style="font-family:'Oswald',sans-serif; font-weight:700; color:var(--belt-gold); flex-shrink:0;">${fmtNum(e.weeklyXp||0)}</div>
+      </div>
+    `).join('') : (!weeklyStale ? `<div class="card empty-state" style="padding:16px;">No weekly activity logged yet — play a bit, then refresh.</div>` : '')}
+  `;
+
+  return `
+    ${storageBannerHtml}
+    <div class="panel-title">Your Gym League</div>
+    <div class="card" style="border-color:var(--belt-gold);">
+      <div style="font-family:'Oswald',sans-serif; font-size:16px; font-weight:600;">${league.icon} ${league.name}</div>
+      <div style="font-size:12px; color:var(--text-muted); margin-top:4px;">${leagueRosterCache[league.id] ?? '…'} / ${leagueMemberCapForLevel(state.social.knownGymLevel)} members</div>
+      <button class="btn btn-ghost btn-block" data-refresh-all-league style="margin-top:10px;">${anyLeagueDataLoading ? 'Refreshing everything…' : '🔄 Refresh All'}</button>
+    </div>
+    ${nameCardHtml}
+
+    ${roleTenureHtml}
+
+    ${gymLevelHtml}
+
+    <div class="panel-title">Membership Tier</div>
+    <div class="card">
+      <div style="display:flex; justify-content:space-between; align-items:center;">
+        <div style="font-family:'Oswald',sans-serif; font-weight:600; font-size:14px; color:var(--belt-gold);">${tier.name}</div>
+        <div style="font-size:11px; color:var(--champ-teal);">+${tier.bonusPct}% cash & XP</div>
+      </div>
+      <div class="bar-track" style="margin-top:8px;"><div class="bar-fill xp" style="width:${tierPct}%"></div></div>
+      <div style="font-size:11px; color:var(--text-muted); margin-top:6px;">
+        ${nextTier ? `${state.social.contributedXp} / ${nextTier.minXp} XP to ${nextTier.name}` : 'Max tier reached — Legend status!'}
+      </div>
+    </div>
+
+    ${inviteCodeHtml}
+
+    ${rosterHtml}
+
+    ${weeklyHtml}
+
+    ${gymWarsHtml}
+
+    ${teethSpendHtml}
+
+    ${questsHtml}
+
+    <div class="panel-title">Switch Leagues</div>
+    <div class="card">
+      <div style="font-size:11px; color:var(--corner-red); margin-bottom:10px;">⚠️ Switching resets your membership tier, weekly XP, and tenure progress in ${league.name} — it can't be undone.</div>
+      <div style="display:flex; flex-wrap:wrap; gap:6px;">
+        ${LEAGUES.filter(l => l.id !== state.social.leagueId).map(lg => `
+          <button class="btn btn-ghost" style="flex:1 1 45%; font-size:11px; padding:8px 6px;" data-switch-league="${lg.id}" data-switch-league-name="${escapeAttr(lg.name)}">${lg.icon} ${lg.name}</button>
+        `).join('')}
+      </div>
+    </div>
+
+    ${syncHtml}
+  `;
+}
+
+
+
+function renderGymTab(){
+  const f = state.fighter;
+  const eff = effectiveStats();
+  const statRow = (key, label) => {
+    const bonus = eff[key] - f.stats[key];
+    return `<div class="tape-stat"><div class="label">${label}</div><div class="value">${eff[key]}${bonus>0?`<span class="gear-bonus">+${bonus}</span>`:''}</div></div>`;
+  };
+  return `
+    <div class="panel-title">Tale of the Tape</div>
+    <div class="tape tape-2x4">
+      ${statRow('power','Power')}
+      ${statRow('speed','Speed')}
+      ${statRow('defense','Defense')}
+      ${statRow('stamina','Stamina')}
+      ${statRow('chin','Chin')}
+      ${statRow('technique','Technique')}
+      ${statRow('slip','Slip')}
+      ${statRow('mental','Mental')}
+    </div>
+
+    <div class="panel-title">Equipment Upgrades</div>
+    ${renderBulkBuyToggle()}
+    ${Object.entries(GYM_EQUIPMENT).map(([key, equip]) => {
+      const g = state.gym[key];
+      const qty = state.ui.bulkBuyQty === 'max' ? Infinity : state.ui.bulkBuyQty;
+      const preview = computeBulkBuy(g.level, g.baseCost, 1.5, qty, state.economy.cash);
+      const canAfford = preview.bought > 0;
+      return `
+        <div class="card loop-card">
+          <div class="loop-icon">${equip.icon}</div>
+          <div class="loop-info">
+            <div class="loop-title">${equip.name} <span style="color:var(--belt-gold); font-size:11px;">Lv.${g.level}</span></div>
+            <div class="loop-desc">${equip.desc} (+${g.bonusPerLevel} ${equip.statLabel}/level)</div>
+          </div>
+          <button class="btn ${canAfford ? 'btn-gold' : 'btn-ghost'}" style="flex-shrink:0; padding:9px 12px; font-size:12px; text-align:center;" data-gym-buy="${key}" ${canAfford?'':'disabled'}>
+            $${fmtNum(preview.totalCost)}${preview.bought>1?`<br><span style="font-size:9px;">×${preview.bought}</span>`:''}
+          </button>
+        </div>
+      `;
+    }).join('')}
+  `;
+}
+
+const HAIR_STYLES = ['none','short','long','ponytail','buzz','afro','mohawk'];
+const HAIR_COLORS = ['#1A1A1A','#3A2418','#7A4A1F','#9C6A33','#D4AF37','#E63946','#F5F5F0','#8B5CF6','#2DD4BF'];
+const POSTER_OPTIONS = [
+  { key:'none',         label:'None',          icon:'—', bg:'linear-gradient(135deg, #22222E, #1A1A24)' },
+  { key:'championBelt', label:'Champion Belt', icon:'🏆', bg:'linear-gradient(135deg, #3a2f08, #1A1A24)' },
+  { key:'cityScape',     label:'City Skyline',  icon:'🌆', bg:'linear-gradient(135deg, #0d2436, #1A1A24)' },
+  { key:'flames',        label:'Flames',        icon:'🔥', bg:'linear-gradient(135deg, #3a120c, #1A1A24)' },
+];
+
+// Dev codes — one-time redeemable codes for early stat/cash boosts. Each tracked by key in
+// state.devCodesRedeemed so they can't be reused. Intended for testing/promo use, not pay-to-win.
+// None of these are shown in the Dev Code panel until AFTER a player redeems them (so browsing
+// the panel doesn't just hand out the whole list) — see renderHomeTab's Dev Code section.
+const DEV_CODES = {
+  'EARLYBIRD':    { effect: () => { STAT_KEYS_ALL.forEach(k => state.fighter.stats[k] += 3); }, desc: '+3 to all stats' },
+  'RINGCASH':     { effect: () => { state.economy.cash += 500; }, desc: '+$500 cash' },
+  'TOOTHFAIRY':   { effect: () => { state.economy.teeth += 25; }, desc: '+25 Teeth' },
+  'FIGHTNIGHT':   { effect: () => { state.economy.cash += 200; state.economy.teeth += 10; }, desc: '+$200 cash, +10 Teeth' },
+  // Doesn't grant resources directly — unlocks a Shop offer that's otherwise hidden. Useful for
+  // creator/influencer codes ("use code VIPACCESS for an exclusive bundle").
+  'VIPACCESS':    { effect: () => {
+                      if(!state.economy.unlockedPromoOffers) state.economy.unlockedPromoOffers = [];
+                      if(!state.economy.unlockedPromoOffers.includes('vipBundle')) state.economy.unlockedPromoOffers.push('vipBundle');
+                    }, desc: 'Unlocks the exclusive VIP Bundle in the Shop → Bundles tab' },
+  // "No cash needed" testing codes — big resource grants so QA can reach late-game content
+  // without grinding.
+  'BOTTOMLESSPIT':{ effect: () => { state.economy.cash += 100000; }, desc: '+$100,000 cash' },
+  'TEETHVAULT':   { effect: () => { state.economy.teeth += 500; }, desc: '+500 Teeth' },
+  // Testing-only: removes the $50/day real-money spend cap entirely for this save, so QA can
+  // run through every purchase path without tripping DAILY_SPEND_CAP_USD. Not something you'd
+  // want a live player redeeming — keep this one internal.
+  'QAUNLIMITED':  { effect: () => { state.economy.spendCapDisabled = true; }, desc: 'Removes the $50/day real-money spend cap (testing only)' },
+  // Testing-only: unlocks the real-money purchase buttons at all. Every "Buy" button is currently
+  // a placeholder that grants the reward for free (no Play Billing wired up yet) — locking this
+  // behind a code by default means real testers (Closed/Open Testing, or Production once live)
+  // can't accidentally farm free Teeth/cash from what will eventually be actual paid purchases.
+  // Redeem this ONLY on your own dev/QA devices.
+  'QAPURCHASE':   { effect: () => { state.economy.realPurchasesUnlocked = true; }, desc: 'Unlocks real-money purchase buttons (testing only)' },
+};
+
+function redeemDevCode(rawCode){
+  const code = rawCode.trim().toUpperCase();
+  if(!code){ showToast('Enter a code first'); return; }
+  if(!DEV_CODES[code]){ showToast('Invalid code'); return; }
+  if(state.devCodesRedeemed.includes(code)){ showToast('Code already redeemed'); return; }
+  DEV_CODES[code].effect();
+  state.devCodesRedeemed.push(code);
+  pushLog(`🎟️ Redeemed code ${code}: ${DEV_CODES[code].desc}`, 'level');
+  showToast(`Code redeemed: ${DEV_CODES[code].desc}`);
+  render();
+  scheduleSave();
+}
+
+function cycleAppearanceOption(key, options){
+  const current = state.fighter.appearance[key];
+  const idx = options.indexOf(current);
+  state.fighter.appearance[key] = options[(idx+1) % options.length];
+  render();
+  scheduleSave();
+}
+
+function renderHomeTab(){
+  const f = state.fighter;
+  const venue = currentVenue();
+  return `
+    <div class="panel-title">Fighter Name</div>
+    <div class="card">
+      ${state.ui.editingFighterName ? `
+        <div style="display:flex; gap:8px;">
+          <input type="text" id="fighter-name-input" class="ob-input" style="flex:1; padding:9px 12px; font-size:13px;" placeholder="Fighter name" maxlength="24" value="${escapeAttr(f.name)}">
+          <button class="btn btn-primary" id="fighter-name-submit" style="flex-shrink:0;">Save</button>
+          <button class="btn btn-ghost" data-cancel-fighter-name style="flex-shrink:0;">✕</button>
+        </div>
+      ` : `
+        <div style="display:flex; justify-content:space-between; align-items:center;">
+          <div style="font-family:'Oswald',sans-serif; font-size:15px; font-weight:600;">${escapeHtml(f.name)}</div>
+          <button class="btn btn-ghost" data-edit-fighter-name style="padding:6px 14px; font-size:11px;">✏️ Rename</button>
+        </div>
+      `}
+    </div>
+
+    <div class="panel-title" data-toggle-section="garageExpanded" style="cursor:pointer; display:flex; justify-content:space-between; align-items:center;">
+      <span>Garage</span><span style="font-size:12px;">${state.ui.garageExpanded ? '▾' : '▸'}</span>
+    </div>
+    ${state.ui.garageExpanded ? `
+    <div class="gear-grid">
+      ${Object.entries(VEHICLE_CATEGORIES).map(([key, cat]) => {
+        const vehicle = state.garage[key];
+        const rarity = vehicle ? RARITY_TIERS[vehicle.tier-1] : null;
+        return `
+          <div class="gear-slot ${vehicle ? 'filled' : 'empty'}" style="${vehicle ? `border-color:${rarity.color};` : ''}" data-view-vehicle="${key}">
+            <div class="gear-slot-icon">${cat.icon}</div>
+            <div class="gear-slot-label">${vehicle ? `${vehicle.rarityName} ${vehicle.name}` : cat.label}</div>
+            ${vehicle ? `<div class="gear-slot-power" style="color:${rarity.color};">${vehicle.itemPower}</div>` : ''}
+          </div>
+        `;
+      }).join('')}
+    </div>
+    ` : ''}
+
+    <div class="panel-title">Home Perks</div>
+    ${renderBulkBuyToggle()}
+    ${Object.entries(HOME_PERKS).map(([key, perk]) => {
+      const p = state.homePerks[key];
+      const qty = state.ui.bulkBuyQty === 'max' ? Infinity : state.ui.bulkBuyQty;
+      const preview = computeBulkBuy(p.level, p.baseCost, 1.6, qty, state.economy.cash);
+      const canAfford = preview.bought > 0;
+      return `
+        <div class="card loop-card">
+          <div class="loop-icon">${perk.icon}</div>
+          <div class="loop-info">
+            <div class="loop-title">${perk.name} <span style="color:var(--belt-gold); font-size:11px;">Lv.${p.level}</span></div>
+            <div class="loop-desc">${perk.desc} (+${p.bonusPerLevel}% ${perk.effectLabel}/level)</div>
+          </div>
+          <button class="btn ${canAfford ? 'btn-gold' : 'btn-ghost'}" style="flex-shrink:0; padding:9px 12px; font-size:12px; text-align:center;" data-home-buy="${key}" ${canAfford?'':'disabled'}>
+            $${fmtNum(preview.totalCost)}${preview.bought>1?`<br><span style="font-size:9px;">×${preview.bought}</span>`:''}
+          </button>
+        </div>
+      `;
+    }).join('')}
+
+    <div class="panel-title">Venue</div>
+    <div class="card">
+      <div style="font-family:'Oswald',sans-serif; font-size:15px; font-weight:600;">🏆 ${f.tier} Ring</div>
+      <div style="font-size:12px; color:var(--text-muted); margin-top:4px;">
+        A ${venue}-sided ring. Your ring gains sides — and gold trim at the top tiers — as you climb the career ladder, all the way to an 11-sided ring at Hall of Fame.
+      </div>
+    </div>
+
+    <div class="panel-title">Body & Face</div>
+    <div class="card">
+      <div style="display:flex; justify-content:space-between; align-items:center; padding:6px 0; border-bottom:1px solid var(--border-soft);">
+        <span style="font-size:13px;">🏋️ Build</span>
+        <div style="display:flex; gap:5px; flex-wrap:wrap; justify-content:flex-end;">
+          ${BUILD_KEYS.map(b => `<button class="btn ${f.appearance.build===b?'btn-teal':'btn-ghost'}" style="padding:6px 10px; font-size:10px; text-transform:capitalize;" data-set-build="${b}">${b}</button>`).join('')}
+        </div>
+      </div>
+      <div style="display:flex; justify-content:space-between; align-items:center; padding:6px 0; border-bottom:1px solid var(--border-soft);">
+        <span style="font-size:13px;">👤 Body Shape</span>
+        <button class="btn btn-ghost" style="padding:6px 14px; font-size:11px; text-transform:capitalize;" data-cycle-appearance="bodyShape">${BODY_SHAPES[f.appearance.bodyShape]?.label || f.appearance.bodyShape}</button>
+      </div>
+      <div style="display:flex; justify-content:space-between; align-items:center; padding:6px 0; border-bottom:1px solid var(--border-soft);">
+        <span style="font-size:13px;">🎨 Skin Tone</span>
+        <div style="display:flex; gap:5px; flex-wrap:wrap; justify-content:flex-end;">
+          ${SKIN_TONES.map(c => `<button class="color-swatch ${f.appearance.skin===c?'selected':''}" style="background:${c};" data-set-skin-tone="${c}"></button>`).join('')}
+        </div>
+      </div>
+      <div style="display:flex; justify-content:space-between; align-items:center; padding:6px 0; border-bottom:1px solid var(--border-soft);">
+        <span style="font-size:13px;">😠 Expression</span>
+        <button class="btn btn-ghost" style="padding:6px 14px; font-size:11px; text-transform:capitalize;" data-cycle-appearance="eyeStyle">${f.appearance.eyeStyle}</button>
+      </div>
+      <div style="display:flex; justify-content:space-between; align-items:center; padding:6px 0;">
+        <span style="font-size:13px;">👁️ Eye Color</span>
+        <div style="display:flex; gap:5px; flex-wrap:wrap; justify-content:flex-end;">
+          ${HAIR_COLORS.map(c => `<button class="color-swatch ${f.appearance.eyeColor===c?'selected':''}" style="background:${c};" data-set-eye-color="${c}"></button>`).join('')}
+        </div>
+      </div>
+    </div>
+
+    <div class="panel-title">Cosmetic Gear</div>
+    <div class="card">
+      <div style="display:flex; justify-content:space-between; align-items:center; padding:6px 0; border-bottom:1px solid var(--border-soft);">
+        <span style="font-size:13px;">🥊 Gloves</span>
+        <button class="btn ${f.appearance.gloves?'btn-teal':'btn-ghost'}" style="padding:6px 14px; font-size:11px;" data-gear-toggle="gloves">${f.appearance.gloves?'Equipped':'Off'}</button>
+      </div>
+      <div style="display:flex; justify-content:space-between; align-items:center; padding:6px 0; border-bottom:1px solid var(--border-soft);">
+        <span style="font-size:13px;">👟 Shoes</span>
+        <button class="btn ${f.appearance.shoes?'btn-teal':'btn-ghost'}" style="padding:6px 14px; font-size:11px;" data-gear-toggle="shoes">${f.appearance.shoes?'Equipped':'Off'}</button>
+      </div>
+      <div style="display:flex; justify-content:space-between; align-items:center; padding:6px 0;">
+        <span style="font-size:13px;">🎨 Tattoo</span>
+        <button class="btn ${f.appearance.tattoo?'btn-teal':'btn-ghost'}" style="padding:6px 14px; font-size:11px;" data-gear-toggle="tattoo">${f.appearance.tattoo?'Equipped':'Off'}</button>
+      </div>
+    </div>
+
+    <div class="panel-title">Hair & Jewelry</div>
+    <div class="card">
+      <div style="display:flex; justify-content:space-between; align-items:center; padding:6px 0; border-bottom:1px solid var(--border-soft);">
+        <span style="font-size:13px;">💇 Hair Style</span>
+        <button class="btn btn-ghost" style="padding:6px 14px; font-size:11px; text-transform:capitalize;" data-cycle-appearance="hairStyle">${f.appearance.hairStyle}</button>
+      </div>
+      <div style="display:flex; justify-content:space-between; align-items:center; padding:6px 0; border-bottom:1px solid var(--border-soft);">
+        <span style="font-size:13px;">🎨 Hair Color</span>
+        <div style="display:flex; gap:5px;">
+          ${HAIR_COLORS.map(c => `<button class="color-swatch ${f.appearance.hairColor===c?'selected':''}" style="background:${c};" data-set-hair-color="${c}"></button>`).join('')}
+        </div>
+      </div>
+      <div style="display:flex; justify-content:space-between; align-items:center; padding:6px 0;">
+        <span style="font-size:13px;">💎 Jewelry</span>
+        <button class="btn ${f.appearance.jewelry?'btn-teal':'btn-ghost'}" style="padding:6px 14px; font-size:11px;" data-gear-toggle="jewelry">${f.appearance.jewelry?'Equipped':'Off'}</button>
+      </div>
+    </div>
+
+    <div class="panel-title">Outfit Color</div>
+    <div class="card">
+      <div style="display:flex; gap:6px; flex-wrap:wrap;">
+        ${GEAR_COLORS.map(c => `<button class="color-swatch large ${f.appearance.gear===c?'selected':''}" style="background:${c};" data-set-outfit-color="${c}"></button>`).join('')}
+      </div>
+    </div>
+
+    <div class="panel-title">Gym Poster</div>
+    <div class="card">
+      <div class="poster-preview" style="background:${(POSTER_OPTIONS.find(p=>p.key===f.appearance.poster)||POSTER_OPTIONS[0]).bg};">
+        <div class="poster-preview-icon">${(POSTER_OPTIONS.find(p=>p.key===f.appearance.poster)||POSTER_OPTIONS[0]).icon}</div>
+        <div class="poster-preview-label">${(POSTER_OPTIONS.find(p=>p.key===f.appearance.poster)||POSTER_OPTIONS[0]).label}</div>
+      </div>
+      <div class="btn-row" style="flex-wrap:wrap; margin-top:10px;">
+        ${POSTER_OPTIONS.map(p => `<button class="btn ${f.appearance.poster===p.key?'btn-teal':'btn-ghost'}" style="flex:1 1 45%; font-size:11px; padding:8px 6px;" data-set-poster="${p.key}">${p.icon} ${p.label}</button>`).join('')}
+      </div>
+    </div>
+
+    <div class="panel-title">Premium Cosmetics</div>
+    <div class="card">
+      ${(() => {
+        const owned = state.purchasedCosmetics || [];
+        if(owned.length === 0){
+          return `<div style="font-size:12px; color:var(--text-muted); text-align:center; padding:8px 0;">No premium cosmetics owned yet — check the Shop's Cosmetics tab.</div>`;
+        }
+        const cos = f.appearance.cosmetics || {};
+        return SHOP_COSMETICS.filter(c => owned.includes(c.key)).map((c,i,arr) => `
+          <div style="display:flex; justify-content:space-between; align-items:center; padding:6px 0; ${i<arr.length-1?'border-bottom:1px solid var(--border-soft);':''}">
+            <span style="font-size:13px;">${c.icon} ${c.name}</span>
+            <button class="btn ${cos[c.key]?'btn-teal':'btn-ghost'}" style="padding:6px 14px; font-size:11px;" data-toggle-cosmetic="${c.key}">${cos[c.key]?'Equipped':'Equip'}</button>
+          </div>
+        `).join('');
+      })()}
+    </div>
+
+    <div class="panel-title">Settings</div>
+    <div class="card" style="display:flex; justify-content:space-between; align-items:center; margin-bottom:8px;">
+      <div>
+        <div style="font-size:13px; font-weight:600;">📳 Vibrate on Knockout</div>
+        <div style="font-size:11px; color:var(--text-muted); margin-top:1px;">Device must support vibration (not available on iOS Safari)</div>
+      </div>
+      <button class="btn ${state.settings.vibrateOnKnockout?'btn-teal':'btn-ghost'}" style="padding:6px 14px; font-size:11px; flex-shrink:0;" data-toggle-vibration>${state.settings.vibrateOnKnockout?'On':'Off'}</button>
+    </div>
+    <div class="card">
+      <div style="display:flex; justify-content:space-between; align-items:center;">
+        <div>
+          <div style="font-size:13px; font-weight:600;">🔔 Notifications</div>
+          <div style="font-size:11px; color:var(--text-muted); margin-top:1px;">Promotions, prestige-ready, new daily quests</div>
+        </div>
+        <button class="btn ${state.settings.notificationsEnabled?'btn-teal':'btn-ghost'}" style="padding:6px 14px; font-size:11px; flex-shrink:0;" data-toggle-notifications>${state.settings.notificationsEnabled?'On':'Off'}</button>
+      </div>
+      <div style="font-size:11px; color:var(--text-muted); margin-top:8px;">
+        Not real push — these only fire while this tab is open (foreground or a backgrounded-but-
+        still-running tab). A fully-closed app can't receive anything without a real server, which
+        isn't wired up yet.
+      </div>
+    </div>
+
+    <div class="card">
+      <div style="font-size:13px; font-weight:600;">☁️ Cloud Backup</div>
+      ${isGoogleLinked() ? `
+        <div style="font-size:11px; color:var(--champ-teal); margin-top:6px;">✅ Linked as ${escapeHtml(_auth.currentUser.email || 'your Google account')}</div>
+        <div style="font-size:11px; color:var(--text-muted); margin-top:4px;">Your progress survives reinstalls and works across any device you sign into.</div>
+      ` : `
+        <div style="font-size:11px; color:var(--text-muted); margin-top:6px;">
+          Right now your save only lives on this device — uninstalling or switching phones loses it.
+          Link a Google account to back it up for real, no downside: you keep playing exactly as
+          you are, this just adds a safety net.
+        </div>
+        <button class="btn btn-teal btn-block" style="margin-top:8px;" data-link-google>Link Google Account</button>
+      `}
+    </div>
+
+    <div class="panel-title">Dev Code</div>
+    <div class="card">
+      <div style="font-size:11px; color:var(--text-muted); margin-bottom:8px;">Have a code? Redeem it here for early stat boosts.</div>
+      <div style="display:flex; gap:8px;">
+        <input type="text" id="dev-code-input" class="ob-input" style="flex:1; padding:9px 12px; font-size:13px;" placeholder="Enter code">
+        <button class="btn btn-primary" id="dev-code-submit" style="flex-shrink:0;">Redeem</button>
+      </div>
+      ${(() => {
+        const redeemedCodes = Object.entries(DEV_CODES).filter(([code]) => state.devCodesRedeemed.includes(code));
+        if(redeemedCodes.length === 0) return '';
+        return `
+          <div style="font-size:11px; color:var(--text-muted); margin:10px 0 6px 0;">Redeemed codes:</div>
+          ${redeemedCodes.map(([code, def]) => `
+            <div style="display:flex; justify-content:space-between; align-items:center; padding:5px 0; opacity:0.5;">
+              <div style="font-family:'Oswald',sans-serif; font-weight:700; font-size:12px; letter-spacing:0.5px;">${code}</div>
+              <div style="font-size:11px; color:var(--text-muted);">✅ ${def.desc}</div>
+            </div>
+          `).join('')}
+        `;
+      })()}
+    </div>
+  `;
+}
+
+/* ========================================================================
+   COMPANIONS MODULE
+   ======================================================================== */
+// Generates the 10-stage affection story arc for a companion, parameterized by role and name
+// so the roster can scale to many companions without hand-writing every line of dialogue.
+// Each role has a distinct narrative flavor; names/pronouns are substituted in per-companion.
+// Expanded from 5 to 10 stages (and thresholds scaled up ~4.6x at the top) specifically so maxing
+// out a relationship is a genuine long-term project again, especially now that Corner progress
+// resets on prestige — a 5-stage/140-affection arc would have been trivially fast to redo each cycle.
+function buildCompanionStages(name, role, pronoun){
+  const firstName = name.split(' ')[0];
+  const p = pronoun; // 'her' | 'him'
+  const she = p === 'her' ? 'she' : 'he';
+  const She = p === 'her' ? 'She' : 'He';
+  const TEMPLATES = {
+    coach: [
+      `${firstName} watches your training from across the gym, arms crossed, saying nothing.`,
+      `"Your footwork's sloppy," ${firstName} says, stepping in to correct your stance. It's the first time ${she}'s bothered.`,
+      `${firstName} starts nodding at you across the gym floor now — a real acknowledgment, not just a glance.`,
+      `${firstName} starts staying late to run extra pads with you. ${She} still won't admit ${she} enjoys it.`,
+      `"You've actually gotten better," ${firstName} admits — the closest thing to a compliment ${she}'s ever given you.`,
+      `${firstName} shows up outside scheduled hours "to check the equipment," conveniently while you're training.`,
+      `"You're not terrible to be around," ${firstName} admits, almost smiling. ${She} lingers longer than ${she} needs to.`,
+      `${firstName} catches your eye across the gym and doesn't look away first, for once.`,
+      `${firstName} laces your gloves before your next fight and presses a kiss to your cheek. "Don't make me regret this, champ."`,
+      `${firstName} shows up to every fight now, front row, and doesn't pretend it's just professional anymore.`,
+    ],
+    trainer: [
+      `${firstName} clocks your reps from the corner of the room, clipboard in hand, expression unreadable.`,
+      `"That's three sets short," ${firstName} says, adjusting your form with surprising gentleness for someone so exacting.`,
+      `${firstName} starts greeting you by name instead of just pointing at the next station.`,
+      `${firstName} starts texting you workout tweaks at odd hours. You suspect ${she} thinks about your program more than ${she} lets on.`,
+      `"You're actually keeping up now," ${firstName} says, and it might be the nicest thing ${she}'s ever told you.`,
+      `${firstName} starts saving you a spot at ${she==='she'?'her':'his'} usual station without being asked.`,
+      `"I don't usually do this," ${firstName} says, sitting closer than strictly necessary to review your progress chart.`,
+      `${firstName} brings two coffees to your session now, and one's always exactly how you take it.`,
+      `${firstName} shows up to your fight in the front row, mouths "you've got this," and means every word.`,
+      `${firstName} starts introducing you as "mine" to the other trainers, then pretends ${she} didn't say it.`,
+    ],
+    nutritionist: [
+      `${firstName} hands you a meal plan without much eye contact and walks off before you can ask questions.`,
+      `"You actually followed it this time," ${firstName} says, genuinely surprised, checking your log over a coffee.`,
+      `${firstName} starts remembering your usual order before you say a word.`,
+      `${firstName} starts packing an extra meal "by accident" whenever you're both at the gym kitchen.`,
+      `"I actually look forward to these check-ins," ${firstName} admits, like the words surprised ${she===`she`?'her':'him'} too.`,
+      `${firstName} starts texting you recipe ideas that are suspiciously tailored to exactly what you like.`,
+      `"I made this one specifically for you," ${firstName} admits, sliding over a container ${she} clearly spent real time on.`,
+      `${firstName} shows up with your favorite pre-fight snack before you even mention feeling nervous.`,
+      `${firstName} cooks you a full pre-fight dinner and stays to watch you eat every bite. "Now go win."`,
+      `${firstName} starts planning meals for two without asking first, and neither of you mentions it.`,
+    ],
+  };
+  const titles = ['Stranger','Acquaintance','Friendly','Close Friend','Trusted Friend','Warming Up','Mutual Spark','Close','Dating','Devoted'];
+  const thresholds = [0, 30, 70, 120, 180, 250, 330, 420, 520, 650];
+  return thresholds.map((threshold,i) => ({ threshold, title:titles[i], text:TEMPLATES[role][i] }));
+}
+
+// Roster generator: each entry is { name, role, genderTag, pronoun, bodyShape, skin, gear, hairStyle, hairColor, statTrait, tattoo, jewelry }
+const ROSTER_SEED = [
+  // --- Women (genderTag: 'women') ---
+  { name:'Jade Marlowe',    role:'coach',        pronoun:'her', bodyShape:'lean',     skin:'#C68642', gear:'#2DD4BF', hairStyle:'ponytail', hairColor:'#1A1A1A', statTrait:{speed:4}, tattoo:true },
+  { name:'Selina Okoye',    role:'coach',        pronoun:'her', bodyShape:'curvy',    skin:'#5C3A21', gear:'#E8483C', hairStyle:'short',    hairColor:'#0D0D0D', statTrait:{technique:4}, jewelry:true },
+  { name:'Brynn Halloway',  role:'coach',        pronoun:'her', bodyShape:'athletic', skin:'#E8B894', gear:'#F2C744', hairStyle:'long',     hairColor:'#7A4A1F', statTrait:{power:4} },
+  { name:'Mika Tanaka',     role:'trainer',      pronoun:'her', bodyShape:'curvy',    skin:'#E8B894', gear:'#7C3AED', hairStyle:'long',     hairColor:'#1A1A1A', statTrait:{stamina:4}, jewelry:true },
+  { name:'Talia Fonseca',   role:'trainer',      pronoun:'her', bodyShape:'athletic', skin:'#A66835', gear:'#2DD4BF', hairStyle:'ponytail', hairColor:'#3A2418', statTrait:{slip:4} },
+  { name:'Renee Whitfield', role:'trainer',      pronoun:'her', bodyShape:'lean',     skin:'#C68642', gear:'#5B6EE1', hairStyle:'short',    hairColor:'#9C6A33', statTrait:{chin:4} },
+  { name:'Dana Petrova',    role:'nutritionist', pronoun:'her', bodyShape:'curvy',    skin:'#E8B894', gear:'#F2C744', hairStyle:'long',     hairColor:'#5C3A21', statTrait:{stamina:3,chin:1}, jewelry:true },
+  { name:'Imani Cross',     role:'nutritionist', pronoun:'her', bodyShape:'athletic', skin:'#5C3A21', gear:'#2DD4BF', hairStyle:'buzz',     hairColor:'#0D0D0D', statTrait:{mental:4} },
+  { name:'Sofia Bianchi',   role:'nutritionist', pronoun:'her', bodyShape:'lean',     skin:'#C68642', gear:'#E8483C', hairStyle:'ponytail', hairColor:'#3A2418', statTrait:{technique:2,mental:2}, jewelry:true },
+  // --- Men (genderTag: 'men') ---
+  { name:'Marcus Reyes',    role:'coach',        pronoun:'him', bodyShape:'broad',    skin:'#8D5524', gear:'#E8483C', hairStyle:'buzz',     hairColor:'#0D0D0D', statTrait:{power:4}, tattoo:true },
+  { name:'Theo Vance',      role:'coach',        pronoun:'him', bodyShape:'athletic', skin:'#E8B894', gear:'#5B6EE1', hairStyle:'short',    hairColor:'#3A2418', statTrait:{technique:4} },
+  { name:'Dmitri Kozlov',   role:'coach',        pronoun:'him', bodyShape:'broad',    skin:'#C68642', gear:'#F2C744', hairStyle:'buzz',     hairColor:'#1A1A1A', statTrait:{chin:4}, tattoo:true },
+  { name:'Andre Mensah',    role:'trainer',      pronoun:'him', bodyShape:'athletic', skin:'#5C3A21', gear:'#2DD4BF', hairStyle:'short',    hairColor:'#0D0D0D', statTrait:{speed:4} },
+  { name:'Lucas Ferreira',  role:'trainer',      pronoun:'him', bodyShape:'lean',     skin:'#C68642', gear:'#7C3AED', hairStyle:'long',     hairColor:'#1A1A1A', statTrait:{slip:4} },
+  { name:'Caleb Storm',     role:'trainer',      pronoun:'him', bodyShape:'broad',    skin:'#E8B894', gear:'#E8483C', hairStyle:'buzz',     hairColor:'#9C6A33', statTrait:{stamina:4}, tattoo:true },
+  { name:'Felix Adeyemi',   role:'nutritionist', pronoun:'him', bodyShape:'lean',     skin:'#5C3A21', gear:'#F2C744', hairStyle:'short',    hairColor:'#0D0D0D', statTrait:{mental:4} },
+  { name:'Owen Bledsoe',    role:'nutritionist', pronoun:'him', bodyShape:'athletic', skin:'#E8B894', gear:'#2DD4BF', hairStyle:'short',    hairColor:'#5C3A21', statTrait:{technique:2,mental:2} },
+];
+
+const ROLE_TAGLINES = {
+  coach:        d => `Your ${d.role}. Sharp eyes, no patience for excuses.`,
+  trainer:      d => `Your strength & conditioning trainer. Exacting, but it works.`,
+  nutritionist: d => `Your nutritionist. Knows your macros better than you do.`,
+};
+const ROLE_COOLDOWN = { coach:20000, trainer:20000, nutritionist:20000 };
+const ROLE_SPAR_COOLDOWN = { coach:60000, trainer:60000, nutritionist:60000 }; // 3x chat's cooldown
+const ROLE_AFFECTION = { coach:{chat:4,gift:14,spar:9}, trainer:{chat:4,gift:14,spar:9}, nutritionist:{chat:4,gift:14,spar:9} };
+
+function slugify(name){ return name.toLowerCase().replace(/[^a-z]+/g,'_').replace(/^_|_$/g,''); }
+
+const COMPANION_DEFS = {};
+ROSTER_SEED.forEach(seed => {
+  const id = slugify(seed.name);
+  COMPANION_DEFS[id] = {
+    id,
+    name: seed.name,
+    genderTag: seed.pronoun === 'her' ? 'women' : 'men',
+    tagline: ROLE_TAGLINES[seed.role]({ role: seed.role }),
+    role: seed.role,
+    appearance: {
+      bodyShape: seed.bodyShape, skin: seed.skin, gear: seed.gear,
+      hairStyle: seed.hairStyle, hairColor: seed.hairColor,
+      tattoo: !!seed.tattoo, jewelry: !!seed.jewelry, jewelryColor: '#F2C744',
+    },
+    statTrait: seed.statTrait,
+    affectionPerChat: ROLE_AFFECTION[seed.role].chat,
+    affectionPerGift: ROLE_AFFECTION[seed.role].gift,
+    affectionPerSpar: ROLE_AFFECTION[seed.role].spar,
+    chatCooldownMs: ROLE_COOLDOWN[seed.role],
+    sparCooldownMs: ROLE_SPAR_COOLDOWN[seed.role],
+    stages: buildCompanionStages(seed.name, seed.role, seed.pronoun),
+  };
 });
+
+// Returns companions visible to the player based on their stated orientation.
+function visibleCompanions(){
+  const orientation = state.fighter.orientation;
+  return Object.values(COMPANION_DEFS).filter(c => {
+    if(orientation === 'both') return true;
+    return c.genderTag === orientation;
+  });
+}
+
+function getCompanionProgress(id){
+  if(!state.companions[id]){
+    state.companions[id] = { affection:0, stage:0, lastChatAt:0, lastSparAt:0, isPartner:false };
+  }
+  return state.companions[id];
+}
+
+function companionCurrentStage(def, progress){
+  let stage = def.stages[0];
+  for(const s of def.stages){
+    if(progress.affection >= s.threshold) stage = s;
+  }
+  return stage;
+}
+
+function companionCurrentStageIndex(def, progress){
+  let idx = 0;
+  def.stages.forEach((s, i) => { if(progress.affection >= s.threshold) idx = i; });
+  return idx;
+}
+
+// CORNER BONUS — a percentage stat bonus per relationship tier, stacking across EVERY companion
+// you've built a connection with (not just your active partner). Was previously missing entirely:
+// the only existing reward was a one-time flat stat bump on reaching Dating/partner status, with
+// nothing at all for the earlier stages. This adds real, ongoing incentive to invest in every
+// relationship, not just whichever one you pick as a partner.
+const CORNER_STAGE_BONUS_PCT = [0, 0.002, 0.004, 0.006, 0.01, 0.014, 0.018, 0.024, 0.03, 0.05]; // Stranger..Devoted (10 tiers)
+const CORNER_BONUS_CAP_PCT = 0.25;
+
+function cornerBonusPct(){
+  let total = 0;
+  Object.entries(state.companions).forEach(([id, progress]) => {
+    const def = COMPANION_DEFS[id];
+    if(!def) return;
+    const idx = companionCurrentStageIndex(def, progress);
+    total += CORNER_STAGE_BONUS_PCT[idx] || 0;
+  });
+  return Math.min(CORNER_BONUS_CAP_PCT, total);
+}
+
+function companionNextStage(def, progress){
+  return def.stages.find(s => s.threshold > progress.affection) || null;
+}
+
+function chatWithCompanion(id){
+  const def = COMPANION_DEFS[id];
+  const progress = getCompanionProgress(id);
+  const now = Date.now();
+  if(now - progress.lastChatAt < def.chatCooldownMs){
+    const waitSec = Math.ceil((def.chatCooldownMs - (now - progress.lastChatAt))/1000);
+    showToast(`${def.name.split(' ')[0]} is busy — try again in ${waitSec}s`);
+    return;
+  }
+  progress.lastChatAt = now;
+  applyAffectionGain(id, def.affectionPerChat);
+  pushLog(`Chatted with ${def.name.split(' ')[0]} (+${def.affectionPerChat} affection)`, 'level');
+  render();
+  scheduleSave();
+}
+
+// Second free interaction alongside Chat — longer cooldown (3x), bigger affection payoff, so
+// there's a genuine choice between "check in often" and "commit to a longer session" rather than
+// gifts being the only alternative to spamming Chat.
+function sparWithCompanion(id){
+  const def = COMPANION_DEFS[id];
+  const progress = getCompanionProgress(id);
+  const now = Date.now();
+  if(now - (progress.lastSparAt||0) < def.sparCooldownMs){
+    const waitSec = Math.ceil((def.sparCooldownMs - (now - (progress.lastSparAt||0)))/1000);
+    showToast(`${def.name.split(' ')[0]} needs a breather — try again in ${waitSec}s`);
+    return;
+  }
+  progress.lastSparAt = now;
+  applyAffectionGain(id, def.affectionPerSpar);
+  pushLog(`Sparred with ${def.name.split(' ')[0]} (+${def.affectionPerSpar} affection)`, 'level');
+  render();
+  scheduleSave();
+}
+
+const GIFT_OPTIONS = [
+  { key:'letter',  label:'💌 Handwritten Letter', cost:10 },
+  { key:'cake',    label:'🎂 Cake', cost:25 },
+  { key:'flowers', label:'🌹 Flowers', cost:25 },
+  { key:'dinner',  label:'🍲 Home-Cooked Dinner', cost:45 },
+  { key:'gear',    label:'🥊 Custom Gear', cost:60 },
+  { key:'tickets', label:'🎫 Concert Tickets', cost:90 },
+  { key:'jewelry', label:'💎 Jewelry', cost:140 },
+  { key:'trip',    label:'✈️ Weekend Getaway', cost:220 },
+];
+
+function giveGiftToCompanion(id, giftKey){
+  const def = COMPANION_DEFS[id];
+  const progress = getCompanionProgress(id);
+  const gift = GIFT_OPTIONS.find(g => g.key === giftKey);
+  if(state.economy.cash < gift.cost){ showToast('Not enough cash'); return; }
+  state.economy.cash -= gift.cost;
+  const gain = def.affectionPerGift + Math.round(gift.cost/10);
+  applyAffectionGain(id, gain);
+  pushLog(`Gave ${def.name.split(' ')[0]} ${gift.label} (+${gain} affection)`, 'level');
+  render();
+  scheduleSave();
+}
+
+function applyAffectionGain(id, amount){
+  const def = COMPANION_DEFS[id];
+  const progress = getCompanionProgress(id);
+  const prevStage = companionCurrentStage(def, progress);
+  const boosted = Math.round(amount * (1 + homePerkBonus('affectionPct')));
+  progress.affection += boosted;
+  const newStage = companionCurrentStage(def, progress);
+
+  if(newStage.title !== prevStage.title){
+    showToast(`${def.name.split(' ')[0]}: ${newStage.title}`);
+    if(newStage.title === 'Dating' && !progress.isPartner){
+      const activeCount = Object.values(state.companions).filter(c => c.isPartner).length;
+      if(activeCount >= state.prestige.partnerSlots){
+        showToast(`Partner slots full (${state.prestige.partnerSlots}) — prestige to unlock more`);
+        progress.affection = newStage.threshold - 1; // hold just below the Dating threshold until a slot opens
+        return;
+      }
+      progress.isPartner = true;
+      if(!state.activePartnerId) state.activePartnerId = id; // first partner shown solo in corner visuals
+      Object.entries(def.statTrait).forEach(([k,v]) => { state.fighter.stats[k] += v; });
+      pushLog(`❤️ ${def.name} is now your partner! Permanent stat bonus applied.`, 'level');
+    }
+  }
+}
+
+const CORNER_CATEGORIES = [
+  { key:'partners',     label:'Partners',      icon:'❤️' },
+  { key:'coach',        label:'Coaches',       icon:'🥊' },
+  { key:'trainer',      label:'Trainers',      icon:'💪' },
+  { key:'nutritionist', label:'Nutritionists', icon:'🥗' },
+];
+
+function renderCompanionsTab(){
+  const companions = visibleCompanions();
+  if(companions.length === 0){
+    return `<div class="panel-title">Your Corner</div><div class="empty-state" style="padding:40px 14px;">No companions match your preferences yet. Check back as the roster grows.</div>`;
+  }
+
+  if(state.companionView){
+    return renderCompanionProfile(state.companionView);
+  }
+
+  if(!state.cornerExpanded) state.cornerExpanded = { partners: true };
+
+  const partnerIds = Object.keys(state.companions).filter(id => state.companions[id].isPartner);
+
+  return `
+    <div class="panel-title">Your Corner</div>
+    <div class="card" style="border-color:var(--corner-red); margin-bottom:12px;">
+      <div style="display:flex; justify-content:space-between; align-items:center;">
+        <div style="font-family:'Oswald',sans-serif; font-weight:700; font-size:14px;">❤️ Corner Bonus</div>
+        <div style="font-family:'Oswald',sans-serif; font-weight:700; font-size:14px; color:var(--corner-red);">+${(cornerBonusPct()*100).toFixed(1)}% all stats</div>
+      </div>
+      <div style="font-size:11px; color:var(--text-muted); margin-top:6px;">
+        Every companion contributes a stat bonus based on how close you are, stacking across
+        everyone in your corner (not just your partner) — capped at +${(CORNER_BONUS_CAP_PCT*100).toFixed(0)}%.
+      </div>
+      <div style="display:grid; grid-template-columns:1fr 1fr; gap:4px 12px; margin-top:8px; font-size:10px; color:var(--text-muted);">
+        ${['Stranger','Acquaintance','Friendly','Close Friend','Trusted Friend','Warming Up','Mutual Spark','Close','Dating','Devoted'].map((label,i) => `
+          <div style="display:flex; justify-content:space-between;">
+            <span>${label}</span>
+            <span style="color:var(--champ-teal); font-weight:600;">+${(CORNER_STAGE_BONUS_PCT[i]*100).toFixed(1)}%</span>
+          </div>
+        `).join('')}
+      </div>
+    </div>
+    ${CORNER_CATEGORIES.map(cat => {
+      const list = cat.key === 'partners'
+        ? companions.filter(c => partnerIds.includes(c.id))
+        : companions.filter(c => c.role === cat.key && !partnerIds.includes(c.id)); // partners move out of their job-role list once dating
+      const expanded = !!state.cornerExpanded[cat.key];
+      const slotInfo = cat.key === 'partners' ? ` ${partnerIds.length}/${state.prestige.partnerSlots}` : '';
+      return `
+        <div class="corner-category">
+          <button class="corner-category-header" data-toggle-category="${cat.key}">
+            <span>${cat.icon} ${cat.label} <span class="corner-category-count">${slotInfo || list.length}</span></span>
+            <span class="corner-category-chevron">${expanded ? '▾' : '▸'}</span>
+          </button>
+          ${expanded ? (list.length === 0
+            ? `<div class="empty-state" style="padding:14px;">${cat.key==='partners' ? `No active partners yet — build affection with a coach, trainer, or nutritionist to Dating stage (${state.prestige.partnerSlots} slot${state.prestige.partnerSlots===1?'':'s'} available; prestige unlocks more).` : 'No one in this category yet.'}</div>`
+            : list.map(def => renderCompanionCard(def)).join('')
+          ) : ''}
+        </div>
+      `;
+    }).join('')}
+  `;
+}
+
+function renderCompanionCard(def){
+  const progress = getCompanionProgress(def.id);
+  const stage = companionCurrentStage(def, progress);
+  const nextStage = companionNextStage(def, progress);
+  const pct = nextStage ? clamp(((progress.affection - stage.threshold) / (nextStage.threshold - stage.threshold))*100, 0, 100) : 100;
+  const stageIdx = companionCurrentStageIndex(def, progress);
+  const bonusPct = CORNER_STAGE_BONUS_PCT[stageIdx] || 0;
+  return `
+    <div class="card companion-card" data-companion-open="${def.id}">
+      <svg viewBox="0 0 140 190" class="companion-thumb">${renderCompanionRig(def.appearance)}</svg>
+      <div class="companion-info">
+        <div class="companion-name">${escapeHtml(def.name)} ${progress.isPartner ? '❤️' : ''}</div>
+        <div class="companion-tagline">${escapeHtml(def.tagline)}</div>
+        <div class="companion-stage-label">${stage.title}${nextStage ? ` → ${nextStage.title}` : ' (Max)'} ${bonusPct > 0 ? `<span style="color:var(--corner-red);">+${(bonusPct*100).toFixed(1)}%</span>` : ''}</div>
+        <div class="bar-track" style="margin-top:4px;"><div class="bar-fill xp" style="width:${pct}%"></div></div>
+      </div>
+    </div>
+  `;
+}
+
+function renderCompanionProfile(id){
+  const def = COMPANION_DEFS[id];
+  const progress = getCompanionProgress(id);
+  const stage = companionCurrentStage(def, progress);
+  const nextStage = companionNextStage(def, progress);
+  const now = Date.now();
+  const onCooldown = (now - progress.lastChatAt) < def.chatCooldownMs;
+  const cooldownSec = onCooldown ? Math.ceil((def.chatCooldownMs - (now - progress.lastChatAt))/1000) : 0;
+  const onSparCooldown = (now - (progress.lastSparAt||0)) < def.sparCooldownMs;
+  const sparCooldownSec = onSparCooldown ? Math.ceil((def.sparCooldownMs - (now - (progress.lastSparAt||0)))/1000) : 0;
+
+  return `
+    <button class="btn btn-ghost" data-companion-back style="margin-bottom:10px;">← Back to Corner</button>
+
+    <div class="companion-hero">
+      <svg viewBox="0 0 140 190" class="companion-hero-art">${renderCompanionRig(def.appearance)}</svg>
+      <div class="companion-hero-name">${escapeHtml(def.name)} ${progress.isPartner ? '❤️' : ''}</div>
+      <div class="companion-hero-stage">${stage.title}${nextStage ? ` • ${progress.affection}/${nextStage.threshold} Affection` : ' • Max Stage'}</div>
+      <div style="font-size:12px; color:var(--corner-red); margin-top:4px;">Currently contributing +${(CORNER_STAGE_BONUS_PCT[companionCurrentStageIndex(def, progress)]*100).toFixed(1)}% to your Corner Bonus</div>
+    </div>
+
+    <div class="panel-title">Story</div>
+    <div class="card companion-story">"${escapeHtml(stage.text)}"</div>
+
+    <div class="panel-title">Spend Time</div>
+    <button class="btn ${onCooldown ? 'btn-ghost' : 'btn-teal'} btn-block" data-companion-chat="${id}" ${onCooldown?'disabled':''}>
+      💬 Chat ${onCooldown ? `(${cooldownSec}s)` : `(+${def.affectionPerChat} affection)`}
+    </button>
+    <button class="btn ${onSparCooldown ? 'btn-ghost' : 'btn-teal'} btn-block" style="margin-top:6px;" data-companion-spar="${id}" ${onSparCooldown?'disabled':''}>
+      🥊 Spar Together ${onSparCooldown ? `(${sparCooldownSec}s)` : `(+${def.affectionPerSpar} affection)`}
+    </button>
+
+    <div class="panel-title">Gifts</div>
+    <div class="btn-row" style="flex-wrap:wrap;">
+      ${GIFT_OPTIONS.map(g => `
+        <button class="btn btn-gold" style="flex:1 1 30%; font-size:11px; padding:10px 6px;" data-companion-gift="${id}" data-gift-key="${g.key}" ${state.economy.cash<g.cost?'disabled':''}>
+          ${g.label}<br>$${g.cost}
+        </button>
+      `).join('')}
+    </div>
+  `;
+}
+
+function escapeHtml(str){
+  const div = document.createElement('div');
+  div.textContent = str;
+  return div.innerHTML;
+}
+
+// escapeHtml alone is safe as element content but NOT inside a quoted HTML attribute (it doesn't
+// encode "), so any value written into value="..." needs this extra pass.
+function escapeAttr(str){
+  return escapeHtml(str).replace(/"/g, '&quot;');
+}
+
+function attachContentHandlers(){
+  document.querySelectorAll('[data-jump-tab]').forEach(btn => {
+    btn.addEventListener('click', () => switchToTab(btn.dataset.jumpTab));
+  });
+  document.querySelectorAll('[data-gym-buy]').forEach(btn => {
+    btn.addEventListener('click', () => purchaseGymUpgrade(btn.dataset.gymBuy));
+  });
+  document.querySelectorAll('[data-gear-toggle]').forEach(btn => {
+    btn.addEventListener('click', () => toggleGearCosmetic(btn.dataset.gearToggle));
+  });
+  document.querySelectorAll('[data-companion-open]').forEach(card => {
+    card.addEventListener('click', () => { state.companionView = card.dataset.companionOpen; render(); });
+  });
+  document.querySelectorAll('[data-toggle-category]').forEach(btn => {
+    btn.addEventListener('click', () => {
+      const key = btn.dataset.toggleCategory;
+      state.cornerExpanded[key] = !state.cornerExpanded[key];
+      render();
+    });
+  });
+  document.querySelectorAll('[data-companion-back]').forEach(btn => {
+    btn.addEventListener('click', () => { state.companionView = null; render(); });
+  });
+  document.querySelectorAll('[data-companion-chat]').forEach(btn => {
+    btn.addEventListener('click', () => chatWithCompanion(btn.dataset.companionChat));
+  });
+  document.querySelectorAll('[data-companion-spar]').forEach(btn => {
+    btn.addEventListener('click', () => sparWithCompanion(btn.dataset.companionSpar));
+  });
+  document.querySelectorAll('[data-companion-gift]').forEach(btn => {
+    btn.addEventListener('click', () => giveGiftToCompanion(btn.dataset.companionGift, btn.dataset.giftKey));
+  });
+  document.querySelectorAll('[data-open-box]').forEach(card => {
+    card.addEventListener('click', () => openLootBox(card.dataset.openBox));
+  });
+  document.querySelectorAll('[data-view-gear]').forEach(card => {
+    card.addEventListener('click', () => viewGearSlot(card.dataset.viewGear));
+  });
+  document.querySelectorAll('[data-view-vehicle]').forEach(card => {
+    card.addEventListener('click', () => viewVehicle(card.dataset.viewVehicle));
+  });
+  const fightScene = document.querySelector('[data-fight-click]');
+  if(fightScene){
+    fightScene.addEventListener('click', (e) => {
+      // Don't eat clicks meant for the result banner or other interactive elements layered on top.
+      handleFightSceneClick();
+      const hypeFill = fightScene.querySelector('.hype-fill');
+      if(hypeFill) hypeFill.style.height = ((state.clickCombat.charge||0)/20*100) + '%';
+      const hypeCombo = fightScene.querySelector('.hype-combo');
+      if(hypeCombo){
+        const mult = Math.min(10, 1 + Math.floor((state.clickCombat.combo||0)/3));
+        hypeCombo.textContent = `×${mult}`;
+        hypeCombo.style.display = state.clickCombat.combo > 2 ? 'block' : 'none';
+      }
+    });
+  }
+  const rouletteFab = document.querySelector('[data-open-roulette]');
+  if(rouletteFab){
+    rouletteFab.addEventListener('click', (e) => {
+      e.stopPropagation(); // don't also register a fight-scene tap underneath
+      openShopToTab('roulette');
+    });
+  }
+  const levelUpNoticesFab = document.querySelector('[data-open-levelup-notices]');
+  if(levelUpNoticesFab){
+    levelUpNoticesFab.addEventListener('click', (e) => {
+      e.stopPropagation(); // don't also register a fight-scene tap underneath
+      openLevelUpNotices();
+    });
+  }
+  const rolesInfoBtn = document.querySelector('[data-open-roles-info]');
+  if(rolesInfoBtn){
+    rolesInfoBtn.addEventListener('click', openRolesInfo);
+  }
+  const autoOpenBtn = document.querySelector('[data-toggle-autoopen]');
+  if(autoOpenBtn){
+    autoOpenBtn.addEventListener('click', () => {
+      state.autoOpenChests = !state.autoOpenChests;
+      // If turning it on, immediately resolve any boxes already sitting in the inventory too,
+      // so the setting feels consistent rather than only affecting future drops.
+      if(state.autoOpenChests && state.lootBoxes.length > 0){
+        const boxes = [...state.lootBoxes];
+        state.lootBoxes = [];
+        boxes.forEach(box => autoResolveItem(generateLootItem(box.tier), true));
+      }
+      render();
+      scheduleSave();
+    });
+  }
+  document.querySelectorAll('[data-home-buy]').forEach(btn => {
+    btn.addEventListener('click', () => purchaseHomePerk(btn.dataset.homeBuy));
+  });
+  document.querySelectorAll('[data-powerup-buy]').forEach(btn => {
+    btn.addEventListener('click', () => purchasePowerUp(btn.dataset.powerupBuy));
+  });
+  const prestigeBtn = document.querySelector('[data-do-prestige]');
+  if(prestigeBtn){
+    prestigeBtn.addEventListener('click', () => {
+      showConfirm('Prestige Now?', `This resets your career, cash, gear, and Corner relationship progress — but keeps power-ups and cosmetics, adds a permanent +${PRESTIGE_STAT_BONUS_PER_PRESTIGE} to all stats, and carries forward a percentage of your current stats based on wins since Hall of Fame.`, () => {
+        executePrestige();
+        offerPrestigeReroll();
+      });
+    });
+  }
+  document.querySelectorAll('[data-cycle-appearance]').forEach(btn => {
+    btn.addEventListener('click', () => {
+      const pools = {
+        hairStyle: HAIR_STYLES,
+        bodyShape: Object.keys(BODY_SHAPES),
+        eyeStyle: ['calm','focused','fierce'],
+      };
+      cycleAppearanceOption(btn.dataset.cycleAppearance, pools[btn.dataset.cycleAppearance] || HAIR_STYLES);
+    });
+  });
+  document.querySelectorAll('[data-set-hair-color]').forEach(btn => {
+    btn.addEventListener('click', () => {
+      state.fighter.appearance.hairColor = btn.dataset.setHairColor;
+      render(); scheduleSave();
+    });
+  });
+  document.querySelectorAll('[data-set-build]').forEach(btn => {
+    btn.addEventListener('click', () => {
+      const build = btn.dataset.setBuild;
+      state.fighter.appearance.build = build;
+      state.fighter.appearance.traitLabel = BUILD_VARIANTS[build].label;
+      render(); scheduleSave();
+    });
+  });
+  document.querySelectorAll('[data-set-skin-tone]').forEach(btn => {
+    btn.addEventListener('click', () => {
+      state.fighter.appearance.skin = btn.dataset.setSkinTone;
+      render(); scheduleSave();
+    });
+  });
+  document.querySelectorAll('[data-set-eye-color]').forEach(btn => {
+    btn.addEventListener('click', () => {
+      state.fighter.appearance.eyeColor = btn.dataset.setEyeColor;
+      render(); scheduleSave();
+    });
+  });
+  document.querySelectorAll('[data-set-outfit-color]').forEach(btn => {
+    btn.addEventListener('click', () => {
+      state.fighter.appearance.gear = btn.dataset.setOutfitColor;
+      render(); scheduleSave();
+    });
+  });
+  document.querySelectorAll('[data-set-poster]').forEach(btn => {
+    btn.addEventListener('click', () => {
+      state.fighter.appearance.poster = btn.dataset.setPoster;
+      render(); scheduleSave();
+    });
+  });
+  document.querySelectorAll('[data-toggle-cosmetic]').forEach(btn => {
+    btn.addEventListener('click', () => {
+      const key = btn.dataset.toggleCosmetic;
+      if(!state.fighter.appearance.cosmetics) state.fighter.appearance.cosmetics = {};
+      state.fighter.appearance.cosmetics[key] = !state.fighter.appearance.cosmetics[key];
+      render(); scheduleSave();
+    });
+  });
+  const vibrationBtn = document.querySelector('[data-toggle-vibration]');
+  if(vibrationBtn){
+    vibrationBtn.addEventListener('click', () => {
+      state.settings.vibrateOnKnockout = !state.settings.vibrateOnKnockout;
+      render();
+      scheduleSave();
+    });
+  }
+  const notificationsBtn = document.querySelector('[data-toggle-notifications]');
+  if(notificationsBtn){
+    notificationsBtn.addEventListener('click', () => {
+      if(state.settings.notificationsEnabled) disableNotifications();
+      else requestNotificationPermission();
+    });
+  }
+  const linkGoogleBtn = document.querySelector('[data-link-google]');
+  if(linkGoogleBtn){
+    linkGoogleBtn.addEventListener('click', linkGoogleAccount);
+  }
+  const devCodeSubmit = document.getElementById('dev-code-submit');
+  if(devCodeSubmit){
+    devCodeSubmit.addEventListener('click', () => {
+      const input = document.getElementById('dev-code-input');
+      redeemDevCode(input.value);
+      input.value = '';
+    });
+  }
+  const devCodeInput = document.getElementById('dev-code-input');
+  if(devCodeInput){
+    devCodeInput.addEventListener('keydown', (e) => {
+      if(e.key === 'Enter'){ redeemDevCode(devCodeInput.value); devCodeInput.value = ''; }
+    });
+  }
+  document.querySelectorAll('[data-join-league]').forEach(btn => {
+    btn.addEventListener('click', (e) => {
+      e.stopPropagation(); // don't also trigger the parent card's data-preview-gym
+      joinLeague(btn.dataset.joinLeague);
+    });
+  });
+  document.querySelectorAll('[data-switch-league]').forEach(btn => {
+    btn.addEventListener('click', () => {
+      const targetName = btn.dataset.switchLeagueName;
+      const currentLeague = LEAGUES.find(l => l.id === state.social.leagueId);
+      showConfirm(
+        `Switch to ${targetName}?`,
+        `This resets your Membership Tier, weekly XP, and tenure progress in ${currentLeague ? currentLeague.name : 'your current gym'} — it can't be undone.`,
+        () => joinLeague(btn.dataset.switchLeague)
+      );
+    });
+  });
+  document.querySelectorAll('[data-preview-gym]').forEach(card => {
+    card.addEventListener('click', () => openGymPreview(card.dataset.previewGym));
+  });
+  document.querySelectorAll('[data-claim-quest]').forEach(btn => {
+    btn.addEventListener('click', () => claimQuest(btn.dataset.claimQuest));
+  });
+  const pushRecoveryBtn = document.querySelector('[data-push-recovery]');
+  if(pushRecoveryBtn){
+    pushRecoveryBtn.addEventListener('click', () => pushRecoverySnapshot());
+  }
+  const recoverySubmit = document.getElementById('recovery-code-submit');
+  if(recoverySubmit){
+    recoverySubmit.addEventListener('click', () => {
+      const input = document.getElementById('recovery-code-input');
+      restoreFromRecoveryCode(input.value);
+    });
+  }
+  const recoveryInput = document.getElementById('recovery-code-input');
+  if(recoveryInput){
+    recoveryInput.addEventListener('keydown', (e) => {
+      if(e.key === 'Enter'){ restoreFromRecoveryCode(recoveryInput.value); }
+    });
+  }
+  const refreshAllBtn = document.querySelector('[data-refresh-all-league]');
+  if(refreshAllBtn){
+    refreshAllBtn.addEventListener('click', () => { showToast('Refreshing…'); refreshAllLeagueData(); });
+  }
+  const rosterExpandBtn = document.querySelector('[data-toggle-roster-expand]');
+  if(rosterExpandBtn){
+    rosterExpandBtn.addEventListener('click', () => { state.ui.rosterExpanded = !state.ui.rosterExpanded; render(); });
+  }
+  document.querySelectorAll('[data-set-bulk-qty]').forEach(btn => {
+    btn.addEventListener('click', () => {
+      const val = btn.dataset.setBulkQty;
+      state.ui.bulkBuyQty = val === 'max' ? 'max' : parseInt(val);
+      render();
+    });
+  });
+  document.querySelectorAll('[data-toggle-section]').forEach(el => {
+    el.addEventListener('click', () => {
+      const key = el.dataset.toggleSection;
+      state.ui[key] = !state.ui[key];
+      render();
+    });
+  });
+  const tiersExpandBtn = document.querySelector('[data-toggle-tiers-expand]');
+  if(tiersExpandBtn){
+    tiersExpandBtn.addEventListener('click', () => { state.ui.tiersExpanded = !state.ui.tiersExpanded; render(); });
+  }
+  document.querySelectorAll('[data-set-role]').forEach(btn => {
+    btn.addEventListener('click', () => setMemberRole(btn.dataset.setRole, btn.dataset.roleValue));
+  });
+  const generateJoinCodeBtn = document.querySelector('[data-generate-joincode]');
+  if(generateJoinCodeBtn){
+    generateJoinCodeBtn.addEventListener('click', () => generateJoinCode());
+  }
+  const joinCodeSubmit = document.getElementById('join-code-submit');
+  if(joinCodeSubmit){
+    joinCodeSubmit.addEventListener('click', () => {
+      joinLeagueByCode(document.getElementById('join-code-input').value);
+    });
+  }
+  const joinCodeInput = document.getElementById('join-code-input');
+  if(joinCodeInput){
+    joinCodeInput.addEventListener('keydown', (e) => {
+      if(e.key === 'Enter'){ joinLeagueByCode(joinCodeInput.value); }
+    });
+  }
+  const editFighterNameBtn = document.querySelector('[data-edit-fighter-name]');
+  if(editFighterNameBtn){
+    editFighterNameBtn.addEventListener('click', () => { state.ui.editingFighterName = true; render(); });
+  }
+  const cancelFighterNameBtn = document.querySelector('[data-cancel-fighter-name]');
+  if(cancelFighterNameBtn){
+    cancelFighterNameBtn.addEventListener('click', () => { state.ui.editingFighterName = false; render(); });
+  }
+  const fighterNameSubmit = document.getElementById('fighter-name-submit');
+  if(fighterNameSubmit){
+    fighterNameSubmit.addEventListener('click', () => {
+      renameFighter(document.getElementById('fighter-name-input').value);
+    });
+  }
+  const fighterNameInput = document.getElementById('fighter-name-input');
+  if(fighterNameInput){
+    fighterNameInput.addEventListener('keydown', (e) => {
+      if(e.key === 'Enter'){ renameFighter(fighterNameInput.value); }
+    });
+  }
+  const editLeagueNameBtn = document.querySelector('[data-edit-league-name]');
+  if(editLeagueNameBtn){
+    editLeagueNameBtn.addEventListener('click', () => { nameClaimError = null; state.ui.editingLeagueName = true; render(); });
+  }
+  const cancelLeagueNameBtn = document.querySelector('[data-cancel-league-name]');
+  if(cancelLeagueNameBtn){
+    cancelLeagueNameBtn.addEventListener('click', () => { state.ui.editingLeagueName = false; nameClaimError = null; render(); });
+  }
+  const leagueNameEditSubmit = document.getElementById('league-name-edit-submit');
+  if(leagueNameEditSubmit){
+    leagueNameEditSubmit.addEventListener('click', () => {
+      claimDisplayName(document.getElementById('league-name-edit-input').value);
+    });
+  }
+  const leagueNameEditInput = document.getElementById('league-name-edit-input');
+  if(leagueNameEditInput){
+    leagueNameEditInput.addEventListener('keydown', (e) => {
+      if(e.key === 'Enter'){ claimDisplayName(leagueNameEditInput.value); }
+    });
+  }
+}
+
+/* ---------------------------- NAV ---------------------------- */
+// Shared by the bottom nav AND any in-content "jump to this tab" link (e.g. the Your Progress
+// widget's clickable stats), so both paths stay in sync (active-state styling, badge
+// acknowledgment, League data refresh) instead of duplicating this logic in two places.
+function switchToTab(tab){
+  document.querySelectorAll('.nav-btn').forEach(b => b.classList.toggle('active', b.dataset.tab === tab));
+  activeTab = tab;
+  if(['fighter','career','league'].includes(activeTab) && state.ui.badgeAcked){
+    state.ui.badgeAcked[activeTab] = true;
+  }
+  render();
+  if(activeTab === 'league') refreshAllLeagueData();
+}
+
+document.querySelectorAll('.nav-btn').forEach(btn => {
+  btn.addEventListener('click', () => switchToTab(btn.dataset.tab));
+});
+
+/* ---------------------------- FIGHT LOG MODAL ---------------------------- */
+function renderLogModalBody(){
+  if(state.log.length === 0) return '<div class="empty-state">No activity yet. Loops will start producing results shortly.</div>';
+  return `<div class="log-feed">${state.log.slice(0,40).map(l => `<div class="log-entry ${l.type}">${escapeHtml(l.text)}</div>`).join('')}</div>`;
+}
+
+document.getElementById('log-toggle-btn').addEventListener('click', () => {
+  document.getElementById('log-modal-body').innerHTML = renderLogModalBody();
+  document.getElementById('log-modal').style.display = 'flex';
+});
+document.getElementById('log-modal-close').addEventListener('click', () => {
+  document.getElementById('log-modal').style.display = 'none';
+});
+document.getElementById('log-modal').addEventListener('click', (e) => {
+  if(e.target.id === 'log-modal') document.getElementById('log-modal').style.display = 'none';
+});
+
+/* ---------------------------- LOOT BOX OPENING ---------------------------- */
+function openLootBox(boxId){
+  const boxIndex = state.lootBoxes.findIndex(b => b.id === boxId);
+  if(boxIndex === -1) return;
+  const box = state.lootBoxes[boxIndex];
+  state.lootBoxes.splice(boxIndex, 1);
+
+  if(box.isVehicle){
+    const vehicle = generateVehicleItem(box.vehicleCategory, box.tier, box.source);
+    const previousVehicle = state.garage[box.vehicleCategory];
+    const result = autoResolveVehicle(vehicle, true);
+    document.getElementById('loot-modal-body').innerHTML = renderVehicleRevealBody(vehicle, previousVehicle, result);
+  } else {
+    const item = generateLootItem(box.tier, null, box.source);
+    const currentItem = state.fighter.equipment[item.slotKey];
+    const result = autoResolveItem(item, true);
+    document.getElementById('loot-modal-body').innerHTML = renderLootRevealBody(item, currentItem, result);
+  }
+  document.getElementById('loot-modal').style.display = 'flex';
+  render(); // updates the Gear Loot box count and gear grid behind the modal
+  scheduleSave();
+}
+
+// Renders a small badge showing how good this item's roll was within its tier's range —
+// gives the player something to chase even on duplicate-rarity drops.
+function renderRollQualityBadge(rollQuality){
+  if(rollQuality === undefined) return '';
+  const pct = Math.round(rollQuality*100);
+  let label, color;
+  if(rollQuality >= 0.85){ label='Perfect Roll'; color='var(--belt-gold)'; }
+  else if(rollQuality >= 0.6){ label='Great Roll'; color='var(--champ-teal)'; }
+  else if(rollQuality >= 0.3){ label='Decent Roll'; color='var(--text-main)'; }
+  else { label='Weak Roll'; color='var(--text-muted)'; }
+  return `<div style="margin-top:8px; font-size:11px; font-weight:600; color:${color};">${label} (${pct}% of tier range)</div>`;
+}
+
+function renderVehicleRevealBody(vehicle, previousVehicle, result){
+  const rarity = RARITY_TIERS[vehicle.tier-1];
+  const catLabel = VEHICLE_CATEGORIES[vehicle.category].label;
+  const statRows = Object.entries(vehicle.statBonuses).map(([key,val]) =>
+    `<div class="reveal-stat-row"><span>${capitalize(key)}</span><span style="color:${rarity.color}; font-weight:700;">+${val}</span></div>`
+  ).join('');
+  return `
+    <div class="reveal-card">
+      <div class="reveal-icon">${vehicle.icon}</div>
+      <div class="reveal-rarity" style="color:${rarity.color};">${rarity.name}</div>
+      <div class="reveal-name">${vehicle.name} • ${catLabel} • Item Power ${vehicle.itemPower}</div>
+      ${renderRollQualityBadge(vehicle.rollQuality)}
+      <div class="reveal-stats">${statRows}</div>
+      <div class="reveal-outcome ${result.equipped ? 'equipped' : 'sold'}">
+        ${result.equipped
+          ? (previousVehicle ? `✅ New ${catLabel.toLowerCase()}! Sold your old one for $${result.soldValue}` : `✅ Your first ${catLabel.toLowerCase()}!`)
+          : `💰 Sold for $${result.soldValue} — your current ${catLabel.toLowerCase()} is already better`}
+      </div>
+    </div>
+  `;
+}
+
+function renderLootRevealBody(item, previousItem, result){
+  const rarity = RARITY_TIERS[item.tier-1];
+  const statRows = Object.entries(item.statBonuses).map(([key,val]) =>
+    `<div class="reveal-stat-row"><span>${capitalize(key)}</span><span style="color:${rarity.color}; font-weight:700;">+${val}</span></div>`
+  ).join('');
+
+  return `
+    <div class="reveal-card">
+      <div class="reveal-icon">${item.icon}</div>
+      <div class="reveal-rarity" style="color:${rarity.color};">${rarity.name}</div>
+      <div class="reveal-name">${itemDisplayName(item)} • Item Power ${item.itemPower}</div>
+      ${renderRollQualityBadge(item.rollQuality)}
+      <div class="reveal-stats">${statRows}</div>
+      <div class="reveal-outcome ${result.equipped ? 'equipped' : 'sold'}">
+        ${result.equipped
+          ? (previousItem ? `✅ Equipped! Replaced your old gear (sold for $${result.soldValue})` : `✅ Equipped — your first item in this slot!`)
+          : `💰 Sold for $${result.soldValue} — your equipped gear was already better`}
+      </div>
+    </div>
+  `;
+}
+
+document.getElementById('loot-modal-close').addEventListener('click', () => {
+  document.getElementById('loot-modal').style.display = 'none';
+});
+document.getElementById('loot-modal').addEventListener('click', (e) => {
+  if(e.target.id === 'loot-modal') document.getElementById('loot-modal').style.display = 'none';
+});
+
+/* ---------------------------- GEAR DETAIL VIEWER ---------------------------- */
+function viewGearSlot(slotKey){
+  const slot = GEAR_SLOT_DEFS.find(s => s.key === slotKey);
+  const item = state.fighter.equipment[slotKey];
+  document.getElementById('gear-modal-title').textContent = slot.label;
+  document.getElementById('gear-modal-body').innerHTML = renderGearDetailBody(slot, item);
+  document.getElementById('gear-modal').style.display = 'flex';
+}
+
+function viewVehicle(category){
+  const cat = VEHICLE_CATEGORIES[category];
+  document.getElementById('gear-modal-title').textContent = cat.label;
+  document.getElementById('gear-modal-body').innerHTML = renderGearDetailBody({icon:cat.icon}, state.garage[category]);
+  document.getElementById('gear-modal').style.display = 'flex';
+}
+
+function renderGearDetailBody(slot, item){
+  if(!item){
+    const isVehicle = !slot.key;
+    return `
+      <div class="reveal-card">
+        <div class="reveal-icon" style="opacity:0.35;">${slot.icon}</div>
+        <div class="reveal-name" style="margin-top:8px;">${isVehicle ? 'No vehicle in this slot yet.' : 'No item equipped in this slot yet.'}</div>
+        <div style="font-size:12px; color:var(--text-muted); margin-top:6px;">${isVehicle ? 'Loot boxes have a small chance of containing a vehicle for this category.' : 'Win fights to earn loot boxes — better gear here will auto-equip.'}</div>
+      </div>
+    `;
+  }
+  const rarity = RARITY_TIERS[item.tier-1];
+  const displayName = item.slotKey ? itemDisplayName(item) : `${item.rarityName} ${item.name}`;
+  const statRows = Object.entries(item.statBonuses).map(([key,val]) =>
+    `<div class="reveal-stat-row"><span>${capitalize(key)}</span><span style="color:${rarity.color}; font-weight:700;">+${val}</span></div>`
+  ).join('');
+  return `
+    <div class="reveal-card">
+      <div class="reveal-icon">${item.icon}</div>
+      <div class="reveal-rarity" style="color:${rarity.color};">${rarity.name}</div>
+      <div class="reveal-name">${displayName} • Item Power ${item.itemPower}</div>
+      <div class="reveal-stats">${statRows}</div>
+      <div style="margin-top:14px; font-size:11px; color:var(--text-muted); text-align:center;">
+        Source: ${item.source === 'tierup' ? 'Tier-Up Reward' : 'Loot Box'} • Tier ${item.tier} of 10
+      </div>
+    </div>
+  `;
+}
+
+document.getElementById('gear-modal-close').addEventListener('click', () => {
+  document.getElementById('gear-modal').style.display = 'none';
+});
+document.getElementById('gear-modal').addEventListener('click', (e) => {
+  if(e.target.id === 'gear-modal') document.getElementById('gear-modal').style.display = 'none';
+});
+
+/* ---------------------------- CONFIRM MODAL ---------------------------- */
+let _pendingConfirmAction = null;
+
+function showConfirm(title, text, onConfirm){
+  document.getElementById('confirm-modal-title').textContent = title;
+  document.getElementById('confirm-modal-text').textContent = text;
+  _pendingConfirmAction = onConfirm;
+  document.getElementById('confirm-modal').style.display = 'flex';
+}
+
+document.getElementById('confirm-modal-ok').addEventListener('click', () => {
+  document.getElementById('confirm-modal').style.display = 'none';
+  const action = _pendingConfirmAction;
+  _pendingConfirmAction = null;
+  if(action) action();
+});
+document.getElementById('confirm-modal-cancel').addEventListener('click', () => {
+  document.getElementById('confirm-modal').style.display = 'none';
+  _pendingConfirmAction = null;
+});
+
+/* ---------------------------- SHOP MODAL ---------------------------- */
+function openShopToTab(tab){
+  activeShopTab = tab;
+  document.querySelectorAll('.shop-tab-btn').forEach(b => b.classList.toggle('active', b.dataset.shopTab === tab));
+  renderShopBody();
+  document.getElementById('shop-modal').style.display = 'flex';
+}
+document.getElementById('shop-toggle-btn').addEventListener('click', () => openShopToTab('featured'));
+document.getElementById('shop-modal-close').addEventListener('click', () => {
+  document.getElementById('shop-modal').style.display = 'none';
+});
+document.getElementById('shop-modal').addEventListener('click', (e) => {
+  if(e.target.id === 'shop-modal') document.getElementById('shop-modal').style.display = 'none';
+});
+document.querySelectorAll('.shop-tab-btn').forEach(btn => {
+  btn.addEventListener('click', () => {
+    activeShopTab = btn.dataset.shopTab;
+    document.querySelectorAll('.shop-tab-btn').forEach(b => b.classList.toggle('active', b === btn));
+    renderShopBody();
+  });
+});
+
+/* ---------------------------- WELCOME BACK MODAL ---------------------------- */
+document.getElementById('welcome-modal-close').addEventListener('click', () => {
+  document.getElementById('welcome-modal').style.display = 'none';
+});
+document.getElementById('welcome-modal').addEventListener('click', (e) => {
+  if(e.target.id === 'welcome-modal') document.getElementById('welcome-modal').style.display = 'none';
+  if(e.target.id === 'welcome-modal-ok') document.getElementById('welcome-modal').style.display = 'none';
+});
+
+/* ---------------------------- LEVEL-UP NOTICES MODAL ---------------------------- */
+function openLevelUpNotices(){
+  const body = document.getElementById('levelup-modal-body');
+  if(state.recentLevelUps.length === 0){
+    body.innerHTML = `<div class="empty-state" style="padding:24px 14px;">No level-ups yet — win some fights or put in training reps to start climbing.</div>`;
+  } else {
+    body.innerHTML = state.recentLevelUps.map(entry => `
+      <div class="card" style="display:flex; justify-content:space-between; align-items:center;">
+        <div style="font-family:'Oswald',sans-serif; font-weight:700; font-size:14px;">⭐ Level ${entry.level}</div>
+        <div style="font-size:12px; color:var(--champ-teal); text-align:right;">${entry.bonus}</div>
+      </div>
+    `).join('');
+  }
+  // Opening the panel acknowledges every level gained since the last time it was opened —
+  // same "visiting clears the badge" pattern as the bottom-nav badges.
+  state.ui.lastAckedLevel = state.fighter.level;
+  document.getElementById('levelup-modal').style.display = 'flex';
+  render(); // clears the FAB badge immediately
+}
+document.getElementById('levelup-modal-close').addEventListener('click', () => {
+  document.getElementById('levelup-modal').style.display = 'none';
+});
+document.getElementById('levelup-modal').addEventListener('click', (e) => {
+  if(e.target.id === 'levelup-modal') document.getElementById('levelup-modal').style.display = 'none';
+});
+
+/* ---------------------------- ROLES INFO MODAL ---------------------------- */
+document.getElementById('roles-info-modal-close').addEventListener('click', () => {
+  document.getElementById('roles-info-modal').style.display = 'none';
+});
+document.getElementById('roles-info-modal').addEventListener('click', (e) => {
+  if(e.target.id === 'roles-info-modal') document.getElementById('roles-info-modal').style.display = 'none';
+});
+
+/* ---------------------------- GYM PREVIEW MODAL ---------------------------- */
+document.getElementById('gympreview-modal-close').addEventListener('click', () => {
+  document.getElementById('gympreview-modal').style.display = 'none';
+});
+document.getElementById('gympreview-modal').addEventListener('click', (e) => {
+  if(e.target.id === 'gympreview-modal') document.getElementById('gympreview-modal').style.display = 'none';
+});
+
+/* ---------------------------- PRESTIGE REROLL MODAL ---------------------------- */
+document.getElementById('reroll-modal-close').addEventListener('click', () => {
+  document.getElementById('reroll-modal').style.display = 'none';
+});
+document.getElementById('reroll-modal').addEventListener('click', (e) => {
+  if(e.target.id === 'reroll-modal') document.getElementById('reroll-modal').style.display = 'none';
+});
+
+/* ---------------------------- ONBOARDING ---------------------------- */
+let selectedGender = null;
+let selectedOrientation = null;
+
+let rolledAppearance = null;
+
+// Shared by onboarding's rollAppearance() and the post-prestige reroll prompt — one place that
+// knows how to generate a full random look, rather than duplicating the field list in two spots.
+function generateRandomAppearance(){
+  const build = BUILD_KEYS[Math.floor(Math.random()*BUILD_KEYS.length)];
+  const bodyShapeKeys = Object.keys(BODY_SHAPES); // all 5 available regardless of gender — player's own choice
+  const eyeStyles = ['calm','focused','fierce'];
+  return {
+    build,
+    bodyShape: bodyShapeKeys[Math.floor(Math.random()*bodyShapeKeys.length)],
+    skin: SKIN_TONES[Math.floor(Math.random()*SKIN_TONES.length)],
+    gear: GEAR_COLORS[Math.floor(Math.random()*GEAR_COLORS.length)],
+    gloves: true,
+    shoes: true,
+    tattoo: Math.random() < 0.4,
+    traitLabel: BUILD_VARIANTS[build].label,
+    hairStyle: HAIR_STYLES[1 + Math.floor(Math.random()*(HAIR_STYLES.length-1))], // skip 'none'
+    hairColor: HAIR_COLORS[Math.floor(Math.random()*HAIR_COLORS.length)],
+    eyeColor: HAIR_COLORS[Math.floor(Math.random()*HAIR_COLORS.length)],
+    eyeStyle: eyeStyles[Math.floor(Math.random()*eyeStyles.length)],
+    jewelry: false,
+    jewelryColor: '#F2C744',
+    poster: 'none',
+  };
+}
+
+function rollAppearance(){
+  rolledAppearance = generateRandomAppearance();
+  renderRandoPreview();
+}
+
+// Post-prestige "new look?" prompt — deliberately OPTIONAL rather than auto-applied. Prestige
+// already resets stats/gear/tier; forcing a new random appearance on top risks feeling like a
+// loss for anyone attached to their fighter's current look, rather than a bonus. Only overwrites
+// the "look randomizer" fields (build/shape/skin/hair/eyes/tattoo) — leaves gloves/shoes/jewelry/
+// poster/premium cosmetics alone, since those are separate purchase-driven choices, not part of
+// what a random reroll should touch.
+let prestigeRerollCandidate = null;
+function offerPrestigeReroll(){
+  prestigeRerollCandidate = generateRandomAppearance();
+  renderPrestigeRerollPreview();
+  document.getElementById('reroll-modal').style.display = 'flex';
+}
+function renderPrestigeRerollPreview(){
+  const body = document.getElementById('reroll-modal-body');
+  body.innerHTML = `
+    <div style="font-size:12px; color:var(--text-muted); text-align:center; margin-bottom:10px;">
+      Your career just reset — want a fresh look to go with it? Totally optional.
+    </div>
+    <svg viewBox="0 0 140 190" style="width:140px; height:190px; display:block; margin:0 auto;">${renderFighterRig('idle', prestigeRerollCandidate)}</svg>
+    <div style="text-align:center; font-size:12px; color:var(--champ-teal); margin:8px 0;">
+      ${BODY_SHAPES[prestigeRerollCandidate.bodyShape]?.label || prestigeRerollCandidate.bodyShape} • ${prestigeRerollCandidate.traitLabel}
+    </div>
+    <button class="btn btn-gold btn-block" id="reroll-again-btn" style="margin-bottom:8px;">🎲 Reroll Again</button>
+    <button class="btn btn-teal btn-block" id="reroll-use-btn" style="margin-bottom:8px;">Use This Look</button>
+    <button class="btn btn-ghost btn-block" id="reroll-keep-btn">Keep My Current Look</button>
+  `;
+  document.getElementById('reroll-again-btn').addEventListener('click', offerPrestigeReroll);
+  document.getElementById('reroll-use-btn').addEventListener('click', () => {
+    const c = prestigeRerollCandidate;
+    Object.assign(state.fighter.appearance, {
+      build: c.build, bodyShape: c.bodyShape, skin: c.skin, gear: c.gear, tattoo: c.tattoo,
+      traitLabel: c.traitLabel, hairStyle: c.hairStyle, hairColor: c.hairColor,
+      eyeColor: c.eyeColor, eyeStyle: c.eyeStyle,
+    });
+    document.getElementById('reroll-modal').style.display = 'none';
+    render();
+    scheduleSave();
+    showToast('New look applied!');
+  });
+  document.getElementById('reroll-keep-btn').addEventListener('click', () => {
+    document.getElementById('reroll-modal').style.display = 'none';
+  });
+}
+
+function renderRandoPreview(){
+  const svg = document.getElementById('rando-svg');
+  svg.innerHTML = renderFighterRig('idle', rolledAppearance);
+  document.getElementById('rando-trait-label').textContent =
+    `${rolledAppearance.traitLabel} — ` + Object.entries(BUILD_VARIANTS[rolledAppearance.build].trait)
+      .map(([k,v]) => `+${v} ${capitalize(k)}`).join(', ');
+}
+
+document.querySelectorAll('#ob-gender .ob-option').forEach(opt => {
+  opt.addEventListener('click', () => {
+    document.querySelectorAll('#ob-gender .ob-option').forEach(o => o.classList.remove('selected'));
+    opt.classList.add('selected');
+    selectedGender = opt.dataset.val;
+  });
+});
+document.querySelectorAll('#ob-orientation .ob-option').forEach(opt => {
+  opt.addEventListener('click', () => {
+    document.querySelectorAll('#ob-orientation .ob-option').forEach(o => o.classList.remove('selected'));
+    opt.classList.add('selected');
+    selectedOrientation = opt.dataset.val;
+  });
+});
+
+document.getElementById('ob-next').addEventListener('click', () => {
+  const nameInput = document.getElementById('ob-name');
+  const name = nameInput.value.trim();
+  if(!name){ nameInput.style.borderColor = 'var(--corner-red)'; nameInput.focus(); return; }
+  if(!selectedGender){ showToast('Select a gender to continue'); return; }
+  if(!selectedOrientation){ showToast('Select who you\'re interested in'); return; }
+
+  document.getElementById('ob-step1').style.display = 'none';
+  document.getElementById('ob-step2').style.display = 'block';
+  rollAppearance();
+});
+
+document.getElementById('ob-back').addEventListener('click', () => {
+  document.getElementById('ob-step2').style.display = 'none';
+  document.getElementById('ob-step1').style.display = 'block';
+});
+
+document.getElementById('ob-reroll').addEventListener('click', rollAppearance);
+
+document.getElementById('ob-confirm').addEventListener('click', () => {
+  const name = document.getElementById('ob-name').value.trim();
+
+  state.fighter.name = name;
+  state.fighter.gender = selectedGender;
+  state.fighter.orientation = selectedOrientation;
+  state.fighter.appearance = { ...rolledAppearance };
+  // Apply the build's stat trait bonus as a one-time starting boost
+  Object.entries(BUILD_VARIANTS[rolledAppearance.build].trait).forEach(([statKey, bonus]) => {
+    state.fighter.stats[statKey] += bonus;
+  });
+  state.meta.createdAt = Date.now();
+  state.meta.lastTick = Date.now();
+
+  document.getElementById('onboard').style.display = 'none';
+  pushLog(`${name} steps into the gym for the first time.`, 'level');
+  render();
+  saveGame(); // immediate, not debounced — this is the one moment we really can't afford to lose
+});
+
+/* ---------------------------- MAIN LOOP / INIT ---------------------------- */
+function startLoop(){
+  // Slow tick: game logic (training/fighting resolution, stats, XP) — once per second is plenty.
+  setInterval(() => {
+    // Skip all work while backgrounded (screen off, app switched away, etc.) — there's nothing
+    // to render anyway, and processOfflineProgress() already fills the exact gap this creates
+    // the moment the tab becomes visible again. This is a real battery/CPU win on mobile: without
+    // it, some WebViews keep firing this tick (throttled but nonzero) the whole time it's hidden.
+    if(document.hidden) return;
+    const sb = state.speedBoost;
+    const boosted = sb.noAdsOwned || sb.bankedMs > 0;
+    gameTick(TICK_MS * (boosted ? 2 : 1));
+    if(boosted && !sb.noAdsOwned) sb.bankedMs = Math.max(0, sb.bankedMs - TICK_MS);
+    state.meta.lastTick = Date.now();
+    render();
+    const logModal = document.getElementById('log-modal');
+    if(logModal && logModal.style.display === 'flex'){
+      document.getElementById('log-modal-body').innerHTML = renderLogModalBody();
+    }
+  }, TICK_MS);
+
+  // Runs every 10s: saveGame() itself now saves LOCAL every call (free, instant) but only
+  // pushes to the CLOUD every ~90s (see CLOUD_SYNC_INTERVAL_MS) — the local layer is what
+  // actually protects against losing recent progress on a crash/close at this cadence, not
+  // hammering Firestore's write quota for it.
+  setInterval(() => {
+    if(state.fighter.name) saveGame();
+    // Push this player's weekly league contribution + activity heartbeat to shared storage too,
+    // but throttled to once a minute (not every 10s) since these are writes to shared,
+    // all-players storage. The heartbeat is what keeps an active-but-League-tab-avoidant player
+    // from getting auto-kicked for "inactivity" they aren't actually guilty of.
+    if(state.social.leagueId && Date.now() - lastWeeklyPushAt > 60000){
+      pushWeeklyStats();
+      pushActivityHeartbeat();
+    }
+  }, 10000);
+
+  // Fast tick: combat animation + bout state machine. The state machine itself (updateBout /
+  // updateCombatAnimation) MUST run regardless of which in-app tab is active — otherwise a bout
+  // started while the player is on Career/Gym/Home/Corner would freeze mid-fight and never
+  // resolve until they switch back, silently pausing wins/cash/XP/loot. Only the DOM-patching
+  // (querySelector/innerHTML for the visual scene) is skipped when off the Fighter tab, since
+  // there's nothing on-screen to update there anyway.
+  setInterval(() => {
+    if(document.hidden) return; // same battery rationale as the slow tick above
+    const prevPhase = state.bout.phase;
+
+    // Hype charge decays 1 point every ~3s of no taps, so it rewards active bursts of clicking
+    // without letting a single flurry provide a permanent, un-decaying bonus forever.
+    if(state.clickCombat.charge > 0 && Date.now() - state.clickCombat.lastClickAt > 3000){
+      state.clickCombat.charge = Math.max(0, state.clickCombat.charge - 1);
+      state.clickCombat.lastClickAt = Date.now();
+      state.clickCombat.combo = 0; // a real pause breaks the tap-combo streak too, not just charge
+    }
+
+    if(state.bout.phase === 'none'){
+      updateCombatAnimation();
+    } else {
+      updateBout();
+    }
+
+    if(activeTab !== 'fighter') return; // nothing visible to patch on other tabs
+
+    // Phase transitions need a full re-render (pre-fight card / result banner appear or disappear).
+    if(state.bout.phase !== prevPhase){
+      render();
+      return;
+    }
+
+    // Otherwise just patch the SVG(s) in place for smooth animation without full DOM rebuild.
+    if(state.bout.phase === 'none'){
+      const sceneFighter = document.querySelector('.scene-fighter.is-player');
+      if(sceneFighter && state.fighter.name){
+        sceneFighter.innerHTML = renderFighterRig(state.combatAnim.currentPose, state.fighter.appearance);
+      }
+    } else if(state.bout.phase === 'exchange' || state.bout.phase === 'resolved'){
+      const playerEl = document.querySelector('.scene-fighter.is-player');
+      const oppEl = document.querySelector('.scene-fighter.is-opponent');
+      if(playerEl) playerEl.innerHTML = renderFighterRig(state.bout.playerPose, state.fighter.appearance);
+      if(oppEl && state.bout.opponent) oppEl.innerHTML = renderFighterRig(state.bout.opponentPose, state.bout.opponent.appearance, true);
+
+      const playerHpFill = document.querySelector('.fightcard-edge.is-left .hp-fill');
+      const oppHpFill = document.querySelector('.fightcard-edge.is-right .hp-fill');
+      const playerHpNum = document.querySelector('.fightcard-edge.is-left .fightcard-hp-num');
+      const oppHpNum = document.querySelector('.fightcard-edge.is-right .fightcard-hp-num');
+      if(playerHpFill){
+        const pct = clamp((state.bout.playerHp / state.bout.playerMaxHp) * 100, 0, 100);
+        playerHpFill.style.width = pct + '%';
+        playerHpFill.classList.toggle('low', pct < 30);
+        if(playerHpNum) playerHpNum.textContent = `${Math.max(0,Math.round(state.bout.playerHp))} / ${state.bout.playerMaxHp}`;
+      }
+      if(oppHpFill){
+        const pct = clamp((state.bout.opponentHp / state.bout.opponentMaxHp) * 100, 0, 100);
+        oppHpFill.style.width = pct + '%';
+        oppHpFill.classList.toggle('low', pct < 30);
+        if(oppHpNum) oppHpNum.textContent = `${Math.max(0,Math.round(state.bout.opponentHp))} / ${state.bout.opponentMaxHp}`;
+      }
+    }
+  }, 200);
+}
+
+/* ========================================================================
+   PERSISTENCE MODULE — local-first, cloud-backed.
+   Saving to Firestore on every tick was needlessly expensive (a real
+   constraint on the free tier's daily write quota) for a game that's
+   mostly idle ticks, not meaningful new content each time. New model:
+     - LOCAL (localStorage): saved constantly (every 10s) — free, instant,
+       no network round-trip, protects against a crash/close losing recent
+       progress. Safe to use here specifically because this now runs as a
+       real hosted site, not the old Claude.ai artifact sandbox that
+       required avoiding browser storage.
+     - CLOUD (Firestore): synced far less often (every 90s) plus on a few
+       high-value moments (prestige, purchases) and when the tab is
+       backgrounded/closed — cuts cloud writes by roughly 9x versus before,
+       while still keeping a reasonably fresh cross-device backup.
+   On load: local is tried first for an instant boot, then Firestore is
+   checked in the background — if the cloud copy is NEWER (e.g. you played
+   on another device since), it overwrites what local just loaded.
+   ======================================================================== */
+const SAVE_KEY = 'mma_save_v1';
+const LOCAL_SAVE_KEY = 'mma_local_save_v1'; // separate localStorage key, deliberately not reusing SAVE_KEY
+const CLOUD_SYNC_INTERVAL_MS = 90000; // was every 10s; 9x fewer Firestore writes
+let saveTimer = null;
+let saveInProgress = false;
+let lastCloudSaveAt = 0;
+
+function scheduleSave(){
+  clearTimeout(saveTimer);
+  saveTimer = setTimeout(saveGame, 1500);
+}
+
+// Instant, free, local save — call this as often as you want (every 10s, every meaningful
+// action) since it costs nothing and never touches the network.
+function saveLocal(){
+  try {
+    state.meta.lastSavedAt = Date.now();
+    localStorage.setItem(LOCAL_SAVE_KEY, JSON.stringify(state));
+    return true;
+  } catch(e) {
+    // localStorage can fail (private browsing quirks, storage full, disabled) — not fatal, the
+    // cloud save is still the real backstop.
+    console.error('Local save failed:', e);
+    return false;
+  }
+}
+
+let saveFailureCount = 0;
+let saveWarningShown = false;
+
+// Cloud (Firestore) save — the expensive one, so this is throttled unless forced=true (used for
+// high-value moments like prestige/purchases, or when the tab is about to be backgrounded/closed).
+async function saveToCloud(forced=false){
+  if(saveInProgress) return;
+  if(!forced && Date.now() - lastCloudSaveAt < CLOUD_SYNC_INTERVAL_MS) return;
+  saveInProgress = true;
+  try {
+    state.meta.lastSavedAt = Date.now();
+    const payload = JSON.stringify(state);
+    await window.storage.set(SAVE_KEY, payload, false);
+    lastCloudSaveAt = Date.now();
+    saveFailureCount = 0; // storage recovered — reset so a future outage logs/warns again
+  } catch(e) {
+    saveFailureCount++;
+    // A broken storage bridge would otherwise print this exact error every cycle forever — only
+    // log it loudly a few times, then go quiet so it doesn't drown out everything else.
+    if(saveFailureCount <= 3) console.error('Cloud save failed:', e);
+    if(saveFailureCount === 3 && !saveWarningShown){
+      saveWarningShown = true;
+      showToast('⚠️ Cloud backup isn\'t syncing right now — your local save is still fine on this device');
+    }
+  } finally {
+    saveInProgress = false;
+  }
+}
+
+// Saves to BOTH layers — local always (cheap), cloud only if the throttle window has passed
+// (or is forced). This is what scheduleSave()/the autosave interval actually call.
+async function saveGame(forced=false){
+  saveLocal();
+  await saveToCloud(forced);
+}
+
+// Loads local first (instant), then checks Firestore in the background and overwrites with the
+// cloud copy if it's actually newer — handles "played on another device since" correctly without
+// making every boot wait on a network round-trip.
+async function loadGame(){
+  let hasLocal = false;
+  try {
+    const raw = localStorage.getItem(LOCAL_SAVE_KEY);
+    if(raw){
+      deepMerge(state, JSON.parse(raw));
+      hasLocal = true;
+    }
+  } catch(e) {
+    console.error('Local load failed:', e);
+  }
+
+  // Check the cloud copy in the background regardless — either to establish the initial save
+  // (no local copy yet, e.g. first time on a new device) or to pick up a newer cross-device save.
+  try {
+    const result = await window.storage.get(SAVE_KEY, false);
+    if(result && result.value){
+      const cloudState = JSON.parse(result.value);
+      const cloudIsNewer = !hasLocal || (cloudState.meta && cloudState.meta.lastSavedAt > state.meta.lastSavedAt);
+      if(cloudIsNewer){
+        deepMerge(state, cloudState);
+        saveLocal(); // mirror the newer cloud copy into local so this device's cache is caught up
+      }
+      hasLocal = true; // either the local copy or the cloud copy (or both) are now loaded
+    }
+  } catch(e) {
+    // Expected if there's no cloud save yet (brand new player, or first Firestore write hasn't
+    // happened for this device/account) — only worth logging if we ALSO have no local save,
+    // since that combination means this really is a fresh player with nothing anywhere.
+    if(!hasLocal) console.log('No existing save found anywhere (or load failed), starting fresh:', e.message);
+  }
+
+  return hasLocal;
+}
+
+function deepMerge(target, source){
+  for(const key in source){
+    if(source[key] === null || typeof source[key] !== 'object' || Array.isArray(source[key])){
+      target[key] = source[key];
+    } else {
+      if(typeof target[key] !== 'object' || target[key] === null) target[key] = {};
+      deepMerge(target[key], source[key]);
+    }
+  }
+}
+
+function init(){
+  startLoop();
+}
+
+// Browsers throttle (or fully suspend) setInterval timers in backgrounded tabs to save
+// battery/CPU — this means training/fighting can appear to "stop" while the player is on
+// another browser tab. Fix: when the tab becomes visible again, immediately run the same
+// catch-up simulation used for offline progress, so elapsed time is never silently lost.
+document.addEventListener('visibilitychange', () => {
+  if(document.visibilityState === 'visible' && state.fighter.name){
+    processOfflineProgress();
+    render();
+  } else if(document.visibilityState === 'hidden' && state.fighter.name){
+    // Going to background (switching apps, locking the phone) — force a cloud sync right now
+    // rather than waiting out the normal 90s throttle. Local save already happened as recently
+    // as the last 10s tick regardless, so this is specifically about not leaving the CLOUD
+    // backup stale if the player closes/reinstalls/switches devices shortly after backgrounding.
+    saveToCloud(true);
+  }
+});
+
+async function bootGame(){
+  const hasSave = await loadGame();
+  ensurePlayerId();
+  ensureDailyReset();
+  if(hasSave && state.fighter.name){
+    // Migration safety net: saves created before hair/jewelry/poster existed won't have these
+    // fields after deepMerge (since the saved object simply doesn't contain them to merge in).
+    // Fill in sane defaults so the UI never shows "undefined".
+    const appearanceDefaults = { hairStyle:'short', hairColor:'#1A1A1A', eyeColor:'#1A1A1A', eyeStyle:'focused', bodyShape:'athletic', jewelry:false, jewelryColor:'#F2C744', poster:'none', cosmetics:{ goldChain:false, flameAura:false, diamondTatt:false, royalRobe:false } };
+    Object.entries(appearanceDefaults).forEach(([key, val]) => {
+      if(state.fighter.appearance[key] === undefined) state.fighter.appearance[key] = val;
+    });
+    // Returning player — skip onboarding, jump straight into the game.
+    document.getElementById('onboard').style.display = 'none';
+    // Resume offline-progress calculation now that we have real fighter data.
+    processOfflineProgress();
+    render();
+  }
+  // If no save (or save had no fighter yet), onboarding stays visible as normal —
+  // its existing confirm handler will create state.fighter and call render().
+  init();
+  document.body.classList.add('boot-ready'); // reveals #app / hides the loading overlay now that
+                                               // we've actually decided onboarding vs. resumed save
+}
+
+// Wait for Firebase Anonymous Auth before booting — otherwise loadGame()'s very first
+// window.storage.get() call would fire before we have a uid to scope the save to.
+_authReady.then(async () => {
+  await handleGoogleRedirectResult(); // no-op unless we're returning from a Google sign-in redirect
+  bootGame();
+}).catch((e) => {
+  console.error('Firebase auth failed, cannot load save:', e);
+  bootGame(); // still boot so onboarding is at least reachable, even though saves won't work
+});
+
+// Registers sw.js for offline caching + installability (part of the path toward a Trusted Web
+// Activity Play Store listing — see the accompanying manifest.json/sw.js). Wrapped defensively:
+// service workers require a real top-level HTTPS origin, so this is a silent no-op inside a
+// sandboxed artifact preview and only actually does anything once self-hosted on a real domain.
+if('serviceWorker' in navigator){
+  window.addEventListener('load', () => {
+    navigator.serviceWorker.register('sw.js').catch(() => { /* expected in sandboxed/preview contexts */ });
+  });
+}
+</script>
+</body>
+</html>
