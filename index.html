@@ -42,7 +42,16 @@
     max-width:480px; margin:0 auto; height:100vh; height:100dvh;
     display:flex; flex-direction:column; background:var(--bg-floor);
     position:relative; border-left:1px solid var(--border-soft); border-right:1px solid var(--border-soft);
+    visibility:hidden; /* stays hidden until bootGame() finishes deciding onboarding-vs-save */
   }
+  body.boot-ready #app{ visibility:visible; }
+  body.boot-ready #boot-loading{ display:none; }
+  #boot-loading{
+    position:fixed; inset:0; z-index:200; background:var(--bg-floor);
+    display:flex; flex-direction:column; align-items:center; justify-content:center; gap:10px;
+    font-family:'Oswald',sans-serif; color:var(--text-muted);
+  }
+  #boot-loading .boot-icon{ font-size:40px; }
 
   /* ---------- TOP STAT BAR ---------- */
   #topbar{
@@ -185,6 +194,10 @@
   .hype-fill{
     position:absolute; bottom:0; left:0; width:100%;
     background:linear-gradient(0deg, var(--belt-gold), var(--corner-red)); transition:height 0.2s ease;
+  }
+  .hype-combo{
+    font-family:'Oswald',sans-serif; font-size:11px; font-weight:700; color:var(--corner-red);
+    text-shadow:0 1px 3px rgba(0,0,0,0.9);
   }
   .tap-hint{
     text-align:center; font-size:10px; color:var(--text-muted); margin-top:6px;
@@ -385,6 +398,7 @@
   .gear-slot-label{
     font-family:'Oswald',sans-serif; font-size:9px; letter-spacing:0.3px;
     text-transform:uppercase; color:var(--text-muted);
+    text-align:center; line-height:1.25; word-break:break-word; padding:0 2px;
   }
   .gear-slot-power{ font-family:'Oswald',sans-serif; font-size:10px; font-weight:700; }
 
@@ -575,6 +589,7 @@
 </head>
 <body>
 
+<div id="boot-loading"><div class="boot-icon">🥊</div><div>Loading…</div></div>
 <div id="app">
 
   <!-- ONBOARDING -->
@@ -709,6 +724,17 @@
     </div>
   </div>
 
+  <!-- ROLES INFO MODAL -->
+  <div id="roles-info-modal" class="modal-overlay" style="display:none;">
+    <div class="modal-card">
+      <div class="modal-header">
+        <div class="modal-title">🏋️ Gym Roles</div>
+        <button class="modal-close" id="roles-info-modal-close">✕</button>
+      </div>
+      <div class="modal-body" id="roles-info-modal-body"></div>
+    </div>
+  </div>
+
   <!-- GYM PREVIEW MODAL -->
   <div id="gympreview-modal" class="modal-overlay" style="display:none;">
     <div class="modal-card">
@@ -758,10 +784,10 @@
   <div id="bottomnav">
     <button class="nav-btn active" data-tab="fighter"><span class="nav-icon">🥊<span class="nav-badge" id="badge-fighter" style="display:none;"></span></span>FIGHTER</button>
     <button class="nav-btn" data-tab="career"><span class="nav-icon">🏟️<span class="nav-badge" id="badge-career" style="display:none;"></span></span>CAREER</button>
-    <button class="nav-btn" data-tab="gym"><span class="nav-icon">🏋️</span>GYM</button>
+    <button class="nav-btn" data-tab="gym"><span class="nav-icon">🏋️</span>TRAIN</button>
     <button class="nav-btn" data-tab="home"><span class="nav-icon">🏠</span>HOME</button>
     <button class="nav-btn" data-tab="companions"><span class="nav-icon">❤️</span>CORNER</button>
-    <button class="nav-btn" data-tab="league"><span class="nav-icon">🌐<span class="nav-badge" id="badge-league" style="display:none;"></span></span>LEAGUE</button>
+    <button class="nav-btn" data-tab="league"><span class="nav-icon">🌐<span class="nav-badge" id="badge-league" style="display:none;"></span></span>GYM</button>
   </div>
 
 </div>
@@ -868,6 +894,10 @@ let state = {
     wins: 0,
     losses: 0,
     tier: 'Amateur',
+    hallOfFameEnteredAtWins: null, // f.wins value at the moment tier first became Hall of Fame
+                                     // this run — retention % is based on wins EARNED SINCE this
+                                     // point, not lifetime wins, so reaching Hall of Fame always
+                                     // starts everyone at ~0% and genuinely rewards grinding further.
     stats: {
       power: 5,
       speed: 5,
@@ -919,6 +949,7 @@ let state = {
     everSpentReal: false, // true after ANY real-money purchase — gates the one-time Founder's Bundle
     unlockedPromoOffers: [], // promo-code-gated Shop offers unlocked so far (see VIPACCESS dev code)
     spendCapDisabled: false, // testing-only override — see QAUNLIMITED dev code
+    realPurchasesUnlocked: false, // real-money "Buy" buttons stay locked until QAPURCHASE is redeemed
     teethSpentWeekKey: '',      // local week bucket (see getWeekKey) for the Teeth Spent leaderboard
     teethSpentThisWeek: 0,      // resets when teethSpentWeekKey rolls over — tracks spend, not earnings
     lastTeethSpendPayoutWeekKey: '', // most recent week this player's rebate has been settled for
@@ -934,6 +965,7 @@ let state = {
   clickCombat: {
     charge: 0,           // 0-20 "hype" built up by tapping the fight scene; boosts crit chance
     lastClickAt: 0,
+    combo: 0,             // consecutive RAPID taps (see handleFightSceneClick) — drives the up-to-10x multiplier
   },
   roulette: {
     cycleStart: 0,       // when the current prize set was rolled; refreshes every few days
@@ -1002,6 +1034,9 @@ let state = {
                                                                  // a tab acknowledges/hides its
                                                                  // badge until the count changes again
     rosterExpanded: false, // Gym Roster: false = top 5 only, true = all members
+    bulkBuyQty: 1, // 1 | 10 | 100 | 'max' — shared quantity toggle for Equipment/Home Perks/Power-Ups
+    gearExpanded: true,   // Fighter tab Gear grid — collapsible instead of always open
+    garageExpanded: true, // Home tab Garage grid — collapsible instead of always open
     tiersExpanded: false,  // Career Tiers list: false = first 5 only, true = all 10
     lastAckedLevel: 0,     // fighter.level as of the last time the notifications panel was opened
                             // — badge count is simply (current level - this), see updateNavBadges
@@ -2073,11 +2108,20 @@ function capitalize(s){ return s.charAt(0).toUpperCase() + s.slice(1); }
 
 // Tapping the fight scene lets an active player push the animation along faster (skips the
 // remaining wait on the current beat) and builds "hype" charge that grants bonus crit chance
-// on the fighter's next bout — a small, tangible reward for smash-clicking rather than idling.
+// on the fighter's next bout. Sustained RAPID tapping (each tap within 700ms of the last) builds
+// a combo multiplier up to 10x on how much charge each tap adds — so an actively-tapping player
+// with good stats can hit max charge (and max crit bonus) in a couple of seconds instead of
+// slowly accumulating it one tap at a time, directly rewarding active engagement with faster wins.
+const HYPE_COMBO_WINDOW_MS = 700;
+const HYPE_COMBO_MAX_MULTIPLIER = 10;
 function handleFightSceneClick(){
   if(!state.fighter.name) return;
-  state.clickCombat.charge = Math.min(20, (state.clickCombat.charge||0) + 1);
-  state.clickCombat.lastClickAt = Date.now();
+  const now = Date.now();
+  const isRapid = (now - (state.clickCombat.lastClickAt||0)) < HYPE_COMBO_WINDOW_MS;
+  state.clickCombat.combo = isRapid ? Math.min(30, (state.clickCombat.combo||0) + 1) : 1;
+  const multiplier = Math.min(HYPE_COMBO_MAX_MULTIPLIER, 1 + Math.floor(state.clickCombat.combo / 3));
+  state.clickCombat.charge = Math.min(20, (state.clickCombat.charge||0) + multiplier);
+  state.clickCombat.lastClickAt = now;
   if(state.bout.phase === 'exchange' || state.bout.phase === 'prefight'){
     // Let the very next 200ms tick fire immediately instead of waiting out the beat/prefight timer.
     state.bout.phaseUntil = Date.now();
@@ -2458,6 +2502,7 @@ function renderFighterTab(){
       <div class="hype-meter" title="Tap the ring to build Hype for bonus crit chance next fight">
         <span class="hype-icon">🔥</span>
         <div class="hype-track"><div class="hype-fill" style="height:${(hypeCharge/20)*100}%"></div></div>
+        <span class="hype-combo" style="display:${state.clickCombat.combo > 2 ? 'block' : 'none'};">×${Math.min(10, 1+Math.floor(state.clickCombat.combo/3))}</span>
       </div>
     </div>
     <div class="tap-hint">👊 Tap the ring to speed up exchanges & build Hype for bonus crits</div>
@@ -2473,6 +2518,24 @@ function renderFighterTab(){
       <div class="xp-track">
         <div class="xp-label"><span>Level ${f.level}</span><span>${f.xp} / ${f.xpToNext} XP</span></div>
         <div class="bar-track"><div class="bar-fill xp" style="width:${xpPct}%"></div></div>
+      </div>
+    </div>
+
+    <div class="panel-title">Active Loops</div>
+    <div class="card loop-card">
+      <div class="loop-icon">🏋️</div>
+      <div class="loop-info">
+        <div class="loop-title">Training</div>
+        <div class="loop-desc">Cycles through all 8 stats: Power, Speed, Defense, Stamina, Chin, Technique, Slip, Mental</div>
+        <div class="loop-progress"><div class="bar-track"><div class="bar-fill train" style="width:${trainPct}%"></div></div></div>
+      </div>
+    </div>
+    <div class="card loop-card">
+      <div class="loop-icon">🥊</div>
+      <div class="loop-info">
+        <div class="loop-title">Auto-Fight</div>
+        <div class="loop-desc">Fights for cash & XP based on your stats</div>
+        <div class="loop-progress"><div class="bar-track"><div class="bar-fill fight" style="width:${fightPct}%"></div></div></div>
       </div>
     </div>
 
@@ -2494,32 +2557,25 @@ function renderFighterTab(){
         <div style="font-size:10px; color:var(--text-muted); text-transform:uppercase; letter-spacing:0.5px;">🏋️ Gym Level</div>
         <div style="font-family:'Oswald',sans-serif; font-weight:700; font-size:14px;">${state.social.leagueId ? `Level ${state.social.knownGymLevel||1}` : 'No gym'}</div>
       </button>
-      <button class="progress-stat-btn" data-jump-tab="league">
+      <button class="progress-stat-btn" data-jump-tab="league" style="${state.social.leagueId ? 'grid-column:1 / -1;' : ''}">
         <div style="font-size:10px; color:var(--text-muted); text-transform:uppercase; letter-spacing:0.5px;">🎖️ Membership</div>
-        <div style="font-family:'Oswald',sans-serif; font-weight:700; font-size:14px;">${state.social.leagueId ? currentMembershipTier().name : '—'}</div>
+        ${state.social.leagueId ? (() => {
+          const tier = currentMembershipTier();
+          const next = nextMembershipTier();
+          const pct = next ? clamp((state.social.contributedXp / next.minXp) * 100, 0, 100) : 100;
+          return `
+            <div style="display:flex; justify-content:space-between; align-items:baseline;">
+              <div style="font-family:'Oswald',sans-serif; font-weight:700; font-size:14px;">${tier.name}</div>
+              <div style="font-size:9px; color:var(--text-muted);">${next ? `${state.social.contributedXp}/${next.minXp} XP` : 'Max'}</div>
+            </div>
+            <div class="bar-track" style="margin-top:4px; height:5px;"><div class="bar-fill xp" style="width:${pct}%"></div></div>
+          `;
+        })() : `<div style="font-family:'Oswald',sans-serif; font-weight:700; font-size:14px;">—</div>`}
       </button>
       <button class="progress-stat-btn" data-jump-tab="companions">
         <div style="font-size:10px; color:var(--text-muted); text-transform:uppercase; letter-spacing:0.5px;">❤️ People in Corner</div>
         <div style="font-family:'Oswald',sans-serif; font-weight:700; font-size:14px; color:var(--corner-red);">+${(cornerBonusPct()*100).toFixed(1)}% all stats</div>
       </button>
-    </div>
-
-    <div class="panel-title">Active Loops</div>
-    <div class="card loop-card">
-      <div class="loop-icon">🏋️</div>
-      <div class="loop-info">
-        <div class="loop-title">Training</div>
-        <div class="loop-desc">Cycles through all 8 stats: Power, Speed, Defense, Stamina, Chin, Technique, Slip, Mental</div>
-        <div class="loop-progress"><div class="bar-track"><div class="bar-fill train" style="width:${trainPct}%"></div></div></div>
-      </div>
-    </div>
-    <div class="card loop-card">
-      <div class="loop-icon">🥊</div>
-      <div class="loop-info">
-        <div class="loop-title">Auto-Fight</div>
-        <div class="loop-desc">Fights for cash & XP based on your stats</div>
-        <div class="loop-progress"><div class="bar-track"><div class="bar-fill fight" style="width:${fightPct}%"></div></div></div>
-      </div>
     </div>
 
     <div class="panel-title">Tale of the Tape</div>
@@ -2535,7 +2591,10 @@ function renderFighterTab(){
       })()}
     </div>
 
-    <div class="panel-title">Gear</div>
+    <div class="panel-title" data-toggle-section="gearExpanded" style="cursor:pointer; display:flex; justify-content:space-between; align-items:center;">
+      <span>Gear</span><span style="font-size:12px;">${state.ui.gearExpanded ? '▾' : '▸'}</span>
+    </div>
+    ${state.ui.gearExpanded ? `
     <div class="gear-grid">
       ${GEAR_SLOT_DEFS.map(slot => {
         const item = f.equipment[slot.key];
@@ -2543,12 +2602,13 @@ function renderFighterTab(){
         return `
           <div class="gear-slot ${item ? 'filled' : 'empty'}" style="${item ? `border-color:${rarity.color};` : ''}" data-view-gear="${slot.key}">
             <div class="gear-slot-icon">${item ? item.icon : slot.icon}</div>
-            <div class="gear-slot-label">${slot.label}</div>
+            <div class="gear-slot-label">${item ? itemDisplayName(item) : slot.label}</div>
             ${item ? `<div class="gear-slot-power" style="color:${rarity.color};">${item.itemPower}</div>` : ''}
           </div>
         `;
       }).join('')}
     </div>
+    ` : ''}
 
     <div class="panel-title">Gear Loot ${state.lootBoxes.length > 0 ? `<span style="color:var(--belt-gold);">(${state.lootBoxes.length})</span>` : ''}</div>
     <div class="card" style="display:flex; justify-content:space-between; align-items:center; padding:10px 14px; margin-bottom:8px;">
@@ -2629,17 +2689,19 @@ function renderCareerTab(){
     <div class="card" style="${eligible ? 'border-color:var(--belt-gold);' : ''}">
       <div style="font-size:13px; color:${eligible?'var(--text-main)':'var(--text-muted)'};">
         ${eligible
-          ? `You've reached Hall of Fame! Prestige to reset your career and carry forward <strong style="color:var(--belt-gold);">${(projectedRetainPct(f.wins)*100).toFixed(1)}%</strong> of your stats (scales with total wins: 150 wins ≈1%, 300 ≈2%, 600+ caps at 3% — keep fighting in Hall of Fame for a bigger cut if you're not in a rush). Every 10th prestige permanently grants an extra vehicle and partner slot.`
+          ? `You've reached Hall of Fame! Prestige to reset your career and carry forward <strong style="color:var(--belt-gold);">${(projectedRetainPct(winsSinceHallOfFame())*100).toFixed(1)}%</strong> of your stats (scales with wins earned SINCE reaching Hall of Fame — ${winsSinceHallOfFame()} so far: 150 ≈1%, 300 ≈2%, 600+ caps at 3% — keep fighting for a bigger cut if you're not in a rush). Every 10th prestige permanently grants an extra vehicle and partner slot.`
           : 'Reach Hall of Fame to unlock Prestige — a permanent reset that keeps a slice of your stats (more wins this run = more retained) and unlocks long-term bonuses.'}
       </div>
       ${eligible ? `<button class="btn btn-gold btn-block" style="margin-top:10px;" data-do-prestige>🌟 Prestige Now</button>` : ''}
     </div>
 
     <div class="panel-title">Power-Ups <span style="color:var(--text-muted); font-size:11px;">(persist through prestige)</span></div>
+    ${renderBulkBuyToggle()}
     ${Object.entries(POWER_UPS).map(([key, pu]) => {
       const p = state.powerUps[key];
-      const cost = powerUpCost(key);
-      const canAfford = state.economy.cash >= cost;
+      const qty = state.ui.bulkBuyQty === 'max' ? Infinity : state.ui.bulkBuyQty;
+      const preview = computeBulkBuy(p.level, p.baseCost, 1.85, qty, state.economy.cash);
+      const canAfford = preview.bought > 0;
       return `
         <div class="card loop-card">
           <div class="loop-icon">${pu.icon}</div>
@@ -2647,8 +2709,8 @@ function renderCareerTab(){
             <div class="loop-title">${pu.name} <span style="color:var(--belt-gold); font-size:11px;">Lv.${p.level}</span></div>
             <div class="loop-desc">${pu.desc}</div>
           </div>
-          <button class="btn ${canAfford ? 'btn-gold' : 'btn-ghost'}" style="flex-shrink:0; padding:9px 12px; font-size:12px;" data-powerup-buy="${key}" ${canAfford?'':'disabled'}>
-            $${fmtNum(cost)}
+          <button class="btn ${canAfford ? 'btn-gold' : 'btn-ghost'}" style="flex-shrink:0; padding:9px 12px; font-size:12px; text-align:center;" data-powerup-buy="${key}" ${canAfford?'':'disabled'}>
+            $${fmtNum(preview.totalCost)}${preview.bought>1?`<br><span style="font-size:9px;">×${preview.bought}</span>`:''}
           </button>
         </div>
       `;
@@ -2881,6 +2943,37 @@ function dropLootBox(tier, source){
   }
 }
 
+// Shared "how many levels can I buy right now" calculator for Equipment Upgrades, Home Perks,
+// and Power-Ups — all three use the same baseCost * rate^level exponential cost curve, just with
+// different rates. Buys as many levels as affordable up to `quantity` (partial fill, not
+// all-or-nothing) — e.g. tapping "×100" when you can only afford 23 levels buys those 23 rather
+// than requiring the full 100 banked first, which is the more useful behavior for "I've been
+// idling a while and have a pile of cash, just spend it efficiently."
+function computeBulkBuy(startLevel, baseCost, rate, quantity, availableCash){
+  let level = startLevel, totalCost = 0, bought = 0;
+  while(bought < quantity){
+    const cost = Math.round(baseCost * Math.pow(rate, level));
+    if(totalCost + cost > availableCash) break;
+    totalCost += cost;
+    level++;
+    bought++;
+  }
+  return { bought, totalCost, endLevel: level };
+}
+
+// Renders the shared ×1/×10/×100/Max quantity toggle — one selection applies across whichever
+// upgrade list is currently on screen (Equipment Upgrades, Home Perks, or Power-Ups).
+function renderBulkBuyToggle(){
+  const options = [1, 10, 100, 'max'];
+  return `
+    <div class="card" style="display:flex; gap:6px; margin-bottom:10px; padding:8px;">
+      ${options.map(q => `
+        <button class="btn ${state.ui.bulkBuyQty===q?'btn-gold':'btn-ghost'}" style="flex:1; padding:8px 4px; font-size:12px;" data-set-bulk-qty="${q}">${q==='max'?'Max':'×'+q}</button>
+      `).join('')}
+    </div>
+  `;
+}
+
 const GYM_EQUIPMENT = {
   gloves:  { icon:'🥊', name:'Training Gloves', desc:'Boosts striking power', statKey:'power',     statLabel:'Power' },
   ropes:   { icon:'🪢', name:'Speed Ropes',      desc:'Boosts hand & foot speed', statKey:'speed',     statLabel:'Speed' },
@@ -2899,13 +2992,14 @@ function gymUpgradeCost(key){
 
 function purchaseGymUpgrade(key){
   const g = state.gym[key];
-  const cost = gymUpgradeCost(key);
-  if(state.economy.cash < cost){ showToast('Not enough cash'); return; }
-  state.economy.cash -= cost;
-  g.level++;
-  state.fighter.stats[g.statKey] += g.bonusPerLevel;
+  const qty = state.ui.bulkBuyQty === 'max' ? Infinity : state.ui.bulkBuyQty;
+  const { bought, totalCost } = computeBulkBuy(g.level, g.baseCost, 1.5, qty, state.economy.cash);
+  if(bought === 0){ showToast('Not enough cash'); return; }
+  state.economy.cash -= totalCost;
+  g.level += bought;
+  state.fighter.stats[g.statKey] += g.bonusPerLevel * bought;
   const equip = GYM_EQUIPMENT[key];
-  pushLog(`Upgraded ${equip.name} to Lv.${g.level} (+${g.bonusPerLevel} ${equip.statLabel})`, 'train');
+  pushLog(`Upgraded ${equip.name} ${bought>1?`×${bought} `:''}to Lv.${g.level} (+${g.bonusPerLevel*bought} ${equip.statLabel})`, 'train');
   render();
   scheduleSave();
 }
@@ -2926,12 +3020,13 @@ function homePerkCost(key){
 
 function purchaseHomePerk(key){
   const p = state.homePerks[key];
-  const cost = homePerkCost(key);
-  if(state.economy.cash < cost){ showToast('Not enough cash'); return; }
-  state.economy.cash -= cost;
-  p.level++;
+  const qty = state.ui.bulkBuyQty === 'max' ? Infinity : state.ui.bulkBuyQty;
+  const { bought, totalCost } = computeBulkBuy(p.level, p.baseCost, 1.6, qty, state.economy.cash);
+  if(bought === 0){ showToast('Not enough cash'); return; }
+  state.economy.cash -= totalCost;
+  p.level += bought;
   const perk = HOME_PERKS[key];
-  pushLog(`Upgraded ${perk.name} to Lv.${p.level} (+${p.bonusPerLevel}% ${perk.effectLabel})`, 'train');
+  pushLog(`Upgraded ${perk.name} ${bought>1?`×${bought} `:''}to Lv.${p.level} (+${p.bonusPerLevel*bought}% ${perk.effectLabel})`, 'train');
   render();
   scheduleSave();
 }
@@ -2961,11 +3056,12 @@ function powerUpCost(key){
 
 function purchasePowerUp(key){
   const p = state.powerUps[key];
-  const cost = powerUpCost(key);
-  if(state.economy.cash < cost){ showToast('Not enough cash'); return; }
-  state.economy.cash -= cost;
-  p.level++;
-  pushLog(`Power-Up: ${POWER_UPS[key].name} now Lv.${p.level}`, 'level');
+  const qty = state.ui.bulkBuyQty === 'max' ? Infinity : state.ui.bulkBuyQty;
+  const { bought, totalCost } = computeBulkBuy(p.level, p.baseCost, 1.85, qty, state.economy.cash);
+  if(bought === 0){ showToast('Not enough cash'); return; }
+  state.economy.cash -= totalCost;
+  p.level += bought;
+  pushLog(`Power-Up: ${POWER_UPS[key].name} ${bought>1?`×${bought} `:''}now Lv.${p.level}`, 'level');
   render();
   scheduleSave();
 }
@@ -2974,27 +3070,40 @@ function purchasePowerUp(key){
 // points, resets career/cash/gear/loot, but keeps companions, power-ups, and cosmetics.
 // Every 10th prestige permanently unlocks an extra vehicle slot and partner slot.
 //
-// Retention breakpoints (150/300/600) are deliberately independent of the Hall of Fame gate
-// (360 wins). Prestige unlocks as soon as you reach Hall of Fame, so a player who wants a quick
-// daily reset can prestige right at 360 for a solid ~2% retained. Nothing stops them staying
-// in Hall of Fame and grinding further — up to 600 total wins — to earn the full 3% cap instead.
-// That means a player who misses a day or two (and comes back with a longer idle catch-up) isn't
-// punished: any extra wins banked past 360 just keep climbing them toward the retention cap.
-function projectedRetainPct(wins){
+// Retention breakpoints (150/300/600) are based on wins earned SINCE reaching Hall of Fame, NOT
+// lifetime wins for the run — this was a real bug in the previous version: Hall of Fame itself
+// requires 360 wins, which is already past the 150 threshold and most of the way to 300, so
+// players were arriving at Hall of Fame already sitting near/at high retention with no real
+// incentive left to keep playing. Now everyone starts at ~0% the moment they first reach Hall of
+// Fame, and has to genuinely earn another 150/300/600 wins WITHIN Hall of Fame for 1%/2%/3% —
+// restoring the "prestige now for a small cut, or grind further for more" choice. Nothing stops
+// a player who misses a day or two (longer idle catch-up) from still climbing toward the cap;
+// this is purely about where the counter STARTS, not a punishment for time away.
+function winsSinceHallOfFame(){
+  if(state.fighter.tier === 'Hall of Fame' && state.fighter.hallOfFameEnteredAtWins === null){
+    // Migration safety net: catches saves from before this system existed (or any other edge
+    // case where we're in Hall of Fame but never caught the exact transition) — starts the
+    // counter from right now instead of leaving it permanently stuck unable to progress.
+    state.fighter.hallOfFameEnteredAtWins = state.fighter.wins;
+  }
+  if(state.fighter.hallOfFameEnteredAtWins === null) return 0;
+  return Math.max(0, state.fighter.wins - state.fighter.hallOfFameEnteredAtWins);
+}
+function projectedRetainPct(winsSinceHoF){
   let baseRetainPct;
-  if(wins >= 600) baseRetainPct = 0.03;
-  else if(wins >= 300) baseRetainPct = 0.02 + (wins-300)/300 * 0.01;
-  else if(wins >= 150) baseRetainPct = 0.01 + (wins-150)/150 * 0.01;
-  else baseRetainPct = (wins/150) * 0.01;
+  if(winsSinceHoF >= 600) baseRetainPct = 0.03;
+  else if(winsSinceHoF >= 300) baseRetainPct = 0.02 + (winsSinceHoF-300)/300 * 0.01;
+  else if(winsSinceHoF >= 150) baseRetainPct = 0.01 + (winsSinceHoF-150)/150 * 0.01;
+  else baseRetainPct = (winsSinceHoF/150) * 0.01;
   return Math.min(0.03, baseRetainPct + powerUpBonus('retainPct')/100);
 }
 
 function executePrestige(){
   if(!isPrestigeEligible()) return;
 
-  // Retention scales with total wins this run, not a flat rate: 150 wins ~1%, 300 wins ~2%,
-  // 600+ wins caps at 3%. Iron Will adds a small extra bump on top, still capped at 3%.
-  const retainPct = projectedRetainPct(state.fighter.wins);
+  // Retention scales with wins earned SINCE reaching Hall of Fame, not total wins for the run:
+  // 150 ~1%, 300 ~2%, 600+ caps at 3%. Iron Will adds a small extra bump on top, still capped at 3%.
+  const retainPct = projectedRetainPct(winsSinceHallOfFame());
 
   const retained = {};
   STAT_KEYS_ALL.forEach(key => {
@@ -3029,6 +3138,7 @@ function executePrestige(){
   state.fighter.xp = 0;
   state.fighter.xpToNext = 50;
   state.fighter.tier = 'Amateur';
+  state.fighter.hallOfFameEnteredAtWins = null; // fresh baseline for the NEXT time this run reaches Hall of Fame
   state.ui.lastAckedLevel = 0; // otherwise the notif-bell badge stays wrongly suppressed until
                                 // the new run's level catches back up to the old run's level
   STAT_KEYS_ALL.forEach(key => { state.fighter.stats[key] = 5 + retained[key]; });
@@ -3268,6 +3378,7 @@ function renderShopRoulette(){
 
 function buyTeethPack(amount, costLabel){
   // Placeholder for real-money purchase — in a shipped app this would hook into a payment SDK.
+  if(realPurchasesLocked()){ showToast('🔒 Real-money purchases are locked for testing'); return; }
   const price = parseFloat(costLabel.replace(/[^0-9.]/g, ''));
   if(!canSpendRealMoney(price)){
     showToast(`Daily spend cap reached ($${DAILY_SPEND_CAP_USD}) — try again tomorrow`);
@@ -3295,6 +3406,14 @@ function canSpendRealMoney(amountUSD, { isFirstPurchaseOffer=false } = {}){
   if(state.economy.spendCapDisabled) return true; // QAUNLIMITED testing override
   if(isFirstPurchaseOffer && !state.economy.everSpentReal) return true;
   return (state.daily.spendUSD + amountUSD) <= DAILY_SPEND_CAP_USD + 0.001; // epsilon for cent rounding
+}
+
+// Real-money purchases are locked by default — every "Buy" button right now is a placeholder
+// that grants the reward for free (no Play Billing wired up yet), so leaving this unlocked for
+// real testers/players would let anyone farm free Teeth/cash from what will eventually be actual
+// paid purchases. Redeem QAPURCHASE on dev/QA devices only to unlock for testing the flow itself.
+function realPurchasesLocked(){
+  return !state.economy.realPurchasesUnlocked;
 }
 
 function recordRealMoneySpend(amountUSD){
@@ -3350,6 +3469,7 @@ function bundleRewardAmounts(bundle){
 function renderShopBundles(){
   const spent = state.daily.spendUSD || 0;
   const showFounder = !state.economy.everSpentReal;
+  const locked = realPurchasesLocked();
   return `
     <div style="font-size:11px; color:var(--text-muted); margin-bottom:10px;">
       These are placeholder buttons — there's no real payment processing in this build (no
@@ -3357,6 +3477,12 @@ function renderShopBundles(){
       rather than charging anything. Rewards scale with your current total power (${fmtNum(totalPower())}),
       so bundles stay worthwhile at any stage of your career.
     </div>
+    ${locked ? `
+      <div class="card" style="margin-bottom:10px; border-color:var(--corner-red);">
+        <div style="font-size:12px; color:var(--corner-red); font-weight:600;">🔒 Real-money purchases are locked</div>
+        <div style="font-size:11px; color:var(--text-muted); margin-top:4px;">This keeps testers from farming free Teeth/cash from what will eventually be real purchases. A dev/QA code unlocks this for testing the flow itself.</div>
+      </div>
+    ` : ''}
     ${state.economy.spendCapDisabled ? `
       <div class="card" style="margin-bottom:10px; border-color:var(--corner-red);">
         <div style="font-size:12px; color:var(--corner-red);">⚠️ Daily spend cap disabled (QAUNLIMITED testing code active)</div>
@@ -3381,7 +3507,7 @@ function renderShopBundles(){
             <br>One-time only — exempt from the daily spend cap.
           </div>
         </div>
-        <button class="shop-buy-btn real" data-buy-bundle="${FOUNDER_BUNDLE.key}">$${FOUNDER_BUNDLE.price}</button>
+        <button class="shop-buy-btn real" data-buy-bundle="${FOUNDER_BUNDLE.key}" ${locked?'disabled':''}>${locked?'🔒 Locked':`$${FOUNDER_BUNDLE.price}`}</button>
       </div>
     ` : ''}
     ${(() => {
@@ -3393,6 +3519,7 @@ function renderShopBundles(){
         ${available.map(b => {
           const r = bundleRewardAmounts(b);
           const wouldExceedCap = !canSpendRealMoney(b.price);
+          const btnDisabled = locked || wouldExceedCap;
           return `
             <div class="shop-item-card" style="border-left:3px solid var(--corner-red); ${wouldExceedCap?'opacity:0.5;':''}">
               <div class="shop-item-icon">${b.icon}</div>
@@ -3400,7 +3527,7 @@ function renderShopBundles(){
                 <div class="shop-item-name">${b.label}</div>
                 <div class="shop-item-desc">🦷${fmtNum(r.teeth)} • $${fmtNum(r.cash)} cash • ⚡${b.bankedMinutes}m speed boost • 🎁${b.chestPulls} chest pulls</div>
               </div>
-              <button class="shop-buy-btn real" data-buy-bundle="${b.key}" ${wouldExceedCap?'disabled':''}>${wouldExceedCap?'Cap reached':`$${b.price}`}</button>
+              <button class="shop-buy-btn real" data-buy-bundle="${b.key}" ${btnDisabled?'disabled':''}>${locked?'🔒 Locked':(wouldExceedCap?'Cap reached':`$${b.price}`)}</button>
             </div>
           `;
         }).join('')}
@@ -3410,6 +3537,7 @@ function renderShopBundles(){
     ${CASH_BUNDLES.map(b => {
       const r = bundleRewardAmounts(b);
       const wouldExceedCap = !canSpendRealMoney(b.price);
+      const btnDisabled = locked || wouldExceedCap;
       return `
         <div class="shop-item-card" style="border-left:3px solid var(--belt-gold); ${wouldExceedCap?'opacity:0.5;':''}">
           <div class="shop-item-icon">${b.icon}</div>
@@ -3419,7 +3547,7 @@ function renderShopBundles(){
               🦷${fmtNum(r.teeth)}${r.cash?` • $${fmtNum(r.cash)} cash`:''} • ⚡${b.bankedMinutes}m speed boost${b.chestPulls?` • 🎁${b.chestPulls} chest pulls`:''}
             </div>
           </div>
-          <button class="shop-buy-btn real" data-buy-bundle="${b.key}" ${wouldExceedCap?'disabled':''}>${wouldExceedCap?'Cap reached':`$${b.price}`}</button>
+          <button class="shop-buy-btn real" data-buy-bundle="${b.key}" ${btnDisabled?'disabled':''}>${locked?'🔒 Locked':(wouldExceedCap?'Cap reached':`$${b.price}`)}</button>
         </div>
       `;
     }).join('')}
@@ -3432,6 +3560,7 @@ function buyCashBundle(key){
   if(bundle.requiresPromoUnlock && !(state.economy.unlockedPromoOffers||[]).includes(bundle.requiresPromoUnlock)){
     showToast('This offer is locked'); return;
   }
+  if(realPurchasesLocked()){ showToast('🔒 Real-money purchases are locked for testing'); return; }
   if(bundle.isFirstPurchaseOffer && state.economy.everSpentReal){ showToast('Welcome offer already used'); renderShopBody(); return; }
   if(!canSpendRealMoney(bundle.price, { isFirstPurchaseOffer: !!bundle.isFirstPurchaseOffer })){
     showToast(`Daily spend cap reached ($${DAILY_SPEND_CAP_USD}) — try again tomorrow`);
@@ -3574,6 +3703,7 @@ function watchAdForSpeedBoost(){
 // a bit of bonus Teeth, so the game still has a light monetization trickle without interruptions.
 function buyDiamondInTheRough(){
   if(state.speedBoost.noAdsOwned){ showToast('Already owned'); return; }
+  if(realPurchasesLocked()){ showToast('🔒 Real-money purchases are locked for testing'); return; }
   if(!canSpendRealMoney(14.99)){
     showToast(`Daily spend cap reached ($${DAILY_SPEND_CAP_USD}) — try again tomorrow`);
     return;
@@ -3596,6 +3726,7 @@ function useAdSkip(method){
   if(method === 'ad' && onCooldown){ showToast('Ad skip on cooldown'); return; }
   if(method === 'teeth' && state.economy.teeth < 5){ showToast('Not enough Teeth'); return; }
   if(method === 'money'){
+    if(realPurchasesLocked()){ showToast('🔒 Real-money purchases are locked for testing'); return; }
     if(!canSpendRealMoney(10)){
       showToast(`Daily spend cap reached ($${DAILY_SPEND_CAP_USD}) — try again tomorrow`);
       return;
@@ -3636,7 +3767,9 @@ function renderShopBody(){
 
 function renderShopFeatured(){
   const owned = state.speedBoost.noAdsOwned;
+  const locked = realPurchasesLocked();
   const diamondCapped = !owned && !canSpendRealMoney(14.99);
+  const realBtn = (price, capped) => locked ? { disabled:true, label:'🔒 Locked' } : { disabled:capped, label: capped ? 'Cap reached' : `$${price}` };
   return `
     <div class="panel-title">💎 Diamond in the Rough</div>
     <div class="shop-item-card" style="border-left:3px solid var(--champ-teal); ${owned?'':'background:linear-gradient(135deg, var(--bg-panel-raised) 0%, rgba(45,212,191,0.08) 100%);'}">
@@ -3645,24 +3778,24 @@ function renderShopFeatured(){
         <div class="shop-item-name" style="color:var(--champ-teal);">No Ads + Permanent 2x Speed</div>
         <div class="shop-item-desc">Removes ads forever, permanently doubles idle/training speed, and every fight has a small chance to drop bonus Teeth.</div>
       </div>
-      <button class="shop-buy-btn real" data-buy-diamond ${(owned||diamondCapped)?'disabled':''}>${owned?'Owned':(diamondCapped?'Cap reached':'$14.99')}</button>
+      <button class="shop-buy-btn real" data-buy-diamond ${(owned||locked||diamondCapped)?'disabled':''}>${owned?'Owned':realBtn('14.99', diamondCapped).label}</button>
     </div>
 
     <div class="panel-title">Teeth Packs</div>
     <div class="shop-item-card">
       <div class="shop-item-icon">🦷</div>
       <div class="shop-item-info"><div class="shop-item-name">50 Teeth</div><div class="shop-item-desc">Small pack</div></div>
-      <button class="shop-buy-btn real" data-buy-teeth-pack="50,$0.99" ${canSpendRealMoney(0.99)?'':'disabled'}>${canSpendRealMoney(0.99)?'$0.99':'Cap reached'}</button>
+      <button class="shop-buy-btn real" data-buy-teeth-pack="50,$0.99" ${realBtn('0.99', !canSpendRealMoney(0.99)).disabled?'disabled':''}>${realBtn('0.99', !canSpendRealMoney(0.99)).label}</button>
     </div>
     <div class="shop-item-card">
       <div class="shop-item-icon">🦷</div>
       <div class="shop-item-info"><div class="shop-item-name">300 Teeth</div><div class="shop-item-desc">Best value — +20% bonus</div></div>
-      <button class="shop-buy-btn real" data-buy-teeth-pack="300,$4.99" ${canSpendRealMoney(4.99)?'':'disabled'}>${canSpendRealMoney(4.99)?'$4.99':'Cap reached'}</button>
+      <button class="shop-buy-btn real" data-buy-teeth-pack="300,$4.99" ${realBtn('4.99', !canSpendRealMoney(4.99)).disabled?'disabled':''}>${realBtn('4.99', !canSpendRealMoney(4.99)).label}</button>
     </div>
     <div class="shop-item-card">
       <div class="shop-item-icon">🦷</div>
       <div class="shop-item-info"><div class="shop-item-name">700 Teeth</div><div class="shop-item-desc">+40% bonus</div></div>
-      <button class="shop-buy-btn real" data-buy-teeth-pack="700,$9.99" ${canSpendRealMoney(9.99)?'':'disabled'}>${canSpendRealMoney(9.99)?'$9.99':'Cap reached'}</button>
+      <button class="shop-buy-btn real" data-buy-teeth-pack="700,$9.99" ${realBtn('9.99', !canSpendRealMoney(9.99)).disabled?'disabled':''}>${realBtn('9.99', !canSpendRealMoney(9.99)).label}</button>
     </div>
     <div class="panel-title">Gold Chest</div>
     <div class="shop-item-card">
@@ -3759,7 +3892,7 @@ function renderShopIdle(){
     <div class="shop-item-card">
       <div class="shop-item-icon">💳</div>
       <div class="shop-item-info"><div class="shop-item-name">Instant Skip</div><div class="shop-item-desc">Real money, no cooldown</div></div>
-      <button class="shop-buy-btn real" data-adskip="money" ${canSpendRealMoney(10)?'':'disabled'}>${canSpendRealMoney(10)?'$10':'Cap reached'}</button>
+      <button class="shop-buy-btn real" data-adskip="money" ${(realPurchasesLocked()||!canSpendRealMoney(10))?'disabled':''}>${realPurchasesLocked() ? '🔒 Locked' : (canSpendRealMoney(10)?'$10':'Cap reached')}</button>
     </div>
   `;
 }
@@ -3883,8 +4016,8 @@ function renameFighter(rawName){
    safe from that limitation; only the shared roster/member-count is "social".
    ======================================================================== */
 const LEAGUES = [
+  { id:'redcorner',  name:'Grim Corner Athletics', icon:'🥋' },
   { id:'ironfist',   name:'Iron Fist Gym',        icon:'👊' },
-  { id:'redcorner',  name:'Red Corner Athletics', icon:'🥋' },
   { id:'goldenbelt', name:'Golden Belt Academy',  icon:'🏅' },
   { id:'blackout',   name:'Blackout Boxing Club', icon:'🥊' },
   { id:'ironwolf',   name:'Iron Wolf Fight Team', icon:'🐺' },
@@ -3938,20 +4071,169 @@ function kickThresholdForRole(role){
 }
 
 // Role hierarchy within a gym. The first person to ever join an empty gym becomes its Head
-// Coach; only the Head Coach can promote/demote other members (checked client-side against
-// state.social.role — same "no real security" caveat as everything else in this shared-storage
-// social layer applies: a determined player could still forge their own role).
-const ROLE_LABELS = { head_coach:'Head Coach', coach:'Coach', trainer:'Trainer', member:'Member' };
-const ROLE_ICONS  = { head_coach:'👑', coach:'🥊', trainer:'💪', member:'🤝' };
-const ROLE_RANK   = { head_coach:0, coach:1, trainer:2, member:3 };
+// Coach — capped at 1 per gym. Head Coach AND Coaches can promote/demote other members (checked
+// client-side against state.social.role — same "no real security" caveat as everything else in
+// this shared-storage social layer applies: a determined player could still forge their own role).
+// Coaches can't appoint other Coaches or a second Head Coach — only Head Coach can do that.
+const ROLE_LABELS = { head_coach:'Head Coach', coach:'Coach', prize_fighter:'Prize Fighter', trainer:'Trainer', member:'Member', janitor:'Janitor' };
+const ROLE_ICONS  = { head_coach:'👑', coach:'🥊', prize_fighter:'🏆', trainer:'💪', member:'🤝', janitor:'🧹' };
+const ROLE_RANK   = { head_coach:0, coach:1, prize_fighter:2, trainer:3, member:4, janitor:5 };
+// New joiners (anyone but the very first, who becomes Head Coach) start as Janitor for their
+// first 3 days — a lighthearted "prove you're sticking around" probation period — then
+// automatically graduate to regular Member status. See graduateJanitors() in
+// refreshLeagueRosterDetail for the auto-promotion.
+const JANITOR_DURATION_DAYS = 3;
+const ROLE_CAPS   = { head_coach:1, coach:10, prize_fighter:20, trainer:30 }; // 'member' is uncapped
+
+/* ========================================================================
+   ROSTER & STAFF SCALING LOGIC (pure logic only — no UI wired up yet)
+   ------------------------------------------------------------------------
+   Base state: 1,000 total slots across all 10 gyms (100 per gym × 10).
+   Every time TOTAL capacity across all gyms doubles (2,000 → 4,000 → 8,000...),
+   Coach/Prize Fighter/Trainer caps each grow +50% (floored). Every 2nd doubling
+   additionally raises the max number of Head Coaches a gym can have by 1.
+
+   IMPORTANT INTEGRATION NOTE: total gym capacity is inherently SHARED/GLOBAL
+   data (it depends on all 10 gyms' real levels, stored in Firestore, not on
+   any single player's device) — NOT something safe to track as an
+   independent per-player counter, since two players' clients could then
+   disagree about the "true" doubling count. Two versions are provided below:
+   a simple tracked-variable version matching the literal spec (fine for a
+   quick wire-up / testing), and computeGlobalDoublingCount(), which DERIVES
+   the count from real aggregate gym data instead — that's the one I'd
+   actually recommend using for anything real, since it can't drift out of sync.
+   ======================================================================== */
+
+const TOTAL_SLOTS_BASE = 1000; // 100 (LEAGUE_MEMBER_CAP) × 10 gyms
+const ROLE_CAP_GROWTH_ROLES = ['coach', 'prize_fighter', 'trainer']; // head_coach scales separately, see below
+
+// --- Option A: simple tracked-variable version (matches the literal spec) ---
+// Expects a `state` object with: state.doublingCount (number), state.maxHeadCoaches (number),
+// state.currentHeadCoaches (number). Call this any time total capacity might have changed.
+function updateRosterScalingState(state, totalCapacityAcrossAllGyms){
+  const doublingCount = Math.max(0, Math.floor(Math.log2(totalCapacityAcrossAllGyms / TOTAL_SLOTS_BASE)));
+  state.doublingCount = doublingCount;
+
+  // Coach/Prize Fighter/Trainer caps: +50% per doubling, compounding, floored to whole numbers.
+  const growthMultiplier = Math.pow(1.5, doublingCount);
+  state.roleCaps = state.roleCaps || {};
+  ROLE_CAP_GROWTH_ROLES.forEach(role => {
+    state.roleCaps[role] = Math.floor(ROLE_CAPS[role] * growthMultiplier);
+  });
+
+  // Head Coach cap: +1 every 2nd doubling. floor(doublingCount/2) already only increases every
+  // TWO steps on its own (0,0,1,1,2,2,3...) — do NOT gate this behind "doublingCount % 2 === 0",
+  // that was a real bug caught while testing: it zeroed the bonus back out at every ODD doubling
+  // count instead of holding steady, so the cap would regress (e.g. unlock a 2nd Head Coach slot
+  // at doubling 2, then incorrectly drop back to 1 at doubling 3) instead of staying unlocked.
+  const bonusHeadCoachSlots = Math.floor(doublingCount / 2);
+  state.maxHeadCoaches = ROLE_CAPS.head_coach + bonusHeadCoachSlots;
+
+  return state;
+}
+
+// --- Option B: derived version (recommended for real integration) ---
+// Computes total capacity by summing leagueMemberCapForLevel(level) across all 10 real gyms,
+// using whatever level data is already fetched (e.g. allGymLevelsCache.levels from the Gym Wars
+// module) — no independent counter to keep in sync, the number IS the real aggregate every time.
+function computeGlobalDoublingCount(gymLevelsById){
+  const totalCapacity = LEAGUES.reduce((sum, lg) => {
+    const level = (gymLevelsById && gymLevelsById[lg.id]) || 1;
+    return sum + leagueMemberCapForLevel(level);
+  }, 0);
+  return {
+    totalCapacity,
+    doublingCount: Math.max(0, Math.floor(Math.log2(totalCapacity / TOTAL_SLOTS_BASE))),
+  };
+}
+
+/* ------------------------------------------------------------------------
+   HEAD COACH APPOINTMENT LOGIC
+   Operates on a roster array shaped like the existing league_roster entries:
+   { playerId, name, role, isPrimaryHeadCoach? }. Only ONE entry should ever
+   have isPrimaryHeadCoach:true — that's the gym's original founder, and the
+   only one allowed to promote/demote OTHER Head Coaches (additional Head
+   Coaches created via promotion are NOT primary, and can't promote/demote
+   each other — prevents any of them from locking out the founder).
+   ------------------------------------------------------------------------ */
+
+// Returns {ok:true, roster} on success, or {ok:false, reason} on failure — deliberately doesn't
+// throw, so calling code can show the reason directly as a toast/message.
+function promoteToHeadCoach(roster, actorPlayerId, targetStaffId, state){
+  const actor = roster.find(m => m.playerId === actorPlayerId);
+  if(!actor || !actor.isPrimaryHeadCoach){
+    return { ok:false, reason:'Only the primary Head Coach can appoint additional Head Coaches.' };
+  }
+  const target = roster.find(m => m.playerId === targetStaffId);
+  if(!target){
+    return { ok:false, reason:'That staff member was not found.' };
+  }
+  if(target.role !== 'coach'){
+    return { ok:false, reason:'Only a Coach can be promoted to Head Coach.' };
+  }
+  const currentHeadCoaches = roster.filter(m => m.role === 'head_coach').length;
+  const maxHeadCoaches = state.maxHeadCoaches ?? ROLE_CAPS.head_coach;
+  if(currentHeadCoaches >= maxHeadCoaches){
+    return { ok:false, reason:`Head Coach is full (${maxHeadCoaches} max) — needs another capacity doubling to raise it.` };
+  }
+  target.role = 'head_coach';
+  target.isPrimaryHeadCoach = false; // promoted Head Coaches are never primary
+  state.currentHeadCoaches = currentHeadCoaches + 1;
+  return { ok:true, roster };
+}
+
+// Strips a NON-primary Head Coach back down to Coach. The primary Head Coach can never be
+// demoted through this function — same reasoning as the existing UI's "no hand-off" rule:
+// a mis-click shouldn't be able to leave a gym with zero leadership at all.
+function demoteHeadCoach(roster, actorPlayerId, targetStaffId, state){
+  const actor = roster.find(m => m.playerId === actorPlayerId);
+  if(!actor || !actor.isPrimaryHeadCoach){
+    return { ok:false, reason:'Only the primary Head Coach can demote another Head Coach.' };
+  }
+  const target = roster.find(m => m.playerId === targetStaffId);
+  if(!target){
+    return { ok:false, reason:'That staff member was not found.' };
+  }
+  if(target.playerId === actorPlayerId){
+    return { ok:false, reason:"You can't demote yourself." };
+  }
+  if(target.role !== 'head_coach' || target.isPrimaryHeadCoach){
+    return { ok:false, reason:'That person is not a demotable (non-primary) Head Coach.' };
+  }
+  target.role = 'coach';
+  state.currentHeadCoaches = Math.max(0, (state.currentHeadCoaches ?? 1) - 1);
+  return { ok:true, roster };
+}
+
+const ROLE_DESCRIPTIONS = {
+  head_coach: 'Runs the gym. Can promote/demote anyone into any role, including other Coaches. Limited to 1 per gym.',
+  coach: 'Can promote/demote Prize Fighters, Trainers, and Members — but not appoint other Coaches or a Head Coach. Up to 10 per gym.',
+  prize_fighter: 'A special title recognizing a gym\'s top performers. Purely a title — assigned by Head Coach or Coach. Up to 20 per gym.',
+  trainer: 'A special title for dedicated members who help others train. Up to 30 per gym.',
+  member: 'Everyone else — tracked by how long they\'ve been in the gym instead of a special title (see tenure tiers).',
+  janitor: `Every new joiner starts here (except the very first, who becomes Head Coach) — a ${JANITOR_DURATION_DAYS}-day probation before graduating to regular Member automatically. Not assignable by promotion.`,
+};
+
+// Roles a Coach is allowed to assign — deliberately excludes 'coach' and 'head_coach', so only
+// the Head Coach can create more Coaches or hand off their own seat.
+const COACH_ASSIGNABLE_ROLES = ['prize_fighter', 'trainer', 'member'];
+// Roles the Head Coach can assign to others (excludes 'head_coach' itself — see setMemberRole's
+// comment on why that specific handoff isn't offered through this UI at all).
+const HEAD_COACH_ASSIGNABLE_ROLES = ['coach', 'prize_fighter', 'trainer', 'member'];
 
 // Tenure tier — purely based on how long you've been in your CURRENT gym (state.social.joinedAt),
-// no shared data needed. Separate track from Membership Tier (which is XP-based).
+// no shared data needed. This is what a regular "Member" (no special role) is classified by
+// instead of a title — a longer list so there's always a next milestone to reach for.
 const TENURE_TIERS = [
-  { name:'Recruit', minDays:0  },
-  { name:'Regular', minDays:3  },
-  { name:'Veteran', minDays:14 },
-  { name:'Elder',   minDays:30 },
+  { name:'New Member',      minDays:0   },
+  { name:'Active Member',   minDays:3   },
+  { name:'Committed Member',minDays:7   },
+  { name:'Regular',         minDays:14  },
+  { name:'Veteran Member',  minDays:30  },
+  { name:'Senior Member',   minDays:60  },
+  { name:'Elder',           minDays:100 },
+  { name:'Gym Legacy',      minDays:180 },
+  { name:'Founding Spirit', minDays:365 },
 ];
 function daysInGym(){
   if(!state.social.leagueId || !state.social.joinedAt) return 0;
@@ -3965,12 +4247,42 @@ function currentTenureTier(){
 }
 
 // Gym leveling — the GYM itself levels up from cumulative "Gym XP" contributed by ALL its
-// members via completing daily quests (see GYM_XP_PER_QUEST / claimQuest). Every member gets
-// a small flat stat bonus based on the CURRENT gym level, applied in effectiveStats(). Uses the
-// same per-player-key + aggregate-at-read pattern as the weekly leaderboard to avoid shared-
-// counter races: each player only ever writes their OWN lifetime contribution.
-const GYM_XP_PER_QUEST = 30;
-function gymXpForLevel(level){ return 500 * level * level; } // cumulative XP needed to REACH this level
+// members via completing daily quests (each tier of DAILY_QUEST_TIERS carries its own gymXp
+// value — see claimQuest). Every member gets a small flat stat bonus based on the CURRENT gym
+// level, applied in effectiveStats(). Uses the same per-player-key + aggregate-at-read pattern
+// as the weekly leaderboard to avoid shared-counter races: each player only ever writes their
+// OWN lifetime contribution.
+//
+// Curve is deliberately steep (3x the original) specifically so a single very active gym can't
+// blow through the whole named-tier ladder in a day or two — climbing should feel like a
+// multi-day-to-multi-week project, not something that maxes out on day one.
+function gymXpForLevel(level){ return 1500 * level * level; } // cumulative XP needed to REACH this level
+
+// Named milestones layered on top of the raw level number, so "Gym Level 37" also reads as
+// something like "Regional Powerhouse" — gives the climb real texture instead of just a number
+// that keeps counting up forever.
+const GYM_LEVEL_TITLES = [
+  { minLevel:1,   title:'Backyard Gym' },
+  { minLevel:5,   title:'Neighborhood Gym' },
+  { minLevel:10,  title:'Local Gym' },
+  { minLevel:15,  title:'City Gym' },
+  { minLevel:20,  title:'Respected Gym' },
+  { minLevel:30,  title:'Regional Powerhouse' },
+  { minLevel:40,  title:'State Champion Gym' },
+  { minLevel:50,  title:'National Contender' },
+  { minLevel:65,  title:'Elite Training Camp' },
+  { minLevel:80,  title:'Legendary Dojo' },
+  { minLevel:100, title:'World-Renowned Academy' },
+  { minLevel:130, title:'Hall of Fame Gym' },
+  { minLevel:160, title:'Mythic Fight Camp' },
+  { minLevel:200, title:'Immortal Gym' },
+];
+function gymLevelTitle(level){
+  let t = GYM_LEVEL_TITLES[0];
+  for(const x of GYM_LEVEL_TITLES){ if(level >= x.minLevel) t = x; }
+  return t.title;
+}
+
 function gymLevelForXp(xp){
   let level = 1;
   while(gymXpForLevel(level+1) <= xp) level++;
@@ -3985,16 +4297,15 @@ function gymLevelBonusPct(){
   return Math.min(0.20, Math.max(0, (state.social.knownGymLevel||1) - 1) * 0.004);
 }
 
-// Rotating pool of daily quests. Exactly 3 are picked deterministically from the date, so every
-// player sees the SAME 3 quests on a given day — a small shared/social touch that needs no server.
-const QUEST_POOL = [
-  { id:'win5',    label:'Win 5 fights',              type:'winsToday',  goal:5,   rewardCash:150, rewardTeeth:0 },
-  { id:'win15',   label:'Win 15 fights',             type:'winsToday',  goal:15,  rewardCash:400, rewardTeeth:1 },
-  { id:'cash500', label:'Earn $500 from fights',     type:'cashToday',  goal:500, rewardCash:0,   rewardTeeth:2 },
-  { id:'crit3',   label:'Land 3 knockouts',          type:'critsToday', goal:3,   rewardCash:250, rewardTeeth:1 },
-  { id:'train10', label:'Complete 10 training reps', type:'trainToday', goal:10,  rewardCash:200, rewardTeeth:0 },
-  { id:'win30',   label:'Win 30 fights',             type:'winsToday',  goal:30,  rewardCash:800, rewardTeeth:2 },
-  { id:'cash1500',label:'Earn $1,500 from fights',   type:'cashToday',  goal:1500,rewardCash:0,   rewardTeeth:3 },
+// Daily quests are now a fixed 5-tier ladder, shown in full every day (not a random 3-of-7 pick).
+// Each tier escalates in difficulty, cash/Teeth reward, AND Gym XP contribution — so pushing
+// through all 5 in one day is a real, escalating payoff, not just 3 flat, same-value quests.
+const DAILY_QUEST_TIERS = [
+  { tier:1, id:'tier1', label:'Win 5 fights',             type:'winsToday',  goal:5,    rewardCash:150, rewardTeeth:0, gymXp:20  },
+  { tier:2, id:'tier2', label:'Complete 15 training reps',type:'trainToday', goal:15,   rewardCash:250, rewardTeeth:1, gymXp:35  },
+  { tier:3, id:'tier3', label:'Earn $1,200 from fights',  type:'cashToday',  goal:1200, rewardCash:0,   rewardTeeth:2, gymXp:55  },
+  { tier:4, id:'tier4', label:'Land 8 knockouts',         type:'critsToday', goal:8,    rewardCash:600, rewardTeeth:3, gymXp:80  },
+  { tier:5, id:'tier5', label:'Win 30 fights',            type:'winsToday',  goal:30,   rewardCash:0,   rewardTeeth:6, gymXp:130 },
 ];
 
 function getDateKey(d = new Date()){
@@ -4017,23 +4328,6 @@ function ensureWeeklyReset(){
   state.social.weeklyXp = 0;
 }
 
-// Simple deterministic hash so the same date always picks the same 3 quests for every player.
-function hashStr(s){
-  let h = 0;
-  for(let i=0;i<s.length;i++){ h = ((h<<5)-h + s.charCodeAt(i))|0; }
-  return Math.abs(h);
-}
-function pickDailyQuests(dateKey){
-  const h = hashStr(dateKey);
-  const ids = [];
-  const pool = QUEST_POOL.map((q,i)=>i);
-  for(let i=0;i<3;i++){
-    const idx = pool.splice((h + i*7) % pool.length, 1)[0];
-    ids.push(QUEST_POOL[idx].id);
-  }
-  return ids;
-}
-
 // Resets daily counters + rolls new quests whenever the local date changes. Cheap to call often —
 // only does work on an actual day rollover.
 function ensureDailyReset(){
@@ -4047,14 +4341,14 @@ function ensureDailyReset(){
   state.daily.trainToday = 0;
   state.daily.questProgress = {};
   state.daily.questsClaimed = [];
-  state.daily.questIds = pickDailyQuests(today);
+  state.daily.questIds = DAILY_QUEST_TIERS.map(q => q.id); // fixed 5-tier ladder, same every day
   state.daily.spendUSD = 0;
   if(!isFirstEver){
     fireLocalNotification('🎯 New Daily Quests!', 'Fresh quests are up in the League tab.');
   }
 }
 
-function questDef(id){ return QUEST_POOL.find(q => q.id === id); }
+function questDef(id){ return DAILY_QUEST_TIERS.find(q => q.id === id); }
 
 function questProgressValue(quest){
   return state.daily[quest.type] || 0;
@@ -4073,12 +4367,12 @@ function claimQuest(id){
   if(quest.rewardCash) rewardParts.push(`+$${quest.rewardCash}`);
   if(quest.rewardTeeth) rewardParts.push(`+🦷${quest.rewardTeeth}`);
   if(state.social.leagueId){
-    state.social.gymXpContributed += GYM_XP_PER_QUEST;
+    state.social.gymXpContributed += quest.gymXp;
     pushGymXpContribution();
-    rewardParts.push(`+${GYM_XP_PER_QUEST} Gym XP`);
+    rewardParts.push(`+${quest.gymXp} Gym XP`);
   }
-  pushLog(`✅ Quest complete: ${quest.label} (${rewardParts.join(' ')})`, 'level');
-  showToast(`Quest claimed! ${rewardParts.join(' ')}`);
+  pushLog(`✅ Tier ${quest.tier} complete: ${quest.label} (${rewardParts.join(' ')})`, 'level');
+  showToast(`Tier ${quest.tier} claimed! ${rewardParts.join(' ')}`);
   render();
   scheduleSave();
 }
@@ -4215,8 +4509,9 @@ async function joinLeague(leagueId){
       showToast(`${LEAGUES.find(l=>l.id===leagueId).name} is full (${arr.length}/${cap} members)`);
       return;
     }
-    const role = arr.length === 0 ? 'head_coach' : 'member';
-    arr.push({ playerId: state.social.playerId, name: state.social.displayName, joinedAt: Date.now(), lastActiveAt: Date.now(), power: totalPower(), role });
+    const isFounder = arr.length === 0;
+    const role = isFounder ? 'head_coach' : 'janitor';
+    arr.push({ playerId: state.social.playerId, name: state.social.displayName, joinedAt: Date.now(), lastActiveAt: Date.now(), power: totalPower(), role, isPrimaryHeadCoach: isFounder });
     await window.storage.set(key, JSON.stringify(arr), true);
 
     state.social.leagueId = leagueId;
@@ -4648,6 +4943,17 @@ async function refreshLeagueRosterDetail(){
     const myIdx = arr.findIndex(m => m.playerId === state.social.playerId);
     if(myIdx !== -1) arr[myIdx].lastActiveAt = now;
 
+    // Graduate any Janitor past their probation window to regular Member — same lazy,
+    // opportunistic pattern as inactivity pruning below (no cron to run this on a real clock,
+    // so it resolves whenever anyone's client happens to fetch the roster).
+    let graduatedCount = 0;
+    arr.forEach(m => {
+      if(m.role === 'janitor' && (now - (m.joinedAt||now)) >= JANITOR_DURATION_DAYS*86400000){
+        m.role = 'member';
+        graduatedCount++;
+      }
+    });
+
     const survivors = arr.filter(m => (now - (m.lastActiveAt || m.joinedAt || now)) <= kickThresholdForRole(m.role || 'member'));
     const kickedCount = arr.length - survivors.length;
 
@@ -4657,10 +4963,11 @@ async function refreshLeagueRosterDetail(){
       // leaderless just because the old Head Coach's 7-day grace window ran out.
       survivors.sort((a,b) => (a.joinedAt||0) - (b.joinedAt||0));
       survivors[0].role = 'head_coach';
+      survivors[0].isPrimaryHeadCoach = true; // inherited leadership counts as primary going forward
     }
     survivors.sort((a,b) => (ROLE_RANK[a.role||'member'] - ROLE_RANK[b.role||'member']) || ((a.joinedAt||0)-(b.joinedAt||0)));
 
-    if(kickedCount > 0 || myIdx !== -1){
+    if(kickedCount > 0 || graduatedCount > 0 || myIdx !== -1){
       await window.storage.set(key, JSON.stringify(survivors), true);
     }
 
@@ -4706,12 +5013,22 @@ async function pushActivityHeartbeat(){
   } catch(e){ /* best-effort — next interval will retry */ }
 }
 
-// Only Trainer/Coach/Member are assignable here — deliberately NOT letting the Head Coach hand
-// off their own role through this UI, since a mis-click could leave a gym with zero (or two)
-// Head Coaches with no clean way to resolve it given there's no real backend arbitrating this.
+// Only Prize Fighter/Trainer/Member are ever assignable to a Coach; Head Coach can additionally
+// hand out Coach. Deliberately NOT letting anyone hand off Head Coach itself through this UI —
+// a mis-click could leave a gym with zero (or two) Head Coaches with no clean way to resolve it
+// given there's no real backend arbitrating this.
 async function setMemberRole(targetPlayerId, newRole){
   if(!state.social.leagueId) return;
-  if(state.social.role !== 'head_coach'){ showToast('Only the Head Coach can change roles'); return; }
+  const actorRole = state.social.role;
+  if(actorRole !== 'head_coach' && actorRole !== 'coach'){
+    showToast('Only the Head Coach or a Coach can change roles');
+    return;
+  }
+  const allowedRoles = actorRole === 'head_coach' ? HEAD_COACH_ASSIGNABLE_ROLES : COACH_ASSIGNABLE_ROLES;
+  if(!allowedRoles.includes(newRole)){
+    showToast(actorRole === 'coach' ? 'Coaches can\'t appoint other Coaches' : 'That role can\'t be assigned here');
+    return;
+  }
   if(targetPlayerId === state.social.playerId){ showToast("You can't change your own role"); return; }
   try {
     const key = 'league_roster:'+state.social.leagueId;
@@ -4720,6 +5037,17 @@ async function setMemberRole(targetPlayerId, newRole){
     if(!Array.isArray(arr)) arr = [];
     const idx = arr.findIndex(m => m.playerId === targetPlayerId);
     if(idx === -1){ showToast('Member not found — try refreshing'); return; }
+
+    // Enforce the role cap (head_coach/coach/prize_fighter/trainer) — count everyone ELSE
+    // currently holding that role and reject if it's already full.
+    if(ROLE_CAPS[newRole] !== undefined){
+      const currentHolders = arr.filter((m,i) => i !== idx && (m.role||'member') === newRole).length;
+      if(currentHolders >= ROLE_CAPS[newRole]){
+        showToast(`${ROLE_LABELS[newRole]} is full (${ROLE_CAPS[newRole]} max)`);
+        return;
+      }
+    }
+
     arr[idx].role = newRole;
     await window.storage.set(key, JSON.stringify(arr), true);
     showToast(`${arr[idx].name || 'Member'} is now ${ROLE_LABELS[newRole]}`);
@@ -4727,6 +5055,41 @@ async function setMemberRole(targetPlayerId, newRole){
   } catch(e){
     showToast('Could not update role — check your connection and try again');
   }
+}
+
+// Shows the full role hierarchy with caps and current fill counts — uses whatever roster data is
+// already cached (no extra fetch) so it's instant, but that also means it reflects however
+// recently the roster was last refreshed rather than a guaranteed-live count.
+function openRolesInfo(){
+  const roleCounts = {};
+  (leagueRosterDetailCache.members||[]).forEach(m => { const r = m.role||'member'; roleCounts[r] = (roleCounts[r]||0)+1; });
+  const body = document.getElementById('roles-info-modal-body');
+  const roleOrder = ['head_coach','coach','prize_fighter','trainer','member','janitor'];
+  body.innerHTML = `
+    <div style="font-size:11px; color:var(--text-muted); margin-bottom:10px;">
+      Special roles (everything but Member) are assigned by promotion, never automatically —
+      see each role's description for who can assign it.
+    </div>
+    ${roleOrder.map(r => `
+      <div class="card">
+        <div style="display:flex; justify-content:space-between; align-items:center;">
+          <div style="font-family:'Oswald',sans-serif; font-weight:700; font-size:14px;">${ROLE_ICONS[r]} ${ROLE_LABELS[r]}</div>
+          <div style="font-size:11px; color:var(--belt-gold); flex-shrink:0; margin-left:8px;">${ROLE_CAPS[r]!==undefined ? `${roleCounts[r]||0} / ${ROLE_CAPS[r]}` : 'Uncapped'}</div>
+        </div>
+        <div style="font-size:11px; color:var(--text-muted); margin-top:6px;">${ROLE_DESCRIPTIONS[r]}</div>
+      </div>
+    `).join('')}
+    <div class="panel-title">Member Tenure Tiers</div>
+    <div class="card">
+      <div style="font-size:11px; color:var(--text-muted); margin-bottom:8px;">Members (no special role) are tracked by time in the gym instead of a title:</div>
+      ${TENURE_TIERS.map(t => `
+        <div style="display:flex; justify-content:space-between; padding:3px 0; font-size:12px;">
+          <span>${t.name}</span><span style="color:var(--text-muted);">${t.minDays}+ days</span>
+        </div>
+      `).join('')}
+    </div>
+  `;
+  document.getElementById('roles-info-modal').style.display = 'flex';
 }
 
 /* ------------------------------------------------------------------------
@@ -4823,7 +5186,10 @@ async function openGymPreview(leagueId){
     body.innerHTML = `
       <div class="card" style="border-color:var(--belt-gold); margin-bottom:10px;">
         <div style="display:flex; justify-content:space-between; align-items:center;">
-          <div style="font-family:'Oswald',sans-serif; font-weight:700; font-size:16px; color:var(--belt-gold);">Level ${gymXp.level}</div>
+          <div>
+            <div style="font-family:'Oswald',sans-serif; font-weight:700; font-size:16px; color:var(--belt-gold);">Level ${gymXp.level}</div>
+            <div style="font-size:11px; color:var(--text-muted);">${gymLevelTitle(gymXp.level)}</div>
+          </div>
           <div style="font-size:12px; color:var(--text-muted);">${members.length} / ${cap} members</div>
         </div>
       </div>
@@ -4925,7 +5291,7 @@ function renderLeagueTab(){
   `;
 
   const questsHtml = `
-    <div class="panel-title">Daily Quests <span style="color:var(--text-muted); font-size:11px;">(resets daily, same for everyone)</span></div>
+    <div class="panel-title">Daily Quests <span style="color:var(--text-muted); font-size:11px;">(5-tier ladder, resets daily, same for everyone)</span></div>
     ${state.daily.questIds.map(id => {
       const quest = questDef(id);
       if(!quest) return '';
@@ -4936,11 +5302,12 @@ function renderLeagueTab(){
       const rewardParts = [];
       if(quest.rewardCash) rewardParts.push(`$${quest.rewardCash}`);
       if(quest.rewardTeeth) rewardParts.push(`🦷${quest.rewardTeeth}`);
+      rewardParts.push(`+${quest.gymXp} Gym XP`);
       return `
-        <div class="card">
+        <div class="card" style="${claimed?'opacity:0.55;':''}">
           <div style="display:flex; justify-content:space-between; align-items:center;">
-            <div style="font-size:13px; font-weight:600;">${quest.label}</div>
-            <div style="font-size:11px; color:var(--belt-gold); flex-shrink:0; margin-left:8px;">${rewardParts.join(' + ')}</div>
+            <div style="font-size:13px; font-weight:600;"><span style="color:var(--belt-gold);">Tier ${quest.tier}</span> — ${quest.label}</div>
+            <div style="font-size:11px; color:var(--belt-gold); flex-shrink:0; margin-left:8px; text-align:right;">${rewardParts.join(' + ')}</div>
           </div>
           <div class="bar-track" style="margin-top:8px;"><div class="bar-fill xp" style="width:${pct}%"></div></div>
           <div style="display:flex; justify-content:space-between; align-items:center; margin-top:6px;">
@@ -5085,7 +5452,10 @@ function renderLeagueTab(){
     <div class="panel-title">Gym Level <span style="color:var(--text-muted); font-size:11px;">(fueled by every member's daily quests)</span></div>
     <div class="card" style="border-color:var(--belt-gold); margin-bottom:8px;">
       <div style="display:flex; justify-content:space-between; align-items:center;">
-        <div style="font-family:'Oswald',sans-serif; font-weight:700; font-size:16px; color:var(--belt-gold);">🏋️ Level ${gymLevel}</div>
+        <div>
+          <div style="font-family:'Oswald',sans-serif; font-weight:700; font-size:16px; color:var(--belt-gold);">🏋️ Level ${gymLevel}</div>
+          <div style="font-size:11px; color:var(--text-muted);">${gymLevelTitle(gymLevel)}</div>
+        </div>
         <div style="font-size:11px; color:var(--champ-teal);">+${(gymLevelBonusPct()*100).toFixed(1)}% all stats</div>
       </div>
       <div class="bar-track" style="margin-top:8px;"><div class="bar-fill xp" style="width:${gymPct}%"></div></div>
@@ -5124,14 +5494,19 @@ function renderLeagueTab(){
     <div class="panel-title">Gym Roster <span style="color:var(--text-muted); font-size:11px;">(${leagueRosterCache[league.id] ?? '…'} / ${leagueMemberCapForLevel(state.social.knownGymLevel)})</span></div>
     <div class="card" style="margin-bottom:8px;">
       <div style="font-size:11px; color:var(--text-muted); margin-bottom:8px;">Inactive 48h+ (Trainers/Members) or 7 days+ (Coaches/Head Coach) get auto-removed on refresh.</div>
+      <button class="btn btn-ghost btn-block" data-open-roles-info>ℹ️ View Roles &amp; Caps</button>
     </div>
-    ${(!rosterStale && rosterAll.length > 0) ? rosterShown.map(m => {
+    ${(() => {
+      const roleCounts = {};
+      rosterAll.forEach(m => { const r = m.role||'member'; roleCounts[r] = (roleCounts[r]||0)+1; });
+      return (!rosterStale && rosterAll.length > 0) ? rosterShown.map(m => {
       const isMe = m.playerId === state.social.playerId;
       const role = m.role || 'member';
       const memberDays = Math.floor((Date.now()-(m.joinedAt||Date.now()))/86400000);
       let mTier = TENURE_TIERS[0];
       for(const t of TENURE_TIERS){ if(memberDays >= t.minDays) mTier = t; }
-      const canManage = state.social.role === 'head_coach' && !isMe;
+      const canManage = (state.social.role === 'head_coach' || state.social.role === 'coach') && !isMe;
+      const assignable = state.social.role === 'head_coach' ? HEAD_COACH_ASSIGNABLE_ROLES : COACH_ASSIGNABLE_ROLES;
       return `
         <div class="card" style="${isMe?'border-color:var(--belt-gold);':''}">
           <div style="display:flex; justify-content:space-between; align-items:center;">
@@ -5141,15 +5516,17 @@ function renderLeagueTab(){
             </div>
           </div>
           ${canManage ? `
-            <div style="display:flex; gap:5px; margin-top:8px;">
-              ${['trainer','coach','member'].filter(r=>r!==role).map(r => `
-                <button class="btn btn-ghost" style="flex:1; font-size:10px; padding:6px 4px;" data-set-role="${m.playerId}" data-role-value="${r}">→ ${ROLE_LABELS[r]}</button>
-              `).join('')}
+            <div style="display:flex; gap:5px; margin-top:8px; flex-wrap:wrap;">
+              ${assignable.filter(r=>r!==role).map(r => {
+                const atCap = ROLE_CAPS[r] !== undefined && (roleCounts[r]||0) >= ROLE_CAPS[r];
+                return `<button class="btn btn-ghost" style="flex:1 1 30%; font-size:10px; padding:6px 4px;" data-set-role="${m.playerId}" data-role-value="${r}" ${atCap?'disabled':''}>→ ${ROLE_LABELS[r]}${ROLE_CAPS[r]!==undefined?` (${roleCounts[r]||0}/${ROLE_CAPS[r]})`:''}</button>`;
+              }).join('')}
             </div>
           ` : ''}
         </div>
       `;
-    }).join('') : (!rosterStale ? `<div class="card empty-state" style="padding:16px;">Roster's empty or still loading — try refreshing.</div>` : '')}
+      }).join('') : (!rosterStale ? `<div class="card empty-state" style="padding:16px;">Roster's empty or still loading — try refreshing.</div>` : '');
+    })()}
     ${(!rosterStale && rosterAll.length > 5) ? `
       <button class="btn btn-ghost btn-block" data-toggle-roster-expand style="margin-top:4px;">${state.ui.rosterExpanded ? '▲ Show Less' : `▼ Show All ${rosterAll.length} Members`}</button>
     ` : ''}
@@ -5218,10 +5595,10 @@ function renderLeagueTab(){
 
     <div class="panel-title">Switch Leagues</div>
     <div class="card">
-      <div style="font-size:11px; color:var(--text-muted); margin-bottom:10px;">Switching resets your membership tier progress and weekly XP in the new league.</div>
+      <div style="font-size:11px; color:var(--corner-red); margin-bottom:10px;">⚠️ Switching resets your membership tier, weekly XP, and tenure progress in ${league.name} — it can't be undone.</div>
       <div style="display:flex; flex-wrap:wrap; gap:6px;">
         ${LEAGUES.filter(l => l.id !== state.social.leagueId).map(lg => `
-          <button class="btn btn-ghost" style="flex:1 1 45%; font-size:11px; padding:8px 6px;" data-join-league="${lg.id}">${lg.icon} ${lg.name}</button>
+          <button class="btn btn-ghost" style="flex:1 1 45%; font-size:11px; padding:8px 6px;" data-switch-league="${lg.id}" data-switch-league-name="${escapeAttr(lg.name)}">${lg.icon} ${lg.name}</button>
         `).join('')}
       </div>
     </div>
@@ -5253,10 +5630,12 @@ function renderGymTab(){
     </div>
 
     <div class="panel-title">Equipment Upgrades</div>
+    ${renderBulkBuyToggle()}
     ${Object.entries(GYM_EQUIPMENT).map(([key, equip]) => {
       const g = state.gym[key];
-      const cost = gymUpgradeCost(key);
-      const canAfford = state.economy.cash >= cost;
+      const qty = state.ui.bulkBuyQty === 'max' ? Infinity : state.ui.bulkBuyQty;
+      const preview = computeBulkBuy(g.level, g.baseCost, 1.5, qty, state.economy.cash);
+      const canAfford = preview.bought > 0;
       return `
         <div class="card loop-card">
           <div class="loop-icon">${equip.icon}</div>
@@ -5264,8 +5643,8 @@ function renderGymTab(){
             <div class="loop-title">${equip.name} <span style="color:var(--belt-gold); font-size:11px;">Lv.${g.level}</span></div>
             <div class="loop-desc">${equip.desc} (+${g.bonusPerLevel} ${equip.statLabel}/level)</div>
           </div>
-          <button class="btn ${canAfford ? 'btn-gold' : 'btn-ghost'}" style="flex-shrink:0; padding:9px 12px; font-size:12px;" data-gym-buy="${key}" ${canAfford?'':'disabled'}>
-            $${fmtNum(cost)}
+          <button class="btn ${canAfford ? 'btn-gold' : 'btn-ghost'}" style="flex-shrink:0; padding:9px 12px; font-size:12px; text-align:center;" data-gym-buy="${key}" ${canAfford?'':'disabled'}>
+            $${fmtNum(preview.totalCost)}${preview.bought>1?`<br><span style="font-size:9px;">×${preview.bought}</span>`:''}
           </button>
         </div>
       `;
@@ -5305,6 +5684,12 @@ const DEV_CODES = {
   // run through every purchase path without tripping DAILY_SPEND_CAP_USD. Not something you'd
   // want a live player redeeming — keep this one internal.
   'QAUNLIMITED':  { effect: () => { state.economy.spendCapDisabled = true; }, desc: 'Removes the $50/day real-money spend cap (testing only)' },
+  // Testing-only: unlocks the real-money purchase buttons at all. Every "Buy" button is currently
+  // a placeholder that grants the reward for free (no Play Billing wired up yet) — locking this
+  // behind a code by default means real testers (Closed/Open Testing, or Production once live)
+  // can't accidentally farm free Teeth/cash from what will eventually be actual paid purchases.
+  // Redeem this ONLY on your own dev/QA devices.
+  'QAPURCHASE':   { effect: () => { state.economy.realPurchasesUnlocked = true; }, desc: 'Unlocks real-money purchase buttons (testing only)' },
 };
 
 function redeemDevCode(rawCode){
@@ -5348,7 +5733,10 @@ function renderHomeTab(){
       `}
     </div>
 
-    <div class="panel-title">Garage</div>
+    <div class="panel-title" data-toggle-section="garageExpanded" style="cursor:pointer; display:flex; justify-content:space-between; align-items:center;">
+      <span>Garage</span><span style="font-size:12px;">${state.ui.garageExpanded ? '▾' : '▸'}</span>
+    </div>
+    ${state.ui.garageExpanded ? `
     <div class="gear-grid">
       ${Object.entries(VEHICLE_CATEGORIES).map(([key, cat]) => {
         const vehicle = state.garage[key];
@@ -5356,18 +5744,21 @@ function renderHomeTab(){
         return `
           <div class="gear-slot ${vehicle ? 'filled' : 'empty'}" style="${vehicle ? `border-color:${rarity.color};` : ''}" data-view-vehicle="${key}">
             <div class="gear-slot-icon">${cat.icon}</div>
-            <div class="gear-slot-label">${cat.label}</div>
+            <div class="gear-slot-label">${vehicle ? `${vehicle.rarityName} ${vehicle.name}` : cat.label}</div>
             ${vehicle ? `<div class="gear-slot-power" style="color:${rarity.color};">${vehicle.itemPower}</div>` : ''}
           </div>
         `;
       }).join('')}
     </div>
+    ` : ''}
 
     <div class="panel-title">Home Perks</div>
+    ${renderBulkBuyToggle()}
     ${Object.entries(HOME_PERKS).map(([key, perk]) => {
       const p = state.homePerks[key];
-      const cost = homePerkCost(key);
-      const canAfford = state.economy.cash >= cost;
+      const qty = state.ui.bulkBuyQty === 'max' ? Infinity : state.ui.bulkBuyQty;
+      const preview = computeBulkBuy(p.level, p.baseCost, 1.6, qty, state.economy.cash);
+      const canAfford = preview.bought > 0;
       return `
         <div class="card loop-card">
           <div class="loop-icon">${perk.icon}</div>
@@ -5375,8 +5766,8 @@ function renderHomeTab(){
             <div class="loop-title">${perk.name} <span style="color:var(--belt-gold); font-size:11px;">Lv.${p.level}</span></div>
             <div class="loop-desc">${perk.desc} (+${p.bonusPerLevel}% ${perk.effectLabel}/level)</div>
           </div>
-          <button class="btn ${canAfford ? 'btn-gold' : 'btn-ghost'}" style="flex-shrink:0; padding:9px 12px; font-size:12px;" data-home-buy="${key}" ${canAfford?'':'disabled'}>
-            $${fmtNum(cost)}
+          <button class="btn ${canAfford ? 'btn-gold' : 'btn-ghost'}" style="flex-shrink:0; padding:9px 12px; font-size:12px; text-align:center;" data-home-buy="${key}" ${canAfford?'':'disabled'}>
+            $${fmtNum(preview.totalCost)}${preview.bought>1?`<br><span style="font-size:9px;">×${preview.bought}</span>`:''}
           </button>
         </div>
       `;
@@ -5919,6 +6310,12 @@ function attachContentHandlers(){
       handleFightSceneClick();
       const hypeFill = fightScene.querySelector('.hype-fill');
       if(hypeFill) hypeFill.style.height = ((state.clickCombat.charge||0)/20*100) + '%';
+      const hypeCombo = fightScene.querySelector('.hype-combo');
+      if(hypeCombo){
+        const mult = Math.min(10, 1 + Math.floor((state.clickCombat.combo||0)/3));
+        hypeCombo.textContent = `×${mult}`;
+        hypeCombo.style.display = state.clickCombat.combo > 2 ? 'block' : 'none';
+      }
     });
   }
   const rouletteFab = document.querySelector('[data-open-roulette]');
@@ -5934,6 +6331,10 @@ function attachContentHandlers(){
       e.stopPropagation(); // don't also register a fight-scene tap underneath
       openLevelUpNotices();
     });
+  }
+  const rolesInfoBtn = document.querySelector('[data-open-roles-info]');
+  if(rolesInfoBtn){
+    rolesInfoBtn.addEventListener('click', openRolesInfo);
   }
   const autoOpenBtn = document.querySelector('[data-toggle-autoopen]');
   if(autoOpenBtn){
@@ -6056,6 +6457,17 @@ function attachContentHandlers(){
       joinLeague(btn.dataset.joinLeague);
     });
   });
+  document.querySelectorAll('[data-switch-league]').forEach(btn => {
+    btn.addEventListener('click', () => {
+      const targetName = btn.dataset.switchLeagueName;
+      const currentLeague = LEAGUES.find(l => l.id === state.social.leagueId);
+      showConfirm(
+        `Switch to ${targetName}?`,
+        `This resets your Membership Tier, weekly XP, and tenure progress in ${currentLeague ? currentLeague.name : 'your current gym'} — it can't be undone.`,
+        () => joinLeague(btn.dataset.switchLeague)
+      );
+    });
+  });
   document.querySelectorAll('[data-preview-gym]').forEach(card => {
     card.addEventListener('click', () => openGymPreview(card.dataset.previewGym));
   });
@@ -6087,6 +6499,20 @@ function attachContentHandlers(){
   if(rosterExpandBtn){
     rosterExpandBtn.addEventListener('click', () => { state.ui.rosterExpanded = !state.ui.rosterExpanded; render(); });
   }
+  document.querySelectorAll('[data-set-bulk-qty]').forEach(btn => {
+    btn.addEventListener('click', () => {
+      const val = btn.dataset.setBulkQty;
+      state.ui.bulkBuyQty = val === 'max' ? 'max' : parseInt(val);
+      render();
+    });
+  });
+  document.querySelectorAll('[data-toggle-section]').forEach(el => {
+    el.addEventListener('click', () => {
+      const key = el.dataset.toggleSection;
+      state.ui[key] = !state.ui[key];
+      render();
+    });
+  });
   const tiersExpandBtn = document.querySelector('[data-toggle-tiers-expand]');
   if(tiersExpandBtn){
     tiersExpandBtn.addEventListener('click', () => { state.ui.tiersExpanded = !state.ui.tiersExpanded; render(); });
@@ -6404,6 +6830,14 @@ document.getElementById('levelup-modal').addEventListener('click', (e) => {
   if(e.target.id === 'levelup-modal') document.getElementById('levelup-modal').style.display = 'none';
 });
 
+/* ---------------------------- ROLES INFO MODAL ---------------------------- */
+document.getElementById('roles-info-modal-close').addEventListener('click', () => {
+  document.getElementById('roles-info-modal').style.display = 'none';
+});
+document.getElementById('roles-info-modal').addEventListener('click', (e) => {
+  if(e.target.id === 'roles-info-modal') document.getElementById('roles-info-modal').style.display = 'none';
+});
+
 /* ---------------------------- GYM PREVIEW MODAL ---------------------------- */
 document.getElementById('gympreview-modal-close').addEventListener('click', () => {
   document.getElementById('gympreview-modal').style.display = 'none';
@@ -6612,6 +7046,7 @@ function startLoop(){
     if(state.clickCombat.charge > 0 && Date.now() - state.clickCombat.lastClickAt > 3000){
       state.clickCombat.charge = Math.max(0, state.clickCombat.charge - 1);
       state.clickCombat.lastClickAt = Date.now();
+      state.clickCombat.combo = 0; // a real pause breaks the tap-combo streak too, not just charge
     }
 
     if(state.bout.phase === 'none'){
@@ -6765,6 +7200,8 @@ async function bootGame(){
   // If no save (or save had no fighter yet), onboarding stays visible as normal —
   // its existing confirm handler will create state.fighter and call render().
   init();
+  document.body.classList.add('boot-ready'); // reveals #app / hides the loading overlay now that
+                                               // we've actually decided onboarding vs. resumed save
 }
 
 // Wait for Firebase Anonymous Auth before booting — otherwise loadGame()'s very first
