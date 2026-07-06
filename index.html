@@ -883,6 +883,7 @@ let state = {
     createdAt: null,
     lastTick: Date.now(),
     notifiedPrestigeReady: false, // avoids re-firing the same "prestige ready" notification repeatedly
+    lastSavedAt: 0, // set on every save (local or cloud) — lets loadGame() tell which copy is newer
   },
   fighter: {
     name: '',
@@ -3151,7 +3152,9 @@ function executePrestige(){
 
   pushLog(`🌟 PRESTIGED (#${state.prestige.count})! Stats reset with ${Math.round(retainPct*100)}% retained.`, 'level');
   render();
-  scheduleSave();
+  saveLocal();
+  saveToCloud(true); // prestige is rare and high-stakes — worth a forced cloud backup right away
+                       // rather than waiting out the normal 90s throttle
 }
 
 const POWER_UPS = {
@@ -7017,12 +7020,14 @@ function startLoop(){
     }
   }, TICK_MS);
 
-  // Autosave on a fixed interval (not debounced — debouncing would never fire during continuous
-  // active play, since the slow tick above runs every second and would keep resetting the timer).
+  // Runs every 10s: saveGame() itself now saves LOCAL every call (free, instant) but only
+  // pushes to the CLOUD every ~90s (see CLOUD_SYNC_INTERVAL_MS) — the local layer is what
+  // actually protects against losing recent progress on a crash/close at this cadence, not
+  // hammering Firestore's write quota for it.
   setInterval(() => {
     if(state.fighter.name) saveGame();
     // Push this player's weekly league contribution + activity heartbeat to shared storage too,
-    // but throttled to once a minute (not every 10s autosave) since these are writes to shared,
+    // but throttled to once a minute (not every 10s) since these are writes to shared,
     // all-players storage. The heartbeat is what keeps an active-but-League-tab-avoidant player
     // from getting auto-kicked for "inactivity" they aren't actually guilty of.
     if(state.social.leagueId && Date.now() - lastWeeklyPushAt > 60000){
@@ -7096,61 +7101,122 @@ function startLoop(){
 }
 
 /* ========================================================================
-   PERSISTENCE MODULE — saves/loads full game state via window.storage.
-   Single save slot per player (personal, not shared). Debounced auto-save
-   so we're not hitting storage on every tick; saves immediately after
-   high-value actions (onboarding, purchases, loot) as a backstop.
+   PERSISTENCE MODULE — local-first, cloud-backed.
+   Saving to Firestore on every tick was needlessly expensive (a real
+   constraint on the free tier's daily write quota) for a game that's
+   mostly idle ticks, not meaningful new content each time. New model:
+     - LOCAL (localStorage): saved constantly (every 10s) — free, instant,
+       no network round-trip, protects against a crash/close losing recent
+       progress. Safe to use here specifically because this now runs as a
+       real hosted site, not the old Claude.ai artifact sandbox that
+       required avoiding browser storage.
+     - CLOUD (Firestore): synced far less often (every 90s) plus on a few
+       high-value moments (prestige, purchases) and when the tab is
+       backgrounded/closed — cuts cloud writes by roughly 9x versus before,
+       while still keeping a reasonably fresh cross-device backup.
+   On load: local is tried first for an instant boot, then Firestore is
+   checked in the background — if the cloud copy is NEWER (e.g. you played
+   on another device since), it overwrites what local just loaded.
    ======================================================================== */
 const SAVE_KEY = 'mma_save_v1';
+const LOCAL_SAVE_KEY = 'mma_local_save_v1'; // separate localStorage key, deliberately not reusing SAVE_KEY
+const CLOUD_SYNC_INTERVAL_MS = 90000; // was every 10s; 9x fewer Firestore writes
 let saveTimer = null;
 let saveInProgress = false;
+let lastCloudSaveAt = 0;
 
 function scheduleSave(){
   clearTimeout(saveTimer);
   saveTimer = setTimeout(saveGame, 1500);
 }
 
+// Instant, free, local save — call this as often as you want (every 10s, every meaningful
+// action) since it costs nothing and never touches the network.
+function saveLocal(){
+  try {
+    state.meta.lastSavedAt = Date.now();
+    localStorage.setItem(LOCAL_SAVE_KEY, JSON.stringify(state));
+    return true;
+  } catch(e) {
+    // localStorage can fail (private browsing quirks, storage full, disabled) — not fatal, the
+    // cloud save is still the real backstop.
+    console.error('Local save failed:', e);
+    return false;
+  }
+}
+
 let saveFailureCount = 0;
 let saveWarningShown = false;
 
-async function saveGame(){
-  if(saveInProgress) return; // avoid overlapping writes if called in quick succession
+// Cloud (Firestore) save — the expensive one, so this is throttled unless forced=true (used for
+// high-value moments like prestige/purchases, or when the tab is about to be backgrounded/closed).
+async function saveToCloud(forced=false){
+  if(saveInProgress) return;
+  if(!forced && Date.now() - lastCloudSaveAt < CLOUD_SYNC_INTERVAL_MS) return;
   saveInProgress = true;
   try {
+    state.meta.lastSavedAt = Date.now();
     const payload = JSON.stringify(state);
     await window.storage.set(SAVE_KEY, payload, false);
+    lastCloudSaveAt = Date.now();
     saveFailureCount = 0; // storage recovered — reset so a future outage logs/warns again
   } catch(e) {
     saveFailureCount++;
-    // A broken storage bridge would otherwise print this exact error every 10s forever — only
+    // A broken storage bridge would otherwise print this exact error every cycle forever — only
     // log it loudly a few times, then go quiet so it doesn't drown out everything else.
-    if(saveFailureCount <= 3) console.error('Save failed:', e);
+    if(saveFailureCount <= 3) console.error('Cloud save failed:', e);
     if(saveFailureCount === 3 && !saveWarningShown){
       saveWarningShown = true;
-      showToast('⚠️ Progress isn\'t saving right now — keep this tab open, reloading may lose recent progress');
+      showToast('⚠️ Cloud backup isn\'t syncing right now — your local save is still fine on this device');
     }
   } finally {
     saveInProgress = false;
   }
 }
 
-// Loads a saved game if one exists. Returns true if a save was found and restored, false otherwise.
-// IMPORTANT: window.storage.get throws on a missing key rather than returning null, so a fresh
-// player (no save yet) is expected to hit the catch block — that's normal, not an error.
+// Saves to BOTH layers — local always (cheap), cloud only if the throttle window has passed
+// (or is forced). This is what scheduleSave()/the autosave interval actually call.
+async function saveGame(forced=false){
+  saveLocal();
+  await saveToCloud(forced);
+}
+
+// Loads local first (instant), then checks Firestore in the background and overwrites with the
+// cloud copy if it's actually newer — handles "played on another device since" correctly without
+// making every boot wait on a network round-trip.
 async function loadGame(){
+  let hasLocal = false;
+  try {
+    const raw = localStorage.getItem(LOCAL_SAVE_KEY);
+    if(raw){
+      deepMerge(state, JSON.parse(raw));
+      hasLocal = true;
+    }
+  } catch(e) {
+    console.error('Local load failed:', e);
+  }
+
+  // Check the cloud copy in the background regardless — either to establish the initial save
+  // (no local copy yet, e.g. first time on a new device) or to pick up a newer cross-device save.
   try {
     const result = await window.storage.get(SAVE_KEY, false);
-    if(!result || !result.value) return false;
-    const loaded = JSON.parse(result.value);
-    // Merge into state rather than replacing wholesale, so any new fields added in later
-    // updates (that an old save predates) still get their default values from the fresh state.
-    deepMerge(state, loaded);
-    return true;
+    if(result && result.value){
+      const cloudState = JSON.parse(result.value);
+      const cloudIsNewer = !hasLocal || (cloudState.meta && cloudState.meta.lastSavedAt > state.meta.lastSavedAt);
+      if(cloudIsNewer){
+        deepMerge(state, cloudState);
+        saveLocal(); // mirror the newer cloud copy into local so this device's cache is caught up
+      }
+      hasLocal = true; // either the local copy or the cloud copy (or both) are now loaded
+    }
   } catch(e) {
-    // Expected for a brand-new player with no save yet; anything else gets logged for diagnosis.
-    console.log('No existing save found (or load failed), starting fresh:', e.message);
-    return false;
+    // Expected if there's no cloud save yet (brand new player, or first Firestore write hasn't
+    // happened for this device/account) — only worth logging if we ALSO have no local save,
+    // since that combination means this really is a fresh player with nothing anywhere.
+    if(!hasLocal) console.log('No existing save found anywhere (or load failed), starting fresh:', e.message);
   }
+
+  return hasLocal;
 }
 
 function deepMerge(target, source){
@@ -7176,6 +7242,12 @@ document.addEventListener('visibilitychange', () => {
   if(document.visibilityState === 'visible' && state.fighter.name){
     processOfflineProgress();
     render();
+  } else if(document.visibilityState === 'hidden' && state.fighter.name){
+    // Going to background (switching apps, locking the phone) — force a cloud sync right now
+    // rather than waiting out the normal 90s throttle. Local save already happened as recently
+    // as the last 10s tick regardless, so this is specifically about not leaving the CLOUD
+    // backup stale if the player closes/reinstalls/switches devices shortly after backgrounding.
+    saveToCloud(true);
   }
 });
 
