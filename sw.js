@@ -5,7 +5,7 @@
 // Strategy: cache-first for the app shell (works fully offline after first load), falling back
 // to network for anything not pre-cached. Bump CACHE_NAME whenever you ship a new build so
 // returning players actually get the update instead of a stale cached copy forever.
-const CACHE_NAME = 'idle-mma-legends-v16';
+const CACHE_NAME = 'idle-mma-legends-v18';
 const APP_SHELL = [
   './index.html',
   './manifest.json',
