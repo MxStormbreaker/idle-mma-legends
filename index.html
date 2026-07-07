@@ -1135,6 +1135,10 @@ let state = {
     powerUpsExpanded: true,   // Career tab Power-Ups list
     cosmeticsExpanded: true,  // Home tab Cosmetic Gear list
     questsExpanded: true,     // League tab Daily Quests list
+    weeklyScoreExpanded: true,  // League tab "Gym Wars Score — This Week" list
+    gymWarsExpanded: true,      // League tab full Gym Wars section (Top Gyms/Growth/Players)
+    teethSpendExpanded: true,   // League tab Teeth Spent Leaderboard
+    cornerRosterExpanded: true, // Corner tab companion category lists
     tiersExpanded: false,  // Career Tiers list: false = first 5 only, true = all 10
     lastAckedLevel: 0,     // fighter.level as of the last time the notifications panel was opened
                             // — badge count is simply (current level - this), see updateNavBadges
@@ -2626,6 +2630,7 @@ function renderFighterTab(){
       </div>
     </div>
 
+    ${renderExpandCollapseAll(['gearExpanded'])}
     <div class="panel-title">Active Loops</div>
     <div class="card loop-card compact">
       <div class="loop-icon">🥊</div>
@@ -2751,6 +2756,7 @@ function renderCareerTab(){
   const nextTier = TIERS.find(t => t.minWins > f.wins);
   const eligible = isPrestigeEligible();
   return `
+    ${renderExpandCollapseAll(['powerUpsExpanded'])}
     <div class="panel-title">Career Ladder</div>
     <div class="card">
       <div style="font-family:'Oswald',sans-serif; font-size:16px; font-weight:600; color:var(--belt-gold);">${tier.name}</div>
@@ -3117,6 +3123,32 @@ function computeBulkBuy(startLevel, baseCost, rate, quantity, availableCash){
 // actionable is hidden inside (an affordable upgrade, a claimable quest, an unequipped owned
 // cosmetic), the header gets a gold highlight so collapsing a section never hides awareness of
 // something worth opening it back up for.
+// Renders a single "Collapse All / Expand All" sweep button covering a given set of state.ui
+// keys — lets a whole tab's worth of long lists be collapsed or expanded in one tap instead of
+// clicking each section's header individually. If ANY covered section is currently expanded,
+// the button collapses everything; only shows "Expand All" once every section is already shut.
+function renderExpandCollapseAll(sectionKeys){
+  const anyExpanded = sectionKeys.some(key => state.ui[key]);
+  return `
+    <button class="btn btn-ghost btn-block" style="margin-bottom:10px; font-size:11px;" data-toggle-all-sections="${sectionKeys.join(',')}">
+      ${anyExpanded ? '▲ Collapse All' : '▼ Expand All'}
+    </button>
+  `;
+}
+
+// Corner tab's category collapse state (state.cornerExpanded) is a different shape from
+// state.ui's boolean flags (a dict keyed by category), so it needs its own sweep button rather
+// than reusing renderExpandCollapseAll.
+function renderCornerCollapseAll(){
+  const categoryKeys = CORNER_CATEGORIES.map(c => c.key);
+  const anyExpanded = categoryKeys.some(key => state.cornerExpanded && state.cornerExpanded[key]);
+  return `
+    <button class="btn btn-ghost btn-block" style="margin-bottom:10px; font-size:11px;" data-toggle-all-corner-categories>
+      ${anyExpanded ? '▲ Collapse All' : '▼ Expand All'}
+    </button>
+  `;
+}
+
 function renderCollapsibleHeader(title, stateKey, hasActionable){
   const expanded = state.ui[stateKey];
   const showHighlight = !expanded && hasActionable;
@@ -4699,7 +4731,16 @@ async function removeFromRoster(leagueId, playerId){
 async function leaveLeague(){
   if(!state.social.leagueId) return;
   const leagueName = (LEAGUES.find(l => l.id === state.social.leagueId) || {}).name || 'your gym';
-  await removeFromRoster(state.social.leagueId, state.social.playerId);
+  const oldLeagueId = state.social.leagueId;
+  await removeFromRoster(oldLeagueId, state.social.playerId);
+  // Real bug this fixes: without deleting these, a player's weekly-stats entry from a gym they've
+  // since left stays sitting in shared storage under that gym's leagueId — meaning the SAME
+  // player shows up multiple times on the cross-gym "Top Players Globally" leaderboard (once per
+  // gym they were ever in this week), each with a different frozen XP snapshot. Deleting on leave
+  // stops new duplicates at the source (aggregateGymWarsForWeek also dedupes defensively now, in
+  // case any stale entries already exist from before this fix).
+  try { await window.storage.delete(`league_weekly:${oldLeagueId}:${state.social.weekKey}:${state.social.playerId}`, true); } catch(e){}
+  try { await window.storage.delete(`league_gymxp:${oldLeagueId}:${state.social.playerId}`, true); } catch(e){}
   state.social.leagueId = null;
   state.social.contributedXp = 0;
   state.social.weekKey = getWeekKey();
@@ -4989,8 +5030,9 @@ async function aggregateGymWarsForWeek(weekKey){
       const res = await window.storage.get(k, true);
       if(res && res.value){
         const leagueId = k.split(':')[1];
+        const playerId = k.split(':')[3];
         const parsed = JSON.parse(res.value);
-        entries.push({ ...parsed, leagueId, flagged: isImplausibleWeeklyEntry(parsed) });
+        entries.push({ ...parsed, leagueId, playerId, flagged: isImplausibleWeeklyEntry(parsed) });
       }
     } catch(e){ /* skip unreadable entry */ }
   }));
@@ -5003,7 +5045,16 @@ async function aggregateGymWarsForWeek(weekKey){
     .map(lg => ({ leagueId: lg.id, name: lg.name, icon: lg.icon, totalXp: leagueTotals[lg.id] || 0 }))
     .sort((a,b) => b.totalXp - a.totalXp);
 
-  const individualRankings = entries.slice().sort((a,b) => (b.weeklyXp||0) - (a.weeklyXp||0));
+  // Dedupe by playerId — a player who's switched gyms this week can have a stale entry sitting
+  // under a PREVIOUS gym's leagueId (leaveLeague() now deletes these going forward, but this
+  // guards against any that already existed before that fix, or any other edge case that leaves
+  // one behind). Keep only the most recently updated entry per player.
+  const latestByPlayer = {};
+  entries.forEach(e => {
+    const existing = latestByPlayer[e.playerId];
+    if(!existing || (e.updatedAt||0) > (existing.updatedAt||0)) latestByPlayer[e.playerId] = e;
+  });
+  const individualRankings = Object.values(latestByPlayer).sort((a,b) => (b.weeklyXp||0) - (a.weeklyXp||0));
 
   return { weekKey, leagueRankings, individualRankings };
 }
@@ -5563,11 +5614,15 @@ function renderLeagueTab(){
 
   const gymWarsStale = gymWarsCache.weekKey !== getWeekKey();
   const gymWarsHtml = `
-    <div class="panel-title">🏆 Gym Wars <span style="color:var(--text-muted); font-size:11px;">(this week, live across all 10 gyms)</span></div>
-    <div class="card" style="margin-bottom:8px;">
+    ${renderCollapsibleHeader('⚔️ Gym Wars <span style="color:var(--text-muted); font-size:11px; text-transform:none; letter-spacing:0;">(this week, live across all 10 gyms)</span>', 'gymWarsExpanded', false)}
+    ${state.ui.gymWarsExpanded ? `
+    <div class="card" style="margin-bottom:8px; border-color:var(--corner-red);">
       <div style="font-size:11px; color:var(--text-muted); margin-bottom:8px;">
         Top 3 gyms and top 10 players get Teeth when the week ends. Payouts settle automatically
         the next time you open this tab after Monday — there's no server to push them to you.
+      </div>
+      <div style="font-size:10px; color:var(--text-muted);">
+        This whole section tracks the weekly Gym Wars Score (all activity, resets weekly) — separate from Gym Level up top, which only grows from claimed quests and never resets.
       </div>
     </div>
     ${!gymWarsStale ? `
@@ -5579,13 +5634,13 @@ function renderLeagueTab(){
             <div style="font-size:13px; font-weight:600;">${lg.icon} ${lg.name}</div>
           </div>
           <div style="text-align:right;">
-            <div style="font-family:'Oswald',sans-serif; font-weight:700; color:var(--champ-teal);">${fmtNum(lg.totalXp)} XP</div>
+            <div style="font-family:'Oswald',sans-serif; font-weight:700; color:var(--corner-red);">${fmtNum(lg.totalXp)} pts</div>
             <div style="font-size:10px; color:var(--belt-gold);">+${GYM_WARS_LEAGUE_REWARDS[i+1]}🦷 to every member</div>
           </div>
         </div>
       `).join('')}
 
-      <div class="panel-title" style="margin-top:10px;">Gym Growth This Week <span style="color:var(--text-muted); font-size:11px;">(all 10 gyms — level + weekly XP)</span></div>
+      <div class="panel-title" style="margin-top:10px;">Gym Growth This Week <span style="color:var(--text-muted); font-size:11px;">(all 10 gyms — Level + Gym Wars Score)</span></div>
       ${allGymLevelsCache.loading && Object.keys(allGymLevelsCache.levels).length === 0
         ? `<div class="card empty-state" style="padding:16px;">Loading gym levels…</div>`
         : gymWarsCache.leagueRankings.map((lg,i) => `
@@ -5596,12 +5651,12 @@ function renderLeagueTab(){
             </div>
             <div style="text-align:right;">
               <div style="font-family:'Oswald',sans-serif; font-weight:700;">Level ${allGymLevelsCache.levels[lg.leagueId] ?? '…'}</div>
-              <div style="font-size:10px; color:var(--champ-teal);">+${fmtNum(lg.totalXp)} XP this week</div>
+              <div style="font-size:10px; color:var(--corner-red);">+${fmtNum(lg.totalXp)} pts this week</div>
             </div>
           </div>
         `).join('')}
 
-      <div class="panel-title" style="margin-top:10px;">Top Players Globally</div>
+      <div class="panel-title" style="margin-top:10px;">Top Players Globally <span style="color:var(--text-muted); font-size:11px;">(Gym Wars Score)</span></div>
       ${gymWarsCache.individualRankings.filter(e=>!e.flagged).slice(0,10).length === 0
         ? `<div class="card empty-state" style="padding:16px;">No qualifying activity yet this week.</div>`
         : gymWarsCache.individualRankings.filter(e=>!e.flagged).slice(0,10).map((e,i) => `
@@ -5611,17 +5666,19 @@ function renderLeagueTab(){
               <div style="font-size:13px; font-weight:600; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;">${escapeHtml(e.name||'Unnamed')}</div>
             </div>
             <div style="text-align:right; flex-shrink:0;">
-              <div style="font-family:'Oswald',sans-serif; font-weight:700; color:var(--belt-gold);">${fmtNum(e.weeklyXp||0)}</div>
+              <div style="font-family:'Oswald',sans-serif; font-weight:700; color:var(--corner-red);">${fmtNum(e.weeklyXp||0)} pts</div>
               <div style="font-size:10px; color:var(--champ-teal);">+${GYM_WARS_INDIVIDUAL_REWARDS[i+1]}🦷</div>
             </div>
           </div>
         `).join('')}
     ` : `<div class="card empty-state" style="padding:16px;">${gymWarsCache.loading ? 'Loading standings…' : 'Tap refresh to load this week\'s standings.'}</div>`}
+    ` : ''}
   `;
 
   const teethSpendStale = teethSpendLeaderboardCache.weekKey !== getWeekKey();
   const teethSpendHtml = `
-    <div class="panel-title">🦷 Teeth Spent Leaderboard <span style="color:var(--text-muted); font-size:11px;">(tracks spend, not skill — resets weekly)</span></div>
+    ${renderCollapsibleHeader('🦷 Teeth Spent Leaderboard <span style="color:var(--text-muted); font-size:11px; text-transform:none; letter-spacing:0;">(tracks spend, not skill — resets weekly)</span>', 'teethSpendExpanded', false)}
+    ${state.ui.teethSpendExpanded ? `
     <div class="card" style="margin-bottom:8px;">
       <div style="font-size:11px; color:var(--text-muted);">
         Top 5 spenders each week get a small % of THEIR OWN spend rebated in Teeth the following
@@ -5644,6 +5701,7 @@ function renderLeagueTab(){
             </div>
           </div>
         `).join(''))}
+    ` : ''}
   `;
 
   if(!state.social.leagueId){
@@ -5669,6 +5727,7 @@ function renderLeagueTab(){
           <button class="btn btn-gold" style="padding:8px 14px; font-size:12px;" data-join-league="${lg.id}">Join</button>
         </div>
       `).join('')}
+      ${renderExpandCollapseAll(['gymWarsExpanded','teethSpendExpanded','questsExpanded'])}
       ${gymWarsHtml}
       ${teethSpendHtml}
       ${questsHtml}
@@ -5689,8 +5748,12 @@ function renderLeagueTab(){
   const gymPrevThreshold = gymXpForLevel(gymLevel);
   const gymPct = gymXpTotal === null ? 0 : clamp(((gymXpTotal-gymPrevThreshold)/(gymNextThreshold-gymPrevThreshold))*100, 0, 100);
   const gymLevelHtml = `
-    <div class="panel-title">Gym Level <span style="color:var(--text-muted); font-size:11px;">(fueled by every member's daily quests)</span></div>
+    <div class="panel-title">🏆 Gym Level <span style="color:var(--text-muted); font-size:11px;">(permanent — fueled ONLY by claimed daily quests)</span></div>
     <div class="card" style="border-color:var(--belt-gold); margin-bottom:8px;">
+      <div style="font-size:10px; color:var(--text-muted); margin-bottom:8px;">
+        Different from the Gym Wars Score further down — that one counts all activity and resets
+        weekly. This Gym Level only grows when members actually claim daily quests, and never resets.
+      </div>
       <div style="display:flex; justify-content:space-between; align-items:center;">
         <div>
           <div style="font-family:'Oswald',sans-serif; font-weight:700; font-size:16px; color:var(--belt-gold);">🏋️ Level ${gymLevel}</div>
@@ -5700,7 +5763,7 @@ function renderLeagueTab(){
       </div>
       <div class="bar-track" style="margin-top:8px;"><div class="bar-fill xp" style="width:${gymPct}%"></div></div>
       <div style="font-size:11px; color:var(--text-muted); margin-top:6px;">
-        ${gymXpTotal === null ? (leagueGymCache.loading ? 'Loading gym XP…' : 'Tap Refresh All below to load this gym\'s total XP') : `${fmtNum(gymXpTotal)} / ${fmtNum(gymNextThreshold)} Gym XP to Level ${gymLevel+1}`}
+        ${gymXpTotal === null ? (leagueGymCache.loading ? 'Loading Gym XP…' : 'Tap Refresh All below to load this gym\'s total Gym XP') : `${fmtNum(gymXpTotal)} / ${fmtNum(gymNextThreshold)} Gym XP to Level ${gymLevel+1}`}
       </div>
     </div>
   `;
@@ -5774,14 +5837,17 @@ function renderLeagueTab(){
 
   const weeklyStale = leagueWeeklyCache.leagueId !== state.social.leagueId || leagueWeeklyCache.weekKey !== state.social.weekKey;
   const weeklyHtml = `
-    <div class="panel-title">This Week in ${league.name} <span style="color:var(--text-muted); font-size:11px;">(resets weekly — Gym Wars groundwork)</span></div>
-    <div class="card" style="margin-bottom:8px;">
+    ${renderCollapsibleHeader('⚔️ Gym Wars Score — This Week', 'weeklyScoreExpanded', false)}
+    <div class="card" style="margin-bottom:8px; border-color:var(--corner-red);">
+      <div style="font-size:10px; color:var(--text-muted); margin-bottom:8px;">
+        Different from Gym Level below — this counts ALL activity (fighting, training, everything), resets every week, and only feeds the Gym Wars leaderboard. Gym Level only grows from claimed daily quests and never resets on its own.
+      </div>
       <div style="display:flex; justify-content:space-between; align-items:center;">
-        <div style="font-size:12px; color:var(--text-muted);">Total league XP this week</div>
-        <div style="font-family:'Oswald',sans-serif; font-weight:700; font-size:16px; color:var(--champ-teal);">${weeklyStale && !leagueWeeklyCache.loading ? '…' : fmtNum(leagueWeeklyCache.totalXp)}</div>
+        <div style="font-size:12px; color:var(--text-muted);">${league.name}'s total score this week</div>
+        <div style="font-family:'Oswald',sans-serif; font-weight:700; font-size:16px; color:var(--corner-red);">${weeklyStale && !leagueWeeklyCache.loading ? '…' : fmtNum(leagueWeeklyCache.totalXp)}</div>
       </div>
     </div>
-    ${(!weeklyStale && leagueWeeklyCache.entries.length > 0) ? leagueWeeklyCache.entries.slice(0,10).map((e,i) => `
+    ${state.ui.weeklyScoreExpanded ? ((!weeklyStale && leagueWeeklyCache.entries.length > 0) ? leagueWeeklyCache.entries.slice(0,10).map((e,i) => `
       <div class="card" style="display:flex; justify-content:space-between; align-items:center; ${e.playerId===state.social.playerId?'border-color:var(--belt-gold);':''}">
         <div style="display:flex; align-items:center; gap:8px; min-width:0;">
           <div style="font-family:'Oswald',sans-serif; font-weight:700; color:var(--text-muted); width:18px; flex-shrink:0;">${i+1}</div>
@@ -5790,9 +5856,9 @@ function renderLeagueTab(){
             ${e.flagged ? `<div style="font-size:10px; color:var(--corner-red);">Flagged: implausible for reported weekly wins</div>` : ''}
           </div>
         </div>
-        <div style="font-family:'Oswald',sans-serif; font-weight:700; color:var(--belt-gold); flex-shrink:0;">${fmtNum(e.weeklyXp||0)}</div>
+        <div style="font-family:'Oswald',sans-serif; font-weight:700; color:var(--corner-red); flex-shrink:0;">${fmtNum(e.weeklyXp||0)} pts</div>
       </div>
-    `).join('') : (!weeklyStale ? `<div class="card empty-state" style="padding:16px;">No weekly activity logged yet — play a bit, then refresh.</div>` : '')}
+    `).join('') : (!weeklyStale ? `<div class="card empty-state" style="padding:16px;">No Gym Wars activity logged yet this week — play a bit, then refresh.</div>` : '')) : ''}
   `;
 
   return `
@@ -5804,6 +5870,8 @@ function renderLeagueTab(){
       <button class="btn btn-ghost btn-block" data-refresh-all-league style="margin-top:10px;">${anyLeagueDataLoading ? 'Refreshing everything…' : '🔄 Refresh All'}</button>
     </div>
     ${nameCardHtml}
+
+    ${renderExpandCollapseAll(['questsExpanded','weeklyScoreExpanded','gymWarsExpanded','teethSpendExpanded'])}
 
     ${roleTenureHtml}
 
@@ -5853,6 +5921,7 @@ function renderGymTab(){
     return `<div class="tape-stat"><div class="label">${label}</div><div class="value">${eff[key]}${bonus>0?`<span class="gear-bonus">+${bonus}</span>`:''}</div></div>`;
   };
   return `
+    ${renderExpandCollapseAll(['equipmentExpanded'])}
     <div class="panel-title">Tale of the Tape</div>
     <div class="tape tape-2x4">
       ${statRow('power','Power')}
@@ -5960,6 +6029,7 @@ function renderHomeTab(){
   const f = state.fighter;
   const venue = currentVenue();
   return `
+    ${renderExpandCollapseAll(['garageExpanded','homePerksExpanded','cosmeticsExpanded'])}
     <div class="panel-title">Fighter Name</div>
     <div class="card">
       ${state.ui.editingFighterName ? `
@@ -6469,6 +6539,7 @@ function renderCompanionsTab(){
 
   return `
     <div class="panel-title">Your Corner</div>
+    ${renderCornerCollapseAll()}
     <div class="card" style="border-color:var(--corner-red); margin-bottom:12px;">
       <div style="display:flex; justify-content:space-between; align-items:center;">
         <div style="font-family:'Oswald',sans-serif; font-weight:700; font-size:14px;">❤️ Corner Bonus</div>
@@ -6838,6 +6909,24 @@ function attachContentHandlers(){
       render();
     });
   });
+  document.querySelectorAll('[data-toggle-all-sections]').forEach(btn => {
+    btn.addEventListener('click', () => {
+      const keys = btn.dataset.toggleAllSections.split(',');
+      const anyExpanded = keys.some(key => state.ui[key]);
+      keys.forEach(key => { state.ui[key] = !anyExpanded; });
+      render();
+    });
+  });
+  const cornerCollapseAllBtn = document.querySelector('[data-toggle-all-corner-categories]');
+  if(cornerCollapseAllBtn){
+    cornerCollapseAllBtn.addEventListener('click', () => {
+      const categoryKeys = CORNER_CATEGORIES.map(c => c.key);
+      if(!state.cornerExpanded) state.cornerExpanded = {};
+      const anyExpanded = categoryKeys.some(key => state.cornerExpanded[key]);
+      categoryKeys.forEach(key => { state.cornerExpanded[key] = !anyExpanded; });
+      render();
+    });
+  }
   const tiersExpandBtn = document.querySelector('[data-toggle-tiers-expand]');
   if(tiersExpandBtn){
     tiersExpandBtn.addEventListener('click', () => { state.ui.tiersExpanded = !state.ui.tiersExpanded; render(); });
