@@ -1138,7 +1138,6 @@ let state = {
     weeklyScoreExpanded: true,  // League tab "Gym Wars Score — This Week" list
     gymWarsExpanded: true,      // League tab full Gym Wars section (Top Gyms/Growth/Players)
     teethSpendExpanded: true,   // League tab Teeth Spent Leaderboard
-    cornerRosterExpanded: true, // Corner tab companion category lists
     tiersExpanded: false,  // Career Tiers list: false = first 5 only, true = all 10
     lastAckedLevel: 0,     // fighter.level as of the last time the notifications panel was opened
                             // — badge count is simply (current level - this), see updateNavBadges
@@ -4730,6 +4729,7 @@ async function removeFromRoster(leagueId, playerId){
 // leaving one — now leaving and joining are two distinct, deliberate steps.
 async function leaveLeague(){
   if(!state.social.leagueId) return;
+  ensureWeeklyReset(); // guarantees weekKey below is actually current, not relying on it happening to be
   const leagueName = (LEAGUES.find(l => l.id === state.social.leagueId) || {}).name || 'your gym';
   const oldLeagueId = state.social.leagueId;
   await removeFromRoster(oldLeagueId, state.social.playerId);
