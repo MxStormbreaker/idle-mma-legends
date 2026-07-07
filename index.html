@@ -142,6 +142,10 @@
     margin:18px 0 8px 0;
   }
   .panel-title:first-child{margin-top:0;}
+  .panel-title.collapsed-actionable{
+    background:rgba(242,199,68,0.12); border:1px solid var(--belt-gold); border-radius:8px;
+    padding:8px 12px; margin:14px 0 8px 0; color:var(--belt-gold);
+  }
 
   .card{
     background:var(--bg-panel); border:1px solid var(--border-soft);
@@ -412,6 +416,10 @@
 
   /* ---------- IDLE LOOP CARDS (fight/train) ---------- */
   .loop-card{display:flex; align-items:center; gap:12px;}
+  .loop-card.compact{ padding:8px 12px; gap:8px; }
+  .loop-card.compact .loop-icon{ font-size:16px; width:22px; }
+  .loop-card.compact .loop-title{ font-size:12px; }
+  .loop-card.compact .loop-desc{ font-size:10px; }
   .loop-icon{
     font-size:26px; width:46px; height:46px; flex-shrink:0;
     display:flex; align-items:center; justify-content:center;
@@ -1122,6 +1130,11 @@ let state = {
     bulkBuyQty: 1, // 1 | 10 | 100 | 'max' — shared quantity toggle for Equipment/Home Perks/Power-Ups
     gearExpanded: true,   // Fighter tab Gear grid — collapsible instead of always open
     garageExpanded: true, // Home tab Garage grid — collapsible instead of always open
+    equipmentExpanded: true,  // TRAIN tab Equipment Upgrades list
+    homePerksExpanded: true,  // Home tab Home Perks list
+    powerUpsExpanded: true,   // Career tab Power-Ups list
+    cosmeticsExpanded: true,  // Home tab Cosmetic Gear list
+    questsExpanded: true,     // League tab Daily Quests list
     tiersExpanded: false,  // Career Tiers list: false = first 5 only, true = all 10
     lastAckedLevel: 0,     // fighter.level as of the last time the notifications panel was opened
                             // — badge count is simply (current level - this), see updateNavBadges
@@ -1172,11 +1185,13 @@ let state = {
   },
   daily: {
     dateKey: '',           // local YYYY-MM-DD; when this doesn't match today, counters/quests reset
+    questSchemeVersion: 0, // forces an immediate questIds refresh when DAILY_QUEST_TIERS itself
+                             // changes shape (e.g. 5->10 tiers), without waiting for a real day change
     winsToday: 0,
     cashToday: 0,
     critsToday: 0,
     trainToday: 0,
-    questIds: [],           // today's 3 quest ids, picked deterministically from the date
+    questIds: [],           // today's quest ids — the full DAILY_QUEST_TIERS ladder
     questProgress: {},       // questId -> progress count
     questsClaimed: [],       // quest ids already claimed today
     spendUSD: 0,             // real-money $ spent today across all IAP paths — see DAILY_SPEND_CAP_USD
@@ -1888,7 +1903,7 @@ function processFightingOffline(deltaMs){
       const careerTierIndex = TIERS.findIndex(t => t.name === tier.name) + 1;
       const tierForLoot = Math.max(1, Math.min(10, careerTierIndex));
       if(Math.random() < 0.08){
-        const category = Object.keys(VEHICLE_CATEGORIES)[Math.floor(Math.random()*Object.keys(VEHICLE_CATEGORIES).length)];
+        const category = getActiveVehicleSlotKeys()[Math.floor(Math.random()*getActiveVehicleSlotKeys().length)];
         autoResolveVehicle(generateVehicleItem(category, tierForLoot));
       } else {
         autoResolveItem(generateLootItem(tierForLoot));
@@ -2612,6 +2627,14 @@ function renderFighterTab(){
     </div>
 
     <div class="panel-title">Active Loops</div>
+    <div class="card loop-card compact">
+      <div class="loop-icon">🥊</div>
+      <div class="loop-info">
+        <div class="loop-title">Next Bout</div>
+        <div class="loop-desc">Fights for cash & XP based on your stats</div>
+        <div class="loop-progress"><div class="bar-track"><div class="bar-fill fight" style="width:${fightPct}%"></div></div></div>
+      </div>
+    </div>
     <div class="card loop-card">
       <div class="loop-icon">🏋️</div>
       <div class="loop-info">
@@ -2620,13 +2643,18 @@ function renderFighterTab(){
         <div class="loop-progress"><div class="bar-track"><div class="bar-fill train" style="width:${trainPct}%"></div></div></div>
       </div>
     </div>
-    <div class="card loop-card">
-      <div class="loop-icon">🥊</div>
-      <div class="loop-info">
-        <div class="loop-title">Auto-Fight</div>
-        <div class="loop-desc">Fights for cash & XP based on your stats</div>
-        <div class="loop-progress"><div class="bar-track"><div class="bar-fill fight" style="width:${fightPct}%"></div></div></div>
-      </div>
+
+    <div class="panel-title">Tale of the Tape</div>
+    <div class="tape tape-2x4">
+      ${(() => {
+        const eff = effectiveStats();
+        const statRow = (key, label) => {
+          const bonus = eff[key] - f.stats[key];
+          return `<div class="tape-stat"><div class="label">${label}</div><div class="value">${eff[key]}${bonus>0?`<span class="gear-bonus">+${bonus}</span>`:''}</div></div>`;
+        };
+        return statRow('power','Power') + statRow('speed','Speed') + statRow('defense','Defense') + statRow('stamina','Stamina')
+             + statRow('chin','Chin') + statRow('technique','Technique') + statRow('slip','Slip') + statRow('mental','Mental');
+      })()}
     </div>
 
     <div class="panel-title">Your Progress <span style="color:var(--text-muted); font-size:11px;">(tap any stat to jump there)</span></div>
@@ -2668,19 +2696,6 @@ function renderFighterTab(){
       </button>
     </div>
 
-    <div class="panel-title">Tale of the Tape</div>
-    <div class="tape tape-2x4">
-      ${(() => {
-        const eff = effectiveStats();
-        const statRow = (key, label) => {
-          const bonus = eff[key] - f.stats[key];
-          return `<div class="tape-stat"><div class="label">${label}</div><div class="value">${eff[key]}${bonus>0?`<span class="gear-bonus">+${bonus}</span>`:''}</div></div>`;
-        };
-        return statRow('power','Power') + statRow('speed','Speed') + statRow('defense','Defense') + statRow('stamina','Stamina')
-             + statRow('chin','Chin') + statRow('technique','Technique') + statRow('slip','Slip') + statRow('mental','Mental');
-      })()}
-    </div>
-
     <div class="panel-title" data-toggle-section="gearExpanded" style="cursor:pointer; display:flex; justify-content:space-between; align-items:center;">
       <span>Gear</span><span style="font-size:12px;">${state.ui.gearExpanded ? '▾' : '▸'}</span>
     </div>
@@ -2716,12 +2731,12 @@ function renderFighterTab(){
       <div class="lootbox-grid">
         ${state.lootBoxes.map(box => {
           const rarity = RARITY_TIERS[box.tier-1];
-          const vehicleIcon = box.isVehicle ? VEHICLE_CATEGORIES[box.vehicleCategory].icon : null;
+          const vehicleIcon = box.isVehicle ? VEHICLE_CATEGORIES[baseCategoryForSlotKey(box.vehicleCategory)].icon : null;
           return `
             <div class="lootbox-card" data-open-box="${box.id}" style="border-color:${rarity.color};">
               <div class="lootbox-icon">${box.isVehicle ? vehicleIcon : '🎁'}</div>
               <div class="lootbox-tier" style="color:${rarity.color};">${rarity.name}</div>
-              ${box.isVehicle ? `<div class="lootbox-source">${VEHICLE_CATEGORIES[box.vehicleCategory].label}!</div>` : (box.source==='tierup' ? '<div class="lootbox-source">Tier-Up!</div>' : '')}
+              ${box.isVehicle ? `<div class="lootbox-source">${vehicleSlotLabel(box.vehicleCategory)}!</div>` : (box.source==='tierup' ? '<div class="lootbox-source">Tier-Up!</div>' : '')}
             </div>
           `;
         }).join('')}
@@ -2794,26 +2809,33 @@ function renderCareerTab(){
       ${eligible ? `<button class="btn btn-gold btn-block" style="margin-top:10px;" data-do-prestige>🌟 Prestige Now</button>` : ''}
     </div>
 
-    <div class="panel-title">Power-Ups <span style="color:var(--text-muted); font-size:11px;">(persist through prestige)</span></div>
-    ${renderBulkBuyToggle()}
-    ${Object.entries(POWER_UPS).map(([key, pu]) => {
-      const p = state.powerUps[key];
+    ${(() => {
       const qty = state.ui.bulkBuyQty === 'max' ? Infinity : state.ui.bulkBuyQty;
-      const preview = computeBulkBuy(p.level, p.baseCost, 1.85, qty, state.economy.cash);
-      const canAfford = preview.bought > 0;
-      return `
-        <div class="card loop-card">
-          <div class="loop-icon">${pu.icon}</div>
-          <div class="loop-info">
-            <div class="loop-title">${pu.name} <span style="color:var(--belt-gold); font-size:11px;">Lv.${p.level}</span></div>
-            <div class="loop-desc">${pu.desc}</div>
-          </div>
-          <button class="btn ${canAfford ? 'btn-gold' : 'btn-ghost'}" style="flex-shrink:0; padding:9px 12px; font-size:12px; text-align:center;" data-powerup-buy="${key}" ${canAfford?'':'disabled'}>
-            $${fmtNum(preview.totalCost)}${preview.bought>1?`<br><span style="font-size:9px;">×${preview.bought}</span>`:''}
-          </button>
-        </div>
-      `;
-    }).join('')}
+      const anyAffordable = Object.entries(POWER_UPS).some(([key, pu]) => {
+        const p = state.powerUps[key];
+        return computeBulkBuy(p.level, p.baseCost, 1.85, qty, state.economy.cash).bought > 0;
+      });
+      return renderCollapsibleHeader('Power-Ups <span style="color:var(--text-muted); font-size:11px; text-transform:none; letter-spacing:0;">(persist through prestige)</span>', 'powerUpsExpanded', anyAffordable) + (state.ui.powerUpsExpanded ? `
+        ${renderBulkBuyToggle()}
+        ${Object.entries(POWER_UPS).map(([key, pu]) => {
+          const p = state.powerUps[key];
+          const preview = computeBulkBuy(p.level, p.baseCost, 1.85, qty, state.economy.cash);
+          const canAfford = preview.bought > 0;
+          return `
+            <div class="card loop-card">
+              <div class="loop-icon">${pu.icon}</div>
+              <div class="loop-info">
+                <div class="loop-title">${pu.name} <span style="color:var(--belt-gold); font-size:11px;">Lv.${p.level}</span></div>
+                <div class="loop-desc">${pu.desc}</div>
+              </div>
+              <button class="btn ${canAfford ? 'btn-gold' : 'btn-ghost'}" style="flex-shrink:0; padding:9px 12px; font-size:12px; text-align:center;" data-powerup-buy="${key}" ${canAfford?'':'disabled'}>
+                $${fmtNum(preview.totalCost)}${preview.bought>1?`<br><span style="font-size:9px;">×${preview.bought}</span>`:''}
+              </button>
+            </div>
+          `;
+        }).join('')}
+      ` : '');
+    })()}
 
     <div class="panel-title">Tiers</div>
     ${(() => {
@@ -2932,7 +2954,35 @@ const VEHICLE_CATEGORIES = {
   rv:         { label:'RV',         icon:'🚐', leanStats:['stamina','slip'],     models:['Beat-Up Camper','Pop-Up Trailer','Class B RV','Class C RV','Toy Hauler','Luxury RV','Super RV','Armored RV','Custom Coach','One-of-One Coach'] },
 };
 
-function generateVehicleItem(category, tierNum, source='win'){
+// Extra vehicle slots (unlocked every 10th prestige) now actually DO something — previously the
+// count went up with no mechanical effect at all. Rather than restructure the whole garage into
+// per-category arrays, extra slots are additional "boxes" cycling through the 8 base categories
+// in turn: vehicleSlots=2 doubles Car's capacity (adds a 'car__2' box), =3 doubles Motorcycle's
+// (adds 'motorcycle__2'), and so on through all 8 — then wraps back around for a 3rd box each.
+function baseCategoryForSlotKey(slotKey){
+  return slotKey.split('__')[0];
+}
+function getActiveVehicleSlotKeys(){
+  const baseKeys = Object.keys(VEHICLE_CATEGORIES);
+  const keys = [...baseKeys];
+  const extraSlots = Math.max(0, (state.prestige.vehicleSlots||1) - 1);
+  for(let i = 0; i < extraSlots; i++){
+    const cycle = Math.floor(i / baseKeys.length) + 2; // 2nd box, then 3rd, etc.
+    const baseKey = baseKeys[i % baseKeys.length];
+    keys.push(`${baseKey}__${cycle}`);
+  }
+  return keys;
+}
+// Display label for a slot key — base categories keep their plain label, extra boxes get a
+// Roman-numeral-style suffix so "Car II" reads as a second Car slot, not a new category.
+function vehicleSlotLabel(slotKey){
+  const [baseKey, cycle] = slotKey.split('__');
+  const label = VEHICLE_CATEGORIES[baseKey].label;
+  return cycle ? `${label} ${['','','II','III','IV','V','VI','VII','VIII','IX','X'][parseInt(cycle)] || `x${cycle}`}` : label;
+}
+
+function generateVehicleItem(slotKey, tierNum, source='win'){
+  const category = baseCategoryForSlotKey(slotKey);
   const rarity = RARITY_TIERS[tierNum-1];
   const cat = VEHICLE_CATEGORIES[category];
   const numStats = rarity.tier >= 7 ? 3 : (rarity.tier >= 4 ? (Math.random()<0.5?2:1) : 1);
@@ -2950,7 +3000,7 @@ function generateVehicleItem(category, tierNum, source='win'){
   });
   return {
     id: 'veh_' + Math.random().toString(36).slice(2,10),
-    category,
+    category: slotKey, // the actual garage slot key ('car', 'car__2', etc.) — NOT just the base category
     name: cat.models[rarity.tier-1],
     icon: cat.icon,
     tier: rarity.tier,
@@ -2968,7 +3018,7 @@ function isVehicleUpgrade(candidate, current){
 }
 function autoResolveVehicle(vehicle, announce=false){
   const current = state.garage[vehicle.category];
-  const catLabel = VEHICLE_CATEGORIES[vehicle.category].label;
+  const catLabel = vehicleSlotLabel(vehicle.category);
   if(isVehicleUpgrade(vehicle, current)){
     if(current) state.economy.cash += itemSellValue(current);
     state.garage[vehicle.category] = vehicle;
@@ -3029,7 +3079,7 @@ function autoResolveItem(item, announce=false){
 // (silent equip/sell, logged like offline loot) instead of queuing it for manual opening.
 function dropLootBox(tier, source){
   const isVehicleDrop = Math.random() < 0.08; // ~8% of any drop is a vehicle instead of gear
-  const vehicleCategory = isVehicleDrop ? Object.keys(VEHICLE_CATEGORIES)[Math.floor(Math.random()*Object.keys(VEHICLE_CATEGORIES).length)] : null;
+  const vehicleCategory = isVehicleDrop ? getActiveVehicleSlotKeys()[Math.floor(Math.random()*getActiveVehicleSlotKeys().length)] : null;
   if(state.autoOpenChests){
     if(isVehicleDrop){
       autoResolveVehicle(generateVehicleItem(vehicleCategory, tier, source), true);
@@ -3062,6 +3112,22 @@ function computeBulkBuy(startLevel, baseCost, rate, quantity, availableCash){
 
 // Renders the shared ×1/×10/×100/Max quantity toggle — one selection applies across whichever
 // upgrade list is currently on screen (Equipment Upgrades, Home Perks, or Power-Ups).
+// Renders a collapsible section header, used for every long list in the game (Equipment,
+// Home Perks, Power-Ups, Cosmetics, Daily Quests, Gear, Garage). When COLLAPSED and something
+// actionable is hidden inside (an affordable upgrade, a claimable quest, an unequipped owned
+// cosmetic), the header gets a gold highlight so collapsing a section never hides awareness of
+// something worth opening it back up for.
+function renderCollapsibleHeader(title, stateKey, hasActionable){
+  const expanded = state.ui[stateKey];
+  const showHighlight = !expanded && hasActionable;
+  return `
+    <div class="panel-title ${showHighlight ? 'collapsed-actionable' : ''}" data-toggle-section="${stateKey}" style="cursor:pointer; display:flex; justify-content:space-between; align-items:center;">
+      <span>${title}${showHighlight ? ' ✨' : ''}</span>
+      <span style="font-size:12px;">${expanded ? '▾' : '▸'}</span>
+    </div>
+  `;
+}
+
 function renderBulkBuyToggle(){
   const options = [1, 10, 100, 'max'];
   return `
@@ -3697,7 +3763,7 @@ function buyCashBundle(key){
         const tier = Math.floor(5 + Math.random()*6); // matches Gold Chest's tier 5-10 range
         const isVehiclePull = Math.random() < 0.08;
         if(isVehiclePull){
-          const category = Object.keys(VEHICLE_CATEGORIES)[Math.floor(Math.random()*Object.keys(VEHICLE_CATEGORIES).length)];
+          const category = getActiveVehicleSlotKeys()[Math.floor(Math.random()*getActiveVehicleSlotKeys().length)];
           const vehicle = generateVehicleItem(category, Math.min(10,tier), 'shop');
           results.push({ type:'vehicle', item:vehicle, result:autoResolveVehicle(vehicle, false) });
         } else {
@@ -3728,7 +3794,7 @@ function buyChest(chestKey){
     const tier = Math.floor(chest.tierRange[0] + Math.random()*(chest.tierRange[1]-chest.tierRange[0]+1));
     const isVehiclePull = Math.random() < 0.08;
     if(isVehiclePull){
-      const category = Object.keys(VEHICLE_CATEGORIES)[Math.floor(Math.random()*Object.keys(VEHICLE_CATEGORIES).length)];
+      const category = getActiveVehicleSlotKeys()[Math.floor(Math.random()*getActiveVehicleSlotKeys().length)];
       const vehicle = generateVehicleItem(category, Math.min(10,tier), 'shop');
       results.push({ type:'vehicle', item:vehicle, result:autoResolveVehicle(vehicle, false) });
     } else {
@@ -4466,20 +4532,32 @@ function addWeeklyWins(n){
 
 // Resets daily counters + rolls new quests whenever the local date changes. Cheap to call often —
 // only does work on an actual day rollover.
+// Bumps whenever DAILY_QUEST_TIERS itself changes shape/count (like 5→10 tiers) — forces
+// ensureDailyReset() to re-init questIds immediately on next load, rather than a player being
+// stuck on a stale, shorter quest list until their next actual midnight rollover just because
+// their local dateKey already matched today's date before the update went live.
+const QUEST_SCHEME_VERSION = 2;
+
 function ensureDailyReset(){
   const today = getDateKey();
-  if(state.daily.dateKey === today) return;
+  if(state.daily.dateKey === today && state.daily.questSchemeVersion === QUEST_SCHEME_VERSION) return;
   const isFirstEver = state.daily.dateKey === '';
+  const isSchemeChangeOnly = state.daily.dateKey === today && state.daily.questSchemeVersion !== QUEST_SCHEME_VERSION;
   state.daily.dateKey = today;
-  state.daily.winsToday = 0;
-  state.daily.cashToday = 0;
-  state.daily.critsToday = 0;
-  state.daily.trainToday = 0;
-  state.daily.questProgress = {};
-  state.daily.questsClaimed = [];
+  state.daily.questSchemeVersion = QUEST_SCHEME_VERSION;
   state.daily.questIds = DAILY_QUEST_TIERS.map(q => q.id); // fixed 10-tier ladder, same every day
-  state.daily.spendUSD = 0;
-  if(!isFirstEver){
+  // A pure scheme-version bump (same day, quest system itself changed) keeps today's actual
+  // progress counters and claimed-quest history intact — only a real day change wipes those.
+  if(!isSchemeChangeOnly){
+    state.daily.winsToday = 0;
+    state.daily.cashToday = 0;
+    state.daily.critsToday = 0;
+    state.daily.trainToday = 0;
+    state.daily.questProgress = {};
+    state.daily.questsClaimed = [];
+    state.daily.spendUSD = 0;
+  }
+  if(!isFirstEver && !isSchemeChangeOnly){
     fireLocalNotification('🎯 New Daily Quests!', 'Fresh quests are up in the League tab.');
   }
 }
@@ -4615,6 +4693,28 @@ async function removeFromRoster(leagueId, playerId){
   } catch(e){ /* key may not exist yet — nothing to remove */ }
 }
 
+// Fully leaves the current gym — no swap, just returns to the browse/join list. Replaces the
+// old direct gym-to-gym "Switch Leagues" jump, which let players hop gyms without ever really
+// leaving one — now leaving and joining are two distinct, deliberate steps.
+async function leaveLeague(){
+  if(!state.social.leagueId) return;
+  const leagueName = (LEAGUES.find(l => l.id === state.social.leagueId) || {}).name || 'your gym';
+  await removeFromRoster(state.social.leagueId, state.social.playerId);
+  state.social.leagueId = null;
+  state.social.contributedXp = 0;
+  state.social.weekKey = getWeekKey();
+  state.social.weeklyXp = 0;
+  state.social.weeklyWins = 0;
+  state.social.joinedAt = null;
+  state.social.role = null;
+  state.social.gymXpContributed = 0;
+  state.social.knownGymLevel = 1;
+  pushLog(`👋 Left ${leagueName}.`, 'level');
+  showToast(`Left ${leagueName} — browse the list to join a new gym.`);
+  scheduleSave();
+  render();
+}
+
 async function joinLeague(leagueId){
   if(!state.social.displayName){ showToast('Set a display name first'); return; }
   if(state.social.leagueId === leagueId) return;
@@ -4747,20 +4847,13 @@ async function pushWeeklyStats(){
   } catch(e){ /* best-effort — will retry on the next interval */ }
 }
 
-// Rough plausibility ceiling: even a very active, fully-boosted week of nonstop play tops out
-// somewhere in the low thousands of XP. Self-reported numbers far beyond what reported weekly
-// wins could plausibly produce get flagged for display — not removed.
-//
-// FIXED BUG: this used to also factor in state.fighter.level, and pushWeeklyStats() used to
-// submit state.fighter.wins directly — both reset to near-zero on every prestige, while
-// weeklyXp correctly does NOT (it's week-scoped, meant to span multiple prestiges within the
-// same week). That meant EVERY prestige briefly compared a tiny post-reset wins/level count
-// against a full week's already-earned XP, guaranteeing a false "implausible" flag right after
-// prestiging. Now based entirely on weeklyWins (see addWeeklyWins), which is itself week-scoped
-// and immune to prestige resets, so it stays valid across any number of prestiges mid-week.
+// Flat weekly XP ceiling. Raised to 100M after real player data showed 1.3M+ in a single day
+// from active play combined with Teeth-purchased speed-ups — confirms this should be a true
+// "catch actual corruption" backstop, not anything trying to bound realistic play patterns,
+// since real usage keeps outpacing every "generous" estimate. Purely a sanity check now.
+const WEEKLY_XP_PLAUSIBLE_CEILING = 100000000;
 function isImplausibleWeeklyEntry(entry){
-  const plausibleCap = Math.max(600, (entry.wins||0) * 40);
-  return (entry.weeklyXp||0) > plausibleCap * 3;
+  return (entry.weeklyXp||0) > WEEKLY_XP_PLAUSIBLE_CEILING;
 }
 
 let leagueWeeklyCache = { leagueId: null, weekKey: null, entries: [], totalXp: 0, loading: false };
@@ -5433,9 +5526,13 @@ function renderLeagueTab(){
     </div>
   `;
 
+  const anyQuestClaimable = state.daily.questIds.some(id => {
+    const quest = questDef(id);
+    return quest && questProgressValue(quest) >= quest.goal && !state.daily.questsClaimed.includes(id);
+  });
   const questsHtml = `
-    <div class="panel-title">Daily Quests <span style="color:var(--text-muted); font-size:11px;">(10-tier ladder, resets daily, same for everyone)</span></div>
-    ${state.daily.questIds.map(id => {
+    ${renderCollapsibleHeader('Daily Quests <span style="color:var(--text-muted); font-size:11px; text-transform:none; letter-spacing:0;">(10-tier ladder, resets daily, same for everyone)</span>', 'questsExpanded', anyQuestClaimable)}
+    ${state.ui.questsExpanded ? state.daily.questIds.map(id => {
       const quest = questDef(id);
       if(!quest) return '';
       const progress = questProgressValue(quest);
@@ -5461,7 +5558,7 @@ function renderLeagueTab(){
           </div>
         </div>
       `;
-    }).join('')}
+    }).join('') : ''}
   `;
 
   const gymWarsStale = gymWarsCache.weekKey !== getWeekKey();
@@ -5736,14 +5833,10 @@ function renderLeagueTab(){
 
     ${questsHtml}
 
-    <div class="panel-title">Switch Leagues</div>
+    <div class="panel-title">Leave Gym</div>
     <div class="card">
-      <div style="font-size:11px; color:var(--corner-red); margin-bottom:10px;">⚠️ Switching resets your membership tier, weekly XP, and tenure progress in ${league.name} — it can't be undone.</div>
-      <div style="display:flex; flex-wrap:wrap; gap:6px;">
-        ${LEAGUES.filter(l => l.id !== state.social.leagueId).map(lg => `
-          <button class="btn btn-ghost" style="flex:1 1 45%; font-size:11px; padding:8px 6px;" data-switch-league="${lg.id}" data-switch-league-name="${escapeAttr(lg.name)}">${lg.icon} ${lg.name}</button>
-        `).join('')}
-      </div>
+      <div style="font-size:11px; color:var(--text-muted); margin-bottom:10px;">Leaves ${league.name} for good — resets your Membership Tier, weekly XP, and tenure progress here. You'll return to the gym browse list to join a new one whenever you're ready.</div>
+      <button class="btn btn-ghost btn-block" style="border-color:var(--corner-red); color:var(--corner-red);" data-leave-league="${league.name}">🚪 Leave ${league.name}</button>
     </div>
 
     ${syncHtml}
@@ -5772,26 +5865,33 @@ function renderGymTab(){
       ${statRow('mental','Mental')}
     </div>
 
-    <div class="panel-title">Equipment Upgrades</div>
-    ${renderBulkBuyToggle()}
-    ${Object.entries(GYM_EQUIPMENT).map(([key, equip]) => {
-      const g = state.gym[key];
+    ${(() => {
       const qty = state.ui.bulkBuyQty === 'max' ? Infinity : state.ui.bulkBuyQty;
-      const preview = computeBulkBuy(g.level, g.baseCost, 1.5, qty, state.economy.cash);
-      const canAfford = preview.bought > 0;
-      return `
-        <div class="card loop-card">
-          <div class="loop-icon">${equip.icon}</div>
-          <div class="loop-info">
-            <div class="loop-title">${equip.name} <span style="color:var(--belt-gold); font-size:11px;">Lv.${g.level}</span></div>
-            <div class="loop-desc">${equip.desc} (+${g.bonusPerLevel} ${equip.statLabel}/level)</div>
-          </div>
-          <button class="btn ${canAfford ? 'btn-gold' : 'btn-ghost'}" style="flex-shrink:0; padding:9px 12px; font-size:12px; text-align:center;" data-gym-buy="${key}" ${canAfford?'':'disabled'}>
-            $${fmtNum(preview.totalCost)}${preview.bought>1?`<br><span style="font-size:9px;">×${preview.bought}</span>`:''}
-          </button>
-        </div>
-      `;
-    }).join('')}
+      const anyAffordable = Object.entries(GYM_EQUIPMENT).some(([key, equip]) => {
+        const g = state.gym[key];
+        return computeBulkBuy(g.level, g.baseCost, 1.5, qty, state.economy.cash).bought > 0;
+      });
+      return renderCollapsibleHeader('Equipment Upgrades', 'equipmentExpanded', anyAffordable) + (state.ui.equipmentExpanded ? `
+        ${renderBulkBuyToggle()}
+        ${Object.entries(GYM_EQUIPMENT).map(([key, equip]) => {
+          const g = state.gym[key];
+          const preview = computeBulkBuy(g.level, g.baseCost, 1.5, qty, state.economy.cash);
+          const canAfford = preview.bought > 0;
+          return `
+            <div class="card loop-card">
+              <div class="loop-icon">${equip.icon}</div>
+              <div class="loop-info">
+                <div class="loop-title">${equip.name} <span style="color:var(--belt-gold); font-size:11px;">Lv.${g.level}</span></div>
+                <div class="loop-desc">${equip.desc} (+${g.bonusPerLevel} ${equip.statLabel}/level)</div>
+              </div>
+              <button class="btn ${canAfford ? 'btn-gold' : 'btn-ghost'}" style="flex-shrink:0; padding:9px 12px; font-size:12px; text-align:center;" data-gym-buy="${key}" ${canAfford?'':'disabled'}>
+                $${fmtNum(preview.totalCost)}${preview.bought>1?`<br><span style="font-size:9px;">×${preview.bought}</span>`:''}
+              </button>
+            </div>
+          `;
+        }).join('')}
+      ` : '');
+    })()}
   `;
 }
 
@@ -5877,17 +5977,18 @@ function renderHomeTab(){
     </div>
 
     <div class="panel-title" data-toggle-section="garageExpanded" style="cursor:pointer; display:flex; justify-content:space-between; align-items:center;">
-      <span>Garage</span><span style="font-size:12px;">${state.ui.garageExpanded ? '▾' : '▸'}</span>
+      <span>Garage ${state.prestige.vehicleSlots > 1 ? `<span style="color:var(--belt-gold); font-size:11px;">(${getActiveVehicleSlotKeys().length} slots)</span>` : ''}</span><span style="font-size:12px;">${state.ui.garageExpanded ? '▾' : '▸'}</span>
     </div>
     ${state.ui.garageExpanded ? `
     <div class="gear-grid">
-      ${Object.entries(VEHICLE_CATEGORIES).map(([key, cat]) => {
+      ${getActiveVehicleSlotKeys().map(key => {
+        const cat = VEHICLE_CATEGORIES[baseCategoryForSlotKey(key)];
         const vehicle = state.garage[key];
         const rarity = vehicle ? RARITY_TIERS[vehicle.tier-1] : null;
         return `
           <div class="gear-slot ${vehicle ? 'filled' : 'empty'}" style="${vehicle ? `border-color:${rarity.color};` : ''}" data-view-vehicle="${key}">
             <div class="gear-slot-icon">${cat.icon}</div>
-            <div class="gear-slot-label">${vehicle ? `${vehicle.rarityName} ${vehicle.name}` : cat.label}</div>
+            <div class="gear-slot-label">${vehicle ? `${vehicle.rarityName} ${vehicle.name}` : vehicleSlotLabel(key)}</div>
             ${vehicle ? `<div class="gear-slot-power" style="color:${rarity.color};">${vehicle.itemPower}</div>` : ''}
           </div>
         `;
@@ -5895,26 +5996,33 @@ function renderHomeTab(){
     </div>
     ` : ''}
 
-    <div class="panel-title">Home Perks</div>
-    ${renderBulkBuyToggle()}
-    ${Object.entries(HOME_PERKS).map(([key, perk]) => {
-      const p = state.homePerks[key];
+    ${(() => {
       const qty = state.ui.bulkBuyQty === 'max' ? Infinity : state.ui.bulkBuyQty;
-      const preview = computeBulkBuy(p.level, p.baseCost, 1.6, qty, state.economy.cash);
-      const canAfford = preview.bought > 0;
-      return `
-        <div class="card loop-card">
-          <div class="loop-icon">${perk.icon}</div>
-          <div class="loop-info">
-            <div class="loop-title">${perk.name} <span style="color:var(--belt-gold); font-size:11px;">Lv.${p.level}</span></div>
-            <div class="loop-desc">${perk.desc} (+${p.bonusPerLevel}% ${perk.effectLabel}/level)</div>
-          </div>
-          <button class="btn ${canAfford ? 'btn-gold' : 'btn-ghost'}" style="flex-shrink:0; padding:9px 12px; font-size:12px; text-align:center;" data-home-buy="${key}" ${canAfford?'':'disabled'}>
-            $${fmtNum(preview.totalCost)}${preview.bought>1?`<br><span style="font-size:9px;">×${preview.bought}</span>`:''}
-          </button>
-        </div>
-      `;
-    }).join('')}
+      const anyAffordable = Object.entries(HOME_PERKS).some(([key, perk]) => {
+        const p = state.homePerks[key];
+        return computeBulkBuy(p.level, p.baseCost, 1.6, qty, state.economy.cash).bought > 0;
+      });
+      return renderCollapsibleHeader('Home Perks', 'homePerksExpanded', anyAffordable) + (state.ui.homePerksExpanded ? `
+        ${renderBulkBuyToggle()}
+        ${Object.entries(HOME_PERKS).map(([key, perk]) => {
+          const p = state.homePerks[key];
+          const preview = computeBulkBuy(p.level, p.baseCost, 1.6, qty, state.economy.cash);
+          const canAfford = preview.bought > 0;
+          return `
+            <div class="card loop-card">
+              <div class="loop-icon">${perk.icon}</div>
+              <div class="loop-info">
+                <div class="loop-title">${perk.name} <span style="color:var(--belt-gold); font-size:11px;">Lv.${p.level}</span></div>
+                <div class="loop-desc">${perk.desc} (+${p.bonusPerLevel}% ${perk.effectLabel}/level)</div>
+              </div>
+              <button class="btn ${canAfford ? 'btn-gold' : 'btn-ghost'}" style="flex-shrink:0; padding:9px 12px; font-size:12px; text-align:center;" data-home-buy="${key}" ${canAfford?'':'disabled'}>
+                $${fmtNum(preview.totalCost)}${preview.bought>1?`<br><span style="font-size:9px;">×${preview.bought}</span>`:''}
+              </button>
+            </div>
+          `;
+        }).join('')}
+      ` : '');
+    })()}
 
     <div class="panel-title">Venue</div>
     <div class="card">
@@ -6006,22 +6114,23 @@ function renderHomeTab(){
       </div>
     </div>
 
-    <div class="panel-title">Premium Cosmetics</div>
-    <div class="card">
-      ${(() => {
-        const owned = state.purchasedCosmetics || [];
-        if(owned.length === 0){
-          return `<div style="font-size:12px; color:var(--text-muted); text-align:center; padding:8px 0;">No premium cosmetics owned yet — check the Shop's Cosmetics tab.</div>`;
-        }
-        const cos = f.appearance.cosmetics || {};
-        return SHOP_COSMETICS.filter(c => owned.includes(c.key)).map((c,i,arr) => `
-          <div style="display:flex; justify-content:space-between; align-items:center; padding:6px 0; ${i<arr.length-1?'border-bottom:1px solid var(--border-soft);':''}">
-            <span style="font-size:13px;">${c.icon} ${c.name}</span>
-            <button class="btn ${cos[c.key]?'btn-teal':'btn-ghost'}" style="padding:6px 14px; font-size:11px;" data-toggle-cosmetic="${c.key}">${cos[c.key]?'Equipped':'Equip'}</button>
-          </div>
-        `).join('');
-      })()}
-    </div>
+    ${(() => {
+      const owned = state.purchasedCosmetics || [];
+      const cos = f.appearance.cosmetics || {};
+      const anyUnequipped = owned.some(key => !cos[key]);
+      return renderCollapsibleHeader('Premium Cosmetics', 'cosmeticsExpanded', anyUnequipped) + (state.ui.cosmeticsExpanded ? `
+        <div class="card">
+          ${owned.length === 0
+            ? `<div style="font-size:12px; color:var(--text-muted); text-align:center; padding:8px 0;">No premium cosmetics owned yet — check the Shop's Cosmetics tab.</div>`
+            : SHOP_COSMETICS.filter(c => owned.includes(c.key)).map((c,i,arr) => `
+              <div style="display:flex; justify-content:space-between; align-items:center; padding:6px 0; ${i<arr.length-1?'border-bottom:1px solid var(--border-soft);':''}">
+                <span style="font-size:13px;">${c.icon} ${c.name}</span>
+                <button class="btn ${cos[c.key]?'btn-teal':'btn-ghost'}" style="padding:6px 14px; font-size:11px;" data-toggle-cosmetic="${c.key}">${cos[c.key]?'Equipped':'Equip'}</button>
+              </div>
+            `).join('')}
+        </div>
+      ` : '');
+    })()}
 
     <div class="panel-title">Settings</div>
     <div class="card" style="display:flex; justify-content:space-between; align-items:center; margin-bottom:8px;">
@@ -6674,14 +6783,13 @@ function attachContentHandlers(){
       joinLeague(btn.dataset.joinLeague);
     });
   });
-  document.querySelectorAll('[data-switch-league]').forEach(btn => {
+  document.querySelectorAll('[data-leave-league]').forEach(btn => {
     btn.addEventListener('click', () => {
-      const targetName = btn.dataset.switchLeagueName;
-      const currentLeague = LEAGUES.find(l => l.id === state.social.leagueId);
+      const leagueName = btn.dataset.leaveLeague;
       showConfirm(
-        `Switch to ${targetName}?`,
-        `This resets your Membership Tier, weekly XP, and tenure progress in ${currentLeague ? currentLeague.name : 'your current gym'} — it can't be undone.`,
-        () => joinLeague(btn.dataset.switchLeague)
+        `Leave ${leagueName}?`,
+        `This resets your Membership Tier, weekly XP, and tenure progress here — it can't be undone. You'll return to the gym browse list.`,
+        () => leaveLeague()
       );
     });
   });
@@ -6868,7 +6976,7 @@ function renderRollQualityBadge(rollQuality){
 
 function renderVehicleRevealBody(vehicle, previousVehicle, result){
   const rarity = RARITY_TIERS[vehicle.tier-1];
-  const catLabel = VEHICLE_CATEGORIES[vehicle.category].label;
+  const catLabel = vehicleSlotLabel(vehicle.category);
   const statRows = Object.entries(vehicle.statBonuses).map(([key,val]) =>
     `<div class="reveal-stat-row"><span>${capitalize(key)}</span><span style="color:${rarity.color}; font-weight:700;">+${val}</span></div>`
   ).join('');
@@ -6927,8 +7035,8 @@ function viewGearSlot(slotKey){
 }
 
 function viewVehicle(category){
-  const cat = VEHICLE_CATEGORIES[category];
-  document.getElementById('gear-modal-title').textContent = cat.label;
+  const cat = VEHICLE_CATEGORIES[baseCategoryForSlotKey(category)];
+  document.getElementById('gear-modal-title').textContent = vehicleSlotLabel(category);
   document.getElementById('gear-modal-body').innerHTML = renderGearDetailBody({icon:cat.icon}, state.garage[category]);
   document.getElementById('gear-modal').style.display = 'flex';
 }
