@@ -249,6 +249,16 @@
   }
   .notif-fab:active{ transform:scale(0.92); }
   .notif-fab .nav-badge{ top:-4px; right:-6px; }
+  .gym-poster-decor{
+    position:absolute; top:6px; left:50%; transform:translateX(-50%); z-index:1;
+    width:64px; height:32px; border-radius:5px; display:flex; align-items:center; justify-content:center;
+    font-size:16px; opacity:0.7; border:1px solid rgba(255,255,255,0.15);
+    box-shadow:0 2px 6px rgba(0,0,0,0.4);
+  }
+  .gym-poster-decor.train-tab{
+    position:relative; top:auto; left:auto; transform:none; margin:0 auto 12px auto;
+    width:100px; height:50px; font-size:24px; opacity:0.9;
+  }
 
   /* ---------- FIGHT CARD HP EDGES ---------- */
   .fightcard-edge{
@@ -978,7 +988,7 @@ window.storage = {
 // Semantic version label (MAJOR.MINOR.PATCH), tracking development stages through beta.
 // Displayed in Home -> Settings so testers can confirm which build they're actually running.
 // >>> BUMP THE PATCH NUMBER HERE ON EVERY SHIP, matching the sw.js CACHE_NAME version <<<
-const GAME_VERSION = 'v0.0.32';
+const GAME_VERSION = 'v0.0.33';
 
 /* ---------------------------- STATE ---------------------------- */
 const AVATAR_SETS = {
@@ -2675,6 +2685,7 @@ function renderFighterTab(){
   return `
     <div class="fight-scene" data-fight-click>
       <svg class="venue-bg" viewBox="0 0 400 220" preserveAspectRatio="xMidYMax slice">${renderVenueBackground(venue)}</svg>
+      ${renderPosterDecor(f.appearance.poster)}
       ${sceneInner}
       ${(bout.phase === 'exchange' || bout.phase === 'resolved') ? '' : `<div class="venue-label">🏆 ${f.tier} Ring (${venue}-sided)</div>`}
       ${bout.phase === 'none' ? `<button class="roulette-fab" data-open-roulette title="Roulette">🎰</button>` : ''}
@@ -4030,6 +4041,23 @@ function buyCosmetic(key){
   showToast(`Purchased: ${cos.name}`);
   render();
   renderShopBody();
+  scheduleSave();
+}
+
+// Posters are single-select (unlike the boolean toggle cosmetics above), so buying one also
+// equips it immediately rather than requiring a separate select step right after purchase.
+function buyPoster(key){
+  const p = POSTER_OPTIONS.find(x => x.key === key);
+  if(!p) return;
+  if(!state.purchasedPosters) state.purchasedPosters = [];
+  if(state.purchasedPosters.includes(key)){ showToast('Already owned'); return; }
+  if(state.economy.teeth < p.costTeeth){ showToast('Not enough Teeth'); return; }
+  spendTeeth(p.costTeeth);
+  state.purchasedPosters.push(key);
+  state.fighter.appearance.poster = key;
+  pushLog(`Shop: purchased and equipped ${p.label} poster`, 'level');
+  showToast(`Purchased & equipped: ${p.label}`);
+  render();
   scheduleSave();
 }
 
@@ -6251,6 +6279,7 @@ function renderGymTab(){
   const f = state.fighter;
   return `
     ${renderExpandCollapseAll(['equipmentExpanded'])}
+    ${renderPosterDecor(f.appearance.poster, 'train-tab')}
     <div class="panel-title">Tale of the Tape <span style="color:var(--text-muted); font-size:11px;">(tap a stat for the full breakdown)</span></div>
     <div class="tape tape-2x4">
       ${renderTapeStatRow('power','Power')}
@@ -6296,11 +6325,28 @@ function renderGymTab(){
 const HAIR_STYLES = ['none','short','long','ponytail','buzz','afro','mohawk'];
 const HAIR_COLORS = ['#1A1A1A','#3A2418','#7A4A1F','#9C6A33','#D4AF37','#E63946','#F5F5F0','#8B5CF6','#2DD4BF'];
 const POSTER_OPTIONS = [
-  { key:'none',         label:'None',          icon:'—', bg:'linear-gradient(135deg, #22222E, #1A1A24)' },
-  { key:'championBelt', label:'Champion Belt', icon:'🏆', bg:'linear-gradient(135deg, #3a2f08, #1A1A24)' },
-  { key:'cityScape',     label:'City Skyline',  icon:'🌆', bg:'linear-gradient(135deg, #0d2436, #1A1A24)' },
-  { key:'flames',        label:'Flames',        icon:'🔥', bg:'linear-gradient(135deg, #3a120c, #1A1A24)' },
+  { key:'none',         label:'None',            icon:'—',  bg:'linear-gradient(135deg, #22222E, #1A1A24)', costTeeth:0 },
+  { key:'championBelt', label:'Champion Belt',   icon:'🏆', bg:'linear-gradient(135deg, #3a2f08, #1A1A24)', costTeeth:0 },
+  { key:'cityScape',    label:'City Skyline',    icon:'🌆', bg:'linear-gradient(135deg, #0d2436, #1A1A24)', costTeeth:0 },
+  { key:'flames',       label:'Flames',          icon:'🔥', bg:'linear-gradient(135deg, #3a120c, #1A1A24)', costTeeth:0 },
+  { key:'worldMap',     label:'World Map',       icon:'🗺️', bg:'linear-gradient(135deg, #0d3626, #1A1A24)', costTeeth:0 },
+  { key:'motivation',   label:'Motivational',    icon:'💭', bg:'linear-gradient(135deg, #2b1d3a, #1A1A24)', costTeeth:0 },
+  // Premium — Teeth-purchasable, same "buy once, select anytime after" pattern as Shop Cosmetics
+  { key:'neonSign',     label:'Neon Sign',       icon:'💡', bg:'linear-gradient(135deg, #1a0d36, #1A1A24)', costTeeth:10 },
+  { key:'trophyCase',   label:'Trophy Case',     icon:'🏅', bg:'linear-gradient(135deg, #3a3308, #1A1A24)', costTeeth:15 },
+  { key:'holoDisplay',  label:'Hologram Rig',    icon:'🌐', bg:'linear-gradient(135deg, #082436, #1A1A24)', costTeeth:20 },
+  { key:'goldFrame',    label:'Golden Frame',    icon:'🖼️', bg:'linear-gradient(135deg, #3a2a08, #1A1A24)', costTeeth:12 },
 ];
+
+// The poster now actually renders as a small decoration in the Fighter tab's fight scene and
+// the Train tab — previously it existed ONLY as a settings preview swatch with zero presence
+// anywhere else in the game, which is exactly the gap this fixes.
+function renderPosterDecor(posterKey, extraClass=''){
+  if(!posterKey || posterKey === 'none') return '';
+  const p = POSTER_OPTIONS.find(x => x.key === posterKey);
+  if(!p) return '';
+  return `<div class="gym-poster-decor ${extraClass}" style="background:${p.bg};" title="${p.label}"><span>${p.icon}</span></div>`;
+}
 
 // Dev codes — one-time redeemable codes for early stat/cash boosts. Each tracked by key in
 // state.devCodesRedeemed so they can't be reused. Intended for testing/promo use, not pay-to-win.
@@ -6502,14 +6548,22 @@ function renderHomeTab(){
       </div>
     </div>
 
-    <div class="panel-title">Gym Poster</div>
+    <div class="panel-title">Gym Poster <span style="color:var(--text-muted); font-size:11px;">(shows in the fight scene and Train tab)</span></div>
     <div class="card">
       <div class="poster-preview" style="background:${(POSTER_OPTIONS.find(p=>p.key===f.appearance.poster)||POSTER_OPTIONS[0]).bg};">
         <div class="poster-preview-icon">${(POSTER_OPTIONS.find(p=>p.key===f.appearance.poster)||POSTER_OPTIONS[0]).icon}</div>
         <div class="poster-preview-label">${(POSTER_OPTIONS.find(p=>p.key===f.appearance.poster)||POSTER_OPTIONS[0]).label}</div>
       </div>
       <div class="btn-row" style="flex-wrap:wrap; margin-top:10px;">
-        ${POSTER_OPTIONS.map(p => `<button class="btn ${f.appearance.poster===p.key?'btn-teal':'btn-ghost'}" style="flex:1 1 45%; font-size:11px; padding:8px 6px;" data-set-poster="${p.key}">${p.icon} ${p.label}</button>`).join('')}
+        ${POSTER_OPTIONS.map(p => {
+          const ownedPosters = state.purchasedPosters || [];
+          const isPremium = p.costTeeth > 0;
+          const isOwned = !isPremium || ownedPosters.includes(p.key);
+          if(isOwned){
+            return `<button class="btn ${f.appearance.poster===p.key?'btn-teal':'btn-ghost'}" style="flex:1 1 45%; font-size:11px; padding:8px 6px;" data-set-poster="${p.key}">${p.icon} ${p.label}</button>`;
+          }
+          return `<button class="btn btn-ghost" style="flex:1 1 45%; font-size:11px; padding:8px 6px; border-color:var(--belt-gold);" data-buy-poster="${p.key}" ${state.economy.teeth<p.costTeeth?'disabled':''}>${p.icon} ${p.label} — 🦷${p.costTeeth}</button>`;
+        }).join('')}
       </div>
     </div>
 
@@ -7226,6 +7280,9 @@ function attachContentHandlers(){
       state.fighter.appearance.poster = btn.dataset.setPoster;
       render(); scheduleSave();
     });
+  });
+  document.querySelectorAll('[data-buy-poster]').forEach(btn => {
+    btn.addEventListener('click', () => buyPoster(btn.dataset.buyPoster));
   });
   document.querySelectorAll('[data-toggle-cosmetic]').forEach(btn => {
     btn.addEventListener('click', () => {
