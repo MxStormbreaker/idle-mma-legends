@@ -732,6 +732,17 @@
     </div>
   </div>
 
+  <!-- STAT DETAIL MODAL -->
+  <div id="stat-detail-modal" class="modal-overlay" style="display:none;">
+    <div class="modal-card">
+      <div class="modal-header">
+        <div class="modal-title" id="stat-detail-modal-title">Stat Breakdown</div>
+        <button class="modal-close" id="stat-detail-modal-close">✕</button>
+      </div>
+      <div class="modal-body" id="stat-detail-modal-body"></div>
+    </div>
+  </div>
+
   <!-- ROLES INFO MODAL -->
   <div id="roles-info-modal" class="modal-overlay" style="display:none;">
     <div class="modal-card">
@@ -964,6 +975,11 @@ window.storage = {
    Sections: STATE -> UTIL -> GAME LOOP -> ACTIONS -> RENDER -> INIT
    ========================================================================= */
 
+// Semantic version label (MAJOR.MINOR.PATCH), tracking development stages through beta.
+// Displayed in Home -> Settings so testers can confirm which build they're actually running.
+// >>> BUMP THE PATCH NUMBER HERE ON EVERY SHIP, matching the sw.js CACHE_NAME version <<<
+const GAME_VERSION = 'v0.0.32';
+
 /* ---------------------------- STATE ---------------------------- */
 const AVATAR_SETS = {
   male:   ['🥊','🦾','😤','🧔'],
@@ -1098,7 +1114,7 @@ let state = {
   },
   prestige: {
     count: 0,
-    retainedStats: {}, // snapshot of stat points carried over from the last prestige (1-3% of pre-reset stats)
+    retainedStats: {}, // snapshot of stat points carried over from the last prestige (0.5-4% of pre-reset stats)
     vehicleSlots: 1,    // extra car slots unlocked every 10th prestige
     partnerSlots: 1,    // extra active-partner slots unlocked every 10th prestige
   },
@@ -1138,6 +1154,7 @@ let state = {
     weeklyScoreExpanded: true,  // League tab "Gym Wars Score — This Week" list
     gymWarsExpanded: true,      // League tab full Gym Wars section (Top Gyms/Growth/Players)
     teethSpendExpanded: true,   // League tab Teeth Spent Leaderboard
+    powerLeaderboardExpanded: true, // League tab Power Leaderboard
     tiersExpanded: false,  // Career Tiers list: false = first 5 only, true = all 10
     lastAckedLevel: 0,     // fighter.level as of the last time the notifications panel was opened
                             // — badge count is simply (current level - this), see updateNavBadges
@@ -1179,12 +1196,17 @@ let state = {
     weekKey: '',           // local week bucket (see getWeekKey) — resets weeklyXp when it changes
     weeklyXp: 0,           // XP earned toward the CURRENT league this week — basis for the weekly leaderboard
     weeklyWins: 0,         // wins earned THIS WEEK, immune to prestige resets — see addWeeklyWins()
+    weeklyPeakStatValue: 0, // highest SINGLE stat value (not combined power) reached this week —
+    weeklyPeakStatKey: '',  // which of the 8 stats that was — rewards specialization via gear,
+                             // not just stacking prestiges (someone who's barely prestiged but
+                             // has amazing gear on one stat can still top this)
     recoveryCode: null,    // shared-storage sync code for cross-device restore (see pushRecoverySnapshot)
     role: 'member',         // this player's role in their CURRENT league: head_coach|coach|trainer|member
     gymXpContributed: 0,    // lifetime Gym XP contributed to the CURRENT league (resets on switch)
     knownGymLevel: 1,       // last-fetched gym level, cached/persisted so the stat bonus still applies
                              // offline without needing a live network read every combat tick
     lastPayoutWeekKey: '',   // most recent week this player's Gym Wars payout has been settled for
+    lastPowerPayoutWeekKey: '', // same, but for the Power Leaderboard payout
   },
   daily: {
     dateKey: '',           // local YYYY-MM-DD; when this doesn't match today, counters/quests reset
@@ -1667,6 +1689,61 @@ function totalPower(){
   return s.power + s.speed + s.defense + s.stamina + s.chin + s.technique + s.slip + s.mental;
 }
 
+// Traces the EXACT same steps effectiveStats() uses for one stat, in the same order, so the
+// breakdown shown to the player is always accurate (not a separate approximation that could
+// drift out of sync with the real formula).
+function computeStatBreakdown(key){
+  const steps = [];
+  let running = state.fighter.stats[key] || 0;
+  steps.push({ label:'Base (training + retained from prestige)', delta:running, running, type:'base' });
+
+  Object.values(state.fighter.equipment).forEach(item => {
+    if(!item || !item.statBonuses[key]) return;
+    const val = item.statBonuses[key];
+    running += val;
+    steps.push({ label:itemDisplayName(item), delta:val, running, type:'gear' });
+  });
+
+  Object.values(state.garage).forEach(vehicle => {
+    if(!vehicle || !vehicle.statBonuses[key]) return;
+    const val = vehicle.statBonuses[key];
+    running += val;
+    steps.push({ label:`${vehicle.rarityName} ${vehicle.name}`, delta:val, running, type:'vehicle' });
+  });
+
+  if(state.social.leagueId){
+    const pct = gymLevelBonusPct();
+    if(pct > 0){
+      const before = running;
+      running = Math.round(running * (1+pct));
+      steps.push({ label:`Gym Level bonus (+${(pct*100).toFixed(1)}%)`, delta:running-before, running, type:'pct' });
+    }
+  }
+
+  const cornerPct = cornerBonusPct();
+  if(cornerPct > 0){
+    const before = running;
+    running = Math.round(running * (1+cornerPct));
+    steps.push({ label:`Corner Bonus (+${(cornerPct*100).toFixed(1)}%)`, delta:running-before, running, type:'pct' });
+  }
+
+  const prestigeBonus = prestigeStatBonus();
+  if(prestigeBonus > 0){
+    running += prestigeBonus;
+    steps.push({ label:`Prestige Bonus (×${state.prestige.count} prestiges)`, delta:prestigeBonus, running, type:'add' });
+  }
+
+  return steps; // steps[last].running always equals effectiveStats()[key]
+}
+
+// Shared by every Tale of the Tape rendering (Fighter tab + Train tab both used to duplicate
+// this as separate closures) — now one function, and clickable to open the full breakdown.
+function renderTapeStatRow(key, label){
+  const eff = effectiveStats();
+  const bonus = eff[key] - state.fighter.stats[key];
+  return `<div class="tape-stat" data-view-stat="${key}" style="cursor:pointer;"><div class="label">${label}</div><div class="value">${eff[key]}${bonus>0?`<span class="gear-bonus">+${bonus}</span>`:''}</div></div>`;
+}
+
 function fighterAvatar(){
   return state.fighter.gender === 'female' ? '🥊' : '🥊';
 }
@@ -1790,7 +1867,7 @@ function prestigeCombatEdge(){
 // PRESTIGE STAT BONUS — every single prestige now grants a permanent +10 to all 8 stats,
 // stacking forever. This replaced an earlier design where only every-50th "Super Prestige"
 // milestones granted this — now it's a guaranteed baseline reward for every prestige, with
-// retention (1-3% of current stats) as a smaller bonus layered on top rather than the main event.
+// retention (0.5-4% of current stats) as a smaller bonus layered on top rather than the main event.
 const PRESTIGE_STAT_BONUS_PER_PRESTIGE = 10;
 function prestigeStatBonus(){
   return state.prestige.count * PRESTIGE_STAT_BONUS_PER_PRESTIGE;
@@ -2648,17 +2725,9 @@ function renderFighterTab(){
       </div>
     </div>
 
-    <div class="panel-title">Tale of the Tape</div>
+    <div class="panel-title">Tale of the Tape <span style="color:var(--text-muted); font-size:11px;">(tap a stat for the full breakdown)</span></div>
     <div class="tape tape-2x4">
-      ${(() => {
-        const eff = effectiveStats();
-        const statRow = (key, label) => {
-          const bonus = eff[key] - f.stats[key];
-          return `<div class="tape-stat"><div class="label">${label}</div><div class="value">${eff[key]}${bonus>0?`<span class="gear-bonus">+${bonus}</span>`:''}</div></div>`;
-        };
-        return statRow('power','Power') + statRow('speed','Speed') + statRow('defense','Defense') + statRow('stamina','Stamina')
-             + statRow('chin','Chin') + statRow('technique','Technique') + statRow('slip','Slip') + statRow('mental','Mental');
-      })()}
+      ${renderTapeStatRow('power','Power')}${renderTapeStatRow('speed','Speed')}${renderTapeStatRow('defense','Defense')}${renderTapeStatRow('stamina','Stamina')}${renderTapeStatRow('chin','Chin')}${renderTapeStatRow('technique','Technique')}${renderTapeStatRow('slip','Slip')}${renderTapeStatRow('mental','Mental')}
     </div>
 
     <div class="panel-title">Your Progress <span style="color:var(--text-muted); font-size:11px;">(tap any stat to jump there)</span></div>
@@ -2808,7 +2877,7 @@ function renderCareerTab(){
     <div class="card" style="${eligible ? 'border-color:var(--belt-gold);' : ''}">
       <div style="font-size:13px; color:${eligible?'var(--text-main)':'var(--text-muted)'};">
         ${eligible
-          ? `You've reached Hall of Fame! Prestige to reset your career and carry forward <strong style="color:var(--belt-gold);">${(projectedRetainPct(winsSinceHallOfFame())*100).toFixed(1)}%</strong> of your stats (scales with wins earned SINCE reaching Hall of Fame — ${winsSinceHallOfFame()} so far: 150 ≈1%, 300 ≈2%, 600+ caps at 3% — keep fighting for a bigger cut if you're not in a rush). Every 10th prestige permanently grants an extra vehicle and partner slot.`
+          ? `You've reached Hall of Fame! Prestige to reset your career and carry forward <strong style="color:var(--belt-gold);">${(previewRetainPct(winsSinceHallOfFame())*100).toFixed(1)}%</strong> of your stats (scales with wins earned SINCE reaching Hall of Fame — ${winsSinceHallOfFame()} so far: 0.5% at Hall of Fame, +0.5% every 200 wins, caps at ${(retentionCap()*100).toFixed(1)}% — keep fighting for a bigger cut if you're not in a rush). Every 10th prestige permanently grants an extra vehicle and partner slot, plus +0.5% to this retention cap (currently ${(retentionCap()*100).toFixed(1)}%).`
           : 'Reach Hall of Fame to unlock Prestige — a permanent reset that keeps a slice of your stats (more wins this run = more retained) and unlocks long-term bonuses.'}
       </div>
       ${eligible ? `<button class="btn btn-gold btn-block" style="margin-top:10px;" data-do-prestige>🌟 Prestige Now</button>` : ''}
@@ -2824,14 +2893,22 @@ function renderCareerTab(){
         ${renderBulkBuyToggle()}
         ${Object.entries(POWER_UPS).map(([key, pu]) => {
           const p = state.powerUps[key];
+          const threshold = POWER_UP_SOFT_THRESHOLDS[p.effectKey];
+          const thresholdLevel = threshold !== undefined ? Math.ceil(threshold / p.bonusPerLevel) : Infinity;
+          const pastThreshold = p.level > thresholdLevel;
+          const currentBonus = powerUpBonus(p.effectKey);
+          const bonusLabel = p.effectKey === 'startCash' ? `+$${fmtNum(currentBonus)}` : `+${currentBonus.toFixed(1)}%`;
           const preview = computeBulkBuy(p.level, p.baseCost, 1.85, qty, state.economy.cash);
           const canAfford = preview.bought > 0;
           return `
             <div class="card loop-card">
               <div class="loop-icon">${pu.icon}</div>
               <div class="loop-info">
-                <div class="loop-title">${pu.name} <span style="color:var(--belt-gold); font-size:11px;">Lv.${p.level}</span></div>
+                <div class="loop-title" data-view-powerup="${key}" style="cursor:pointer;">${pu.name} <span style="color:var(--belt-gold); font-size:11px;">Lv.${p.level}</span> <span style="color:var(--text-muted); font-size:10px;">ℹ️</span></div>
                 <div class="loop-desc">${pu.desc}</div>
+                <div style="font-size:11px; margin-top:3px; font-weight:600; color:var(--champ-teal);">
+                  Currently: ${bonusLabel}${pastThreshold ? ' (diminishing returns past this point — still grows, just slower)' : ''}
+                </div>
               </div>
               <button class="btn ${canAfford ? 'btn-gold' : 'btn-ghost'}" style="flex-shrink:0; padding:9px 12px; font-size:12px; text-align:center;" data-powerup-buy="${key}" ${canAfford?'':'disabled'}>
                 $${fmtNum(preview.totalCost)}${preview.bought>1?`<br><span style="font-size:9px;">×${preview.bought}</span>`:''}
@@ -3234,15 +3311,35 @@ function isPrestigeEligible(){
   return state.fighter.tier === 'Hall of Fame';
 }
 
-const POWER_UP_CAPS = { retainPct: 2, startCash: 2000, xpPct: 50, cashPct: 50 };
+// POWER_UP_SOFT_THRESHOLDS — no longer hard caps. Below this threshold, bonus grows exactly as
+// before (level * bonusPerLevel) — zero change for anyone who hasn't reached it yet. BEYOND it,
+// growth switches to sqrt(extra levels beyond the threshold) instead of stopping dead — every
+// level still adds SOME value, forever, just with steadily diminishing returns that naturally
+// slow down relative to the exponentially-increasing purchase cost. Fixes a real bug: Iron Will
+// previously hard-capped at level 10, meaning every level bought past that (level 11+) provided
+// zero benefit with no warning — a player could burn cash on wasted levels indefinitely.
+const POWER_UP_SOFT_THRESHOLDS = { retainPct: 2, startCash: 2000, xpPct: 50, cashPct: 50 };
+
+// One power-up's own contribution at a given (possibly hypothetical) level — factored out so the
+// next-level preview modal can reuse the EXACT same formula powerUpBonus() uses, just called with
+// level+1 instead of the current level.
+function powerUpContributionAtLevel(p, level){
+  const threshold = POWER_UP_SOFT_THRESHOLDS[p.effectKey];
+  if(threshold === undefined) return level * p.bonusPerLevel;
+  const thresholdLevel = Math.ceil(threshold / p.bonusPerLevel);
+  if(level <= thresholdLevel) return level * p.bonusPerLevel;
+  const valueAtThreshold = thresholdLevel * p.bonusPerLevel;
+  const extraLevels = level - thresholdLevel;
+  return valueAtThreshold + p.bonusPerLevel * Math.sqrt(extraLevels);
+}
 
 function powerUpBonus(effectKey){
   let total = 0;
   Object.values(state.powerUps).forEach(p => {
-    if(p.effectKey === effectKey) total += p.level * p.bonusPerLevel;
+    if(p.effectKey !== effectKey) return;
+    total += powerUpContributionAtLevel(p, p.level);
   });
-  const cap = POWER_UP_CAPS[effectKey];
-  return cap !== undefined ? Math.min(cap, total) : total;
+  return total; // uncapped — no more Math.min()
 }
 
 function powerUpCost(key){
@@ -3262,7 +3359,7 @@ function purchasePowerUp(key){
   scheduleSave();
 }
 
-// Executes a prestige reset: retains 1-3% (boosted by the Iron Will power-up) of current stat
+// Executes a prestige reset: retains 0.5-4% (boosted by the Iron Will power-up) of current stat
 // points, resets career/cash/gear/loot/Corner progress, but keeps power-ups and cosmetics.
 // Every 10th prestige permanently unlocks an extra vehicle slot and partner slot.
 //
@@ -3285,21 +3382,64 @@ function winsSinceHallOfFame(){
   if(state.fighter.hallOfFameEnteredAtWins === null) return 0;
   return Math.max(0, state.fighter.wins - state.fighter.hallOfFameEnteredAtWins);
 }
+// Retention is a STEPPED curve based on wins earned SINCE reaching Hall of Fame (NOT lifetime
+// wins for the run — see winsSinceHallOfFame below for why that distinction matters). Starts at
+// a real, visible 0.5% right at Hall of Fame (not 0%, so prestiging immediately still feels worth
+// something) and steps up +0.5% every 200 wins, capping at 4.0% at 1400 wins — a longer, more
+// granular ladder than the old smooth 150/300/600 curve, giving idle/double-speed catch-up
+// sessions (which can bank hundreds of wins per session) more milestones to actually land on.
+//
+// KNOWN INTERACTION WORTH FLAGGING: the Iron Will power-up adds its own bonus on top of this
+// curve, uncapped by wins-since-HoF — a heavily-leveled Iron Will (e.g. Lv.17 contributes ~2.5%)
+// can make the TOTAL shown right at Hall of Fame look much higher than "just reached it" would
+// suggest, since Iron Will's contribution doesn't scale with wins at all. That's not a bug in
+// this curve — it's Iron Will working as designed — but it does mean a well-invested Iron Will
+// player won't feel this stepped ladder's early rungs as strongly as a fresh player would.
+const RETENTION_STEP_WINS =   [0,    200,  400,  600,  800,  1000, 1200, 1400];
+const RETENTION_STEP_VALUES = [0.005,0.010,0.015,0.020,0.025,0.030,0.035,0.040];
+
+// The retention CEILING itself grows over a long career — every 10th prestige (the same
+// milestone that already grants an extra vehicle/partner slot) also permanently raises this cap
+// by +0.5%. The win-based step table above stays fixed (still tops out at its own 4.0%), but this
+// growing outer ceiling gives long-term Iron Will investment continued room to matter at high
+// prestige counts, rather than being wasted once a fixed 4% wall is reached.
+function retentionCap(){
+  return 0.04 + Math.floor((state.prestige.count||0) / 10) * 0.005;
+}
+
+// PREVIEW percentage — win-based curve ONLY, no Iron Will. This is what's shown on the Career
+// tab BEFORE prestiging, so the number climbing with your wins stays honest and motivating (the
+// whole point of the stepped curve above) instead of starting inflated by however much Iron Will
+// you've invested in. Iron Will's contribution is intentionally withheld from THIS number.
+function previewRetainPct(winsSinceHoF){
+  let baseRetainPct = RETENTION_STEP_VALUES[0];
+  for(let i=0; i<RETENTION_STEP_WINS.length; i++){
+    if(winsSinceHoF >= RETENTION_STEP_WINS[i]) baseRetainPct = RETENTION_STEP_VALUES[i];
+  }
+  return Math.min(retentionCap(), baseRetainPct);
+}
+
+// ACTUAL percentage — win-based curve + Iron Will, capped at the current (possibly grown)
+// ceiling. Only ever computed at the moment of executing a prestige (never shown as a preview) —
+// so if you've invested in Iron Will, the real retained-stats result comes in higher than
+// whatever the preview showed, landing as a genuine surprise on the reveal rather than something
+// you saw coming.
 function projectedRetainPct(winsSinceHoF){
-  let baseRetainPct;
-  if(winsSinceHoF >= 600) baseRetainPct = 0.03;
-  else if(winsSinceHoF >= 300) baseRetainPct = 0.02 + (winsSinceHoF-300)/300 * 0.01;
-  else if(winsSinceHoF >= 150) baseRetainPct = 0.01 + (winsSinceHoF-150)/150 * 0.01;
-  else baseRetainPct = (winsSinceHoF/150) * 0.01;
-  return Math.min(0.03, baseRetainPct + powerUpBonus('retainPct')/100);
+  return Math.min(retentionCap(), previewRetainPct(winsSinceHoF) + powerUpBonus('retainPct')/100);
 }
 
 function executePrestige(){
   if(!isPrestigeEligible()) return;
 
   // Retention scales with wins earned SINCE reaching Hall of Fame, not total wins for the run:
-  // 150 ~1%, 300 ~2%, 600+ caps at 3%. Iron Will adds a small extra bump on top, still capped at 3%.
-  const retainPct = projectedRetainPct(winsSinceHallOfFame());
+  // 0.5% at Hall of Fame, +0.5% every 200 wins, capped by retentionCap() (grows +0.5% every 10th prestige). Iron Will adds a bump on top, same cap.
+  const winsSinceHoF = winsSinceHallOfFame();
+  const retainPct = projectedRetainPct(winsSinceHoF);
+  // How much of retainPct came from Iron Will specifically, beyond what the Career tab's preview
+  // showed (which deliberately withholds Iron Will — see previewRetainPct) — this is the "surprise
+  // reveal" moment: if you've invested in Iron Will, the ACTUAL result lands higher than whatever
+  // number you saw before committing to prestige.
+  const ironWillSurprise = retainPct - previewRetainPct(winsSinceHoF);
 
   const retained = {};
   STAT_KEYS_ALL.forEach(key => {
@@ -3318,14 +3458,17 @@ function executePrestige(){
   // every raw multiple of 25. Being a multiple of 25 alone doesn't yet mean anything changed.
   const pastRampCap = state.prestige.count > PRESTIGE_WINRATE_CAP_AT;
   const superPrestigeMilestone = pastRampCap && (state.prestige.count - PRESTIGE_WINRATE_CAP_AT) % SUPER_PRESTIGE_INTERVAL === 0;
+  const surpriseNote = ironWillSurprise > 0.0005
+    ? ` 🛡️ Iron Will bumped your retention from ${(previewRetainPct(winsSinceHoF)*100).toFixed(1)}% to ${(retainPct*100).toFixed(1)}%!`
+    : '';
   if(superPrestigeMilestone){
     const tier = superPrestigeDifficultyTier();
-    pushLog(`🌟 SUPER PRESTIGE #${state.prestige.count}! Tier ${tier} reached — PvE opponent range narrows further. +${PRESTIGE_STAT_BONUS_PER_PRESTIGE} to all stats permanently, as with every prestige.`, 'level');
-    showToast(`🌟 SUPER PRESTIGE! Tier ${tier} — PvE range tightened!`);
+    pushLog(`🌟 SUPER PRESTIGE #${state.prestige.count}! Tier ${tier} reached — PvE opponent range narrows further. +${PRESTIGE_STAT_BONUS_PER_PRESTIGE} to all stats permanently, as with every prestige.${surpriseNote}`, 'level');
+    showToast(`🌟 SUPER PRESTIGE! Tier ${tier} — PvE range tightened!${surpriseNote}`);
   } else if(slotMilestone){
-    showToast(`Prestige ${state.prestige.count}! New vehicle + partner slot, +${PRESTIGE_STAT_BONUS_PER_PRESTIGE} to all stats.`);
+    showToast(`Prestige ${state.prestige.count}! New vehicle + partner slot, +${PRESTIGE_STAT_BONUS_PER_PRESTIGE} to all stats.${surpriseNote}`);
   } else {
-    showToast(`Prestiged! +${PRESTIGE_STAT_BONUS_PER_PRESTIGE} to all stats permanently, plus a fraction of your current stats carried forward.`);
+    showToast(`Prestiged! +${PRESTIGE_STAT_BONUS_PER_PRESTIGE} to all stats permanently, plus a fraction of your current stats carried forward.${surpriseNote}`);
   }
 
   // Reset career/fighter progress, but keep retained stats, power-ups, companions, cosmetics.
@@ -4194,6 +4337,7 @@ async function pushTeethSpendHeartbeat(){
     await window.storage.set(key, JSON.stringify({
       name: state.social.displayName || 'Unnamed',
       amount: state.economy.teethSpentThisWeek,
+      leagueId: state.social.leagueId || null,
       updatedAt: Date.now(),
     }), true);
   } catch(e){ /* best-effort — next spend (or the next interval tick) will retry */ }
@@ -4224,17 +4368,24 @@ function renameFighter(rawName){
    safe from that limitation; only the shared roster/member-count is "social".
    ======================================================================== */
 const LEAGUES = [
-  { id:'redcorner',  name:'Grim Corner Athletics', icon:'🥋' },
-  { id:'ironfist',   name:'Iron Fist Gym',        icon:'👊' },
-  { id:'goldenbelt', name:'Golden Belt Academy',  icon:'🏅' },
-  { id:'blackout',   name:'Blackout Boxing Club', icon:'🥊' },
-  { id:'ironwolf',   name:'Iron Wolf Fight Team', icon:'🐺' },
-  { id:'stormfront', name:'Stormfront MMA',       icon:'⛈️' },
-  { id:'grindhouse', name:'Grindhouse Gym',       icon:'🏋️' },
-  { id:'apexring',   name:'Apex Ring',            icon:'🔺' },
-  { id:'nightshift', name:'Night Shift Fighters', icon:'🌙' },
-  { id:'lionheart',  name:'Lionheart Combat',     icon:'🦁' },
+  { id:'redcorner',  name:'Grim Corner Athletics', icon:'🥋', abbr:'GCA' },
+  { id:'ironfist',   name:'Iron Fist Gym',        icon:'👊', abbr:'IFG' },
+  { id:'goldenbelt', name:'Golden Belt Academy',  icon:'🏅', abbr:'GBA' },
+  { id:'blackout',   name:'Blackout Boxing Club', icon:'🥊', abbr:'BBC' },
+  { id:'ironwolf',   name:'Iron Wolf Fight Team', icon:'🐺', abbr:'IWFT' },
+  { id:'stormfront', name:'Stormfront MMA',       icon:'⛈️', abbr:'SFM' },
+  { id:'grindhouse', name:'Grindhouse Gym',       icon:'🏋️', abbr:'GHG' },
+  { id:'apexring',   name:'Apex Ring',            icon:'🔺', abbr:'APX' },
+  { id:'nightshift', name:'Night Shift Fighters', icon:'🌙', abbr:'NSF' },
+  { id:'lionheart',  name:'Lionheart Combat',     icon:'🦁', abbr:'LHC' },
 ];
+
+// Shared formatter for the "(icon ABBR)" gym tag shown next to player names on cross-gym
+// leaderboards, so you can see at a glance which gym everyone's repping.
+function gymTag(leagueId){
+  const lg = LEAGUES.find(l => l.id === leagueId);
+  return lg ? ` <span style="color:var(--text-muted); font-weight:400;">(${lg.icon} ${lg.abbr})</span>` : '';
+}
 
 // Membership tier thresholds are lifetime XP contributed while a member of your CURRENT league
 // (resets if you switch leagues). Bonus stacks with Home Perks / Power-Ups on cash & XP gain.
@@ -4547,6 +4698,8 @@ function ensureWeeklyReset(){
   state.social.weeklyXp = 0;
   state.social.weeklyWins = 0; // tracked separately from state.fighter.wins specifically because
                                  // THAT resets on prestige mid-week — see addWeeklyWins() below.
+  state.social.weeklyPeakStatValue = 0;
+  state.social.weeklyPeakStatKey = '';
 }
 
 // Wins earned THIS CALENDAR WEEK, immune to prestige resets — unlike state.fighter.wins (which
@@ -4882,6 +5035,8 @@ async function pushWeeklyStats(){
       name: state.social.displayName,
       weeklyXp: state.social.weeklyXp,
       wins: state.social.weeklyWins || 0, // week-scoped, survives prestige — NOT state.fighter.wins
+      peakStatValue: state.social.weeklyPeakStatValue || 0,
+      peakStatKey: state.social.weeklyPeakStatKey || '',
       updatedAt: Date.now(),
     }), true);
     lastWeeklyPushAt = Date.now();
@@ -4944,6 +5099,12 @@ async function refreshLeagueWeekly(){
    ------------------------------------------------------------------------ */
 const GYM_WARS_LEAGUE_REWARDS = { 1:60, 2:35, 3:20 };
 const GYM_WARS_INDIVIDUAL_REWARDS = { 1:50, 2:40, 3:30, 4:22, 5:16, 6:12, 7:9, 8:7, 9:5, 10:3 };
+// Highest Stat Leaderboard — ranks by the single highest stat (not combined power) reached this
+// week, rewarding specialization via gear directly — someone who's barely prestiged but has
+// amazing gear on one stat can still top this, unlike a combined-power ranking that favors
+// whoever's stacked the most prestiges. Same Teeth scale as the individual Gym Wars XP
+// leaderboard, plus bonus rare-chest pulls for the top 3 (see checkPowerLeaderboardPayout).
+const SINGLE_STAT_LEADERBOARD_REWARDS = { 1:50, 2:40, 3:30, 4:22, 5:16, 6:12, 7:9, 8:7, 9:5, 10:3 };
 
 function previousWeekKey(){
   return getWeekKey(new Date(Date.now() - 7*24*60*60*1000));
@@ -4968,7 +5129,7 @@ async function aggregateTeethSpendForWeek(weekKey){
       if(res && res.value){
         const parsed = JSON.parse(res.value);
         const playerId = k.split(':')[2];
-        entries.push({ playerId, name: parsed.name || 'Unnamed', amount: parsed.amount || 0 });
+        entries.push({ playerId, name: parsed.name || 'Unnamed', amount: parsed.amount || 0, leagueId: parsed.leagueId || null });
       }
     } catch(e){ /* skip unreadable entry */ }
   }));
@@ -5012,7 +5173,7 @@ async function checkTeethSpendPayout(){
   scheduleSave();
 }
 
-let gymWarsCache = { weekKey: null, leagueRankings: [], individualRankings: [], loading: false };
+let gymWarsCache = { weekKey: null, leagueRankings: [], individualRankings: [], statRankings: [], loading: false };
 
 // Pure aggregation for a given week — does NOT touch gymWarsCache, so it's safe to call for a
 // DIFFERENT week (payout settlement uses last week) without racing/clobbering whatever the UI's
@@ -5055,8 +5216,12 @@ async function aggregateGymWarsForWeek(weekKey){
     if(!existing || (e.updatedAt||0) > (existing.updatedAt||0)) latestByPlayer[e.playerId] = e;
   });
   const individualRankings = Object.values(latestByPlayer).sort((a,b) => (b.weeklyXp||0) - (a.weeklyXp||0));
+  // Power Leaderboard — same deduplicated entries, just ranked by peak power reached this week
+  // instead of activity XP. Not excluding flagged entries here since the plausibility check is
+  // XP-specific and doesn't say anything about whether a power value is realistic.
+  const statRankings = Object.values(latestByPlayer).sort((a,b) => (b.peakStatValue||0) - (a.peakStatValue||0));
 
-  return { weekKey, leagueRankings, individualRankings };
+  return { weekKey, leagueRankings, individualRankings, statRankings };
 }
 
 // UI-facing refresh for the CURRENT week's live standings — this is the only function that
@@ -5146,6 +5311,71 @@ async function checkGymWarsPayout(){
     pushLog(`🏆 Gym Wars results: ${rewardParts.join(', ')} — +${teethWon} Teeth total`, 'level');
     showToast(`Gym Wars payout: +${teethWon} Teeth!`);
     fireLocalNotification('🏆 Gym Wars Results!', rewardParts.join(', ') + ` — +${teethWon} Teeth`);
+  }
+  render();
+  scheduleSave();
+}
+
+// Power Leaderboard payout — reuses the SAME aggregateGymWarsForWeek call as checkGymWarsPayout
+// (both read the same league_weekly entries, just ranked differently), so this doesn't cost an
+// extra fetch beyond what's already happening.
+// Top 3 finishers get bonus chest pulls auto-resolved directly (no need to "open" anything —
+// same generation logic buyChest uses, just granted rather than purchased). Returns a short
+// summary string for the log/toast.
+function grantBonusChestPulls(count, tierRange, label){
+  const summaries = [];
+  for(let i=0; i<count; i++){
+    const tier = Math.floor(tierRange[0] + Math.random()*(tierRange[1]-tierRange[0]+1));
+    const isVehiclePull = Math.random() < 0.08;
+    if(isVehiclePull){
+      const category = getActiveVehicleSlotKeys()[Math.floor(Math.random()*getActiveVehicleSlotKeys().length)];
+      const vehicle = generateVehicleItem(category, Math.min(10,tier), 'reward');
+      autoResolveVehicle(vehicle, false);
+      summaries.push(`${vehicle.rarityName} ${vehicle.name}`);
+    } else {
+      const item = generateLootItem(Math.min(10,tier), null, 'reward');
+      autoResolveItem(item, false);
+      summaries.push(itemDisplayName(item));
+    }
+  }
+  pushLog(`🎁 ${label}: ${summaries.join(', ')}`, 'level');
+  return summaries;
+}
+
+async function checkPowerLeaderboardPayout(){
+  if(!state.social.playerId) return;
+  const prevWeek = previousWeekKey();
+  if(state.social.lastPowerPayoutWeekKey === prevWeek) return; // already settled
+
+  if(!state.social.leagueId){
+    state.social.lastPowerPayoutWeekKey = prevWeek;
+    scheduleSave();
+    return;
+  }
+
+  let standings;
+  try {
+    standings = await aggregateGymWarsForWeek(prevWeek);
+  } catch(e){ return; } // fetch failed — try again next visit
+
+  state.social.lastPowerPayoutWeekKey = prevWeek;
+  const myRank = standings.statRankings.findIndex(e => e.playerId === state.social.playerId) + 1;
+  const myEntry = myRank > 0 ? standings.statRankings[myRank-1] : null;
+  if(myRank >= 1 && myRank <= 10 && myEntry && (myEntry.peakStatValue||0) > 0){
+    const reward = SINGLE_STAT_LEADERBOARD_REWARDS[myRank];
+    state.economy.teeth += reward;
+    const statLabel = myEntry.peakStatKey ? capitalize(myEntry.peakStatKey) : 'a stat';
+    let chestNote = '';
+    if(myRank === 1){
+      grantBonusChestPulls(3, [8,10], 'Champion\'s Chest (Highest Stat #1)');
+      chestNote = ' + a Champion\'s Chest (3 rare pulls)';
+    } else if(myRank <= 3){
+      grantBonusChestPulls(2, [7,10], 'Elite Chest (Highest Stat top 3)');
+      chestNote = ' + an Elite Chest (2 rare pulls)';
+    }
+    pushLog(`🎯 Highest Stat Leaderboard: #${myRank} this week with ${statLabel} ${fmtNum(myEntry.peakStatValue)}! +${reward} Teeth${chestNote}`, 'level');
+    showToast(`Highest Stat payout: +${reward} Teeth${chestNote}! (#${myRank} this week)`);
+    fireLocalNotification('🎯 Highest Stat Payout!', `#${myRank} this week — +${reward} Teeth${chestNote}`);
   }
   render();
   scheduleSave();
@@ -5347,6 +5577,75 @@ async function setMemberRole(targetPlayerId, newRole){
 // Shows the full role hierarchy with caps and current fill counts — uses whatever roster data is
 // already cached (no extra fetch) so it's instant, but that also means it reflects however
 // recently the roster was last refreshed rather than a guaranteed-live count.
+// Shows the full stacked breakdown for one stat — base, each contributing gear/vehicle item by
+// name, gym/corner percentage bonuses, and the flat prestige bonus, ending at the same total
+// shown on Tale of the Tape (computeStatBreakdown traces the identical formula effectiveStats
+// uses, so this can never drift out of sync with the real number).
+function openStatDetail(key){
+  const steps = computeStatBreakdown(key);
+  const total = steps[steps.length-1].running;
+  document.getElementById('stat-detail-modal-title').textContent = capitalize(key);
+  document.getElementById('stat-detail-modal-body').innerHTML = `
+    <div style="text-align:center; margin-bottom:12px;">
+      <div style="font-family:'Oswald',sans-serif; font-size:36px; font-weight:700; color:var(--belt-gold);">${total}</div>
+      <div style="font-size:11px; color:var(--text-muted); text-transform:uppercase; letter-spacing:1px;">${capitalize(key)}</div>
+    </div>
+    ${steps.map(s => `
+      <div style="display:flex; justify-content:space-between; align-items:center; padding:7px 0; border-bottom:1px solid var(--border-soft); font-size:13px;">
+        <span style="color:${s.type==='base'?'var(--text-main)':'var(--text-muted)'};">${s.label}</span>
+        <span style="text-align:right; flex-shrink:0; margin-left:10px;">
+          <span style="color:${s.delta>0?'var(--champ-teal)':'var(--text-muted)'}; font-weight:600;">${s.type==='base'?s.delta:(s.delta>0?'+':'')+s.delta}</span>
+          <span style="color:var(--text-muted); font-size:11px;"> → ${s.running}</span>
+        </span>
+      </div>
+    `).join('')}
+  `;
+  document.getElementById('stat-detail-modal').style.display = 'flex';
+}
+
+// Shows current bonus + what the NEXT level would change it to, using the exact same formula
+// powerUpBonus() itself uses (via powerUpContributionAtLevel) — never a separate approximation.
+function openPowerUpDetail(key){
+  const p = state.powerUps[key];
+  const pu = POWER_UPS[key];
+  const fmtBonus = (v) => p.effectKey === 'startCash' ? `+$${fmtNum(Math.round(v))}` : `+${v.toFixed(2)}%`;
+
+  const myContributionNow = powerUpContributionAtLevel(p, p.level);
+  const myContributionNext = powerUpContributionAtLevel(p, p.level+1);
+  const totalNow = powerUpBonus(p.effectKey); // aggregate across any power-ups sharing this effect
+  const totalNext = totalNow - myContributionNow + myContributionNext;
+
+  const threshold = POWER_UP_SOFT_THRESHOLDS[p.effectKey];
+  const thresholdLevel = threshold !== undefined ? Math.ceil(threshold / p.bonusPerLevel) : Infinity;
+  const pastThreshold = p.level >= thresholdLevel;
+  const nextCost = powerUpCost(key);
+
+  document.getElementById('stat-detail-modal-title').textContent = pu.name;
+  document.getElementById('stat-detail-modal-body').innerHTML = `
+    <div style="font-size:12px; color:var(--text-muted); margin-bottom:10px;">${pu.desc}</div>
+    <div class="card" style="margin-bottom:8px;">
+      <div style="display:flex; justify-content:space-between; align-items:center;">
+        <span style="font-size:13px;">Level ${p.level} (now)</span>
+        <span style="font-family:'Oswald',sans-serif; font-weight:700; color:var(--champ-teal);">${fmtBonus(totalNow)}</span>
+      </div>
+      <div style="display:flex; justify-content:space-between; align-items:center; margin-top:6px;">
+        <span style="font-size:13px;">Level ${p.level+1} (next)</span>
+        <span style="font-family:'Oswald',sans-serif; font-weight:700; color:var(--belt-gold);">${fmtBonus(totalNext)}</span>
+      </div>
+      <div style="display:flex; justify-content:space-between; align-items:center; margin-top:6px; padding-top:6px; border-top:1px solid var(--border-soft);">
+        <span style="font-size:11px; color:var(--text-muted);">Gain from next level</span>
+        <span style="font-size:13px; font-weight:600; color:var(--champ-teal);">${fmtBonus(myContributionNext-myContributionNow)}</span>
+      </div>
+      <div style="display:flex; justify-content:space-between; align-items:center; margin-top:4px;">
+        <span style="font-size:11px; color:var(--text-muted);">Cost of next level</span>
+        <span style="font-size:13px; font-weight:600;">$${fmtNum(nextCost)}</span>
+      </div>
+    </div>
+    ${pastThreshold ? `<div style="font-size:11px; color:var(--text-muted);">Past the soft threshold (Lv.${thresholdLevel}) — every level still helps, just with diminishing returns relative to the exponentially-rising cost above.</div>` : ''}
+  `;
+  document.getElementById('stat-detail-modal').style.display = 'flex';
+}
+
 function openRolesInfo(){
   const roleCounts = {};
   (leagueRosterDetailCache.members||[]).forEach(m => { const r = m.role||'member'; roleCounts[r] = (roleCounts[r]||0)+1; });
@@ -5513,6 +5812,7 @@ function refreshAllLeagueData(){
   refreshTeethSpendLeaderboard();
   checkGymWarsPayout();
   checkTeethSpendPayout();
+  checkPowerLeaderboardPayout();
 }
 
 function renderLeagueTab(){
@@ -5663,7 +5963,7 @@ function renderLeagueTab(){
           <div class="card" style="display:flex; justify-content:space-between; align-items:center; ${e.playerId===state.social.playerId?'border-color:var(--belt-gold);':''}">
             <div style="display:flex; align-items:center; gap:8px; min-width:0;">
               <div style="font-family:'Oswald',sans-serif; font-weight:700; color:var(--text-muted); width:18px; flex-shrink:0;">${i+1}</div>
-              <div style="font-size:13px; font-weight:600; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;">${escapeHtml(e.name||'Unnamed')}</div>
+              <div style="font-size:13px; font-weight:600; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;">${escapeHtml(e.name||'Unnamed')}${gymTag(e.leagueId)}</div>
             </div>
             <div style="text-align:right; flex-shrink:0;">
               <div style="font-family:'Oswald',sans-serif; font-weight:700; color:var(--corner-red);">${fmtNum(e.weeklyXp||0)} pts</div>
@@ -5672,6 +5972,37 @@ function renderLeagueTab(){
           </div>
         `).join('')}
     ` : `<div class="card empty-state" style="padding:16px;">${gymWarsCache.loading ? 'Loading standings…' : 'Tap refresh to load this week\'s standings.'}</div>`}
+    ` : ''}
+  `;
+
+  const powerLeaderboardStale = gymWarsCache.weekKey !== getWeekKey();
+  const powerLeaderboardHtml = `
+    ${renderCollapsibleHeader('🎯 Highest Stat Leaderboard <span style="color:var(--text-muted); font-size:11px; text-transform:none; letter-spacing:0;">(peak single stat this week)</span>', 'powerLeaderboardExpanded', false)}
+    ${state.ui.powerLeaderboardExpanded ? `
+    <div class="card" style="margin-bottom:8px; border-color:var(--champ-teal);">
+      <div style="font-size:10px; color:var(--text-muted);">
+        Ranks by your single HIGHEST stat (not combined power) reached this week — rewards
+        specialization via gear directly, so a heavily-geared build can top this even without many
+        prestiges. Resets weekly. Top 10 get Teeth; #1 also gets a Champion's Chest (3 rare pulls),
+        #2-3 an Elite Chest (2 rare pulls).
+      </div>
+    </div>
+    ${powerLeaderboardStale ? `<div class="card empty-state" style="padding:16px;">${gymWarsCache.loading ? 'Loading…' : 'Tap Refresh All above to load this week\'s standings.'}</div>` : (
+      gymWarsCache.statRankings.slice(0,10).length === 0
+        ? `<div class="card empty-state" style="padding:16px;">No qualifying activity yet this week.</div>`
+        : gymWarsCache.statRankings.slice(0,10).map((e,i) => `
+          <div class="card" style="display:flex; justify-content:space-between; align-items:center; ${e.playerId===state.social.playerId?'border-color:var(--belt-gold);':''}">
+            <div style="display:flex; align-items:center; gap:8px; min-width:0;">
+              <div style="font-family:'Oswald',sans-serif; font-weight:700; color:var(--text-muted); width:18px; flex-shrink:0;">${i+1}</div>
+              <div style="font-size:13px; font-weight:600; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;">${escapeHtml(e.name||'Unnamed')}${gymTag(e.leagueId)}</div>
+            </div>
+            <div style="text-align:right; flex-shrink:0;">
+              <div style="font-family:'Oswald',sans-serif; font-weight:700; color:var(--champ-teal);">${e.peakStatKey?capitalize(e.peakStatKey):'—'} ${fmtNum(e.peakStatValue||0)}</div>
+              <div style="font-size:10px; color:var(--belt-gold);">+${SINGLE_STAT_LEADERBOARD_REWARDS[i+1]}🦷${i===0?' +🎁🎁🎁':(i<=2?' +🎁🎁':'')}</div>
+            </div>
+          </div>
+        `).join('')
+    )}
     ` : ''}
   `;
 
@@ -5693,7 +6024,7 @@ function renderLeagueTab(){
           <div class="card" style="display:flex; justify-content:space-between; align-items:center; ${e.playerId===state.social.playerId?'border-color:var(--belt-gold);':''}">
             <div style="display:flex; align-items:center; gap:8px; min-width:0;">
               <div style="font-family:'Oswald',sans-serif; font-weight:700; color:var(--text-muted); width:18px; flex-shrink:0;">${i+1}</div>
-              <div style="font-size:13px; font-weight:600; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;">${escapeHtml(e.name||'Unnamed')}</div>
+              <div style="font-size:13px; font-weight:600; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;">${escapeHtml(e.name||'Unnamed')}${gymTag(e.leagueId)}</div>
             </div>
             <div style="text-align:right; flex-shrink:0;">
               <div style="font-family:'Oswald',sans-serif; font-weight:700; color:var(--belt-gold);">🦷${fmtNum(e.amount)}</div>
@@ -5727,8 +6058,9 @@ function renderLeagueTab(){
           <button class="btn btn-gold" style="padding:8px 14px; font-size:12px;" data-join-league="${lg.id}">Join</button>
         </div>
       `).join('')}
-      ${renderExpandCollapseAll(['gymWarsExpanded','teethSpendExpanded','questsExpanded'])}
+      ${renderExpandCollapseAll(['gymWarsExpanded','powerLeaderboardExpanded','teethSpendExpanded','questsExpanded'])}
       ${gymWarsHtml}
+      ${powerLeaderboardHtml}
       ${teethSpendHtml}
       ${questsHtml}
       ${syncHtml}
@@ -5871,7 +6203,7 @@ function renderLeagueTab(){
     </div>
     ${nameCardHtml}
 
-    ${renderExpandCollapseAll(['questsExpanded','weeklyScoreExpanded','gymWarsExpanded','teethSpendExpanded'])}
+    ${renderExpandCollapseAll(['questsExpanded','weeklyScoreExpanded','gymWarsExpanded','powerLeaderboardExpanded','teethSpendExpanded'])}
 
     ${roleTenureHtml}
 
@@ -5897,6 +6229,8 @@ function renderLeagueTab(){
 
     ${gymWarsHtml}
 
+    ${powerLeaderboardHtml}
+
     ${teethSpendHtml}
 
     ${questsHtml}
@@ -5915,23 +6249,18 @@ function renderLeagueTab(){
 
 function renderGymTab(){
   const f = state.fighter;
-  const eff = effectiveStats();
-  const statRow = (key, label) => {
-    const bonus = eff[key] - f.stats[key];
-    return `<div class="tape-stat"><div class="label">${label}</div><div class="value">${eff[key]}${bonus>0?`<span class="gear-bonus">+${bonus}</span>`:''}</div></div>`;
-  };
   return `
     ${renderExpandCollapseAll(['equipmentExpanded'])}
-    <div class="panel-title">Tale of the Tape</div>
+    <div class="panel-title">Tale of the Tape <span style="color:var(--text-muted); font-size:11px;">(tap a stat for the full breakdown)</span></div>
     <div class="tape tape-2x4">
-      ${statRow('power','Power')}
-      ${statRow('speed','Speed')}
-      ${statRow('defense','Defense')}
-      ${statRow('stamina','Stamina')}
-      ${statRow('chin','Chin')}
-      ${statRow('technique','Technique')}
-      ${statRow('slip','Slip')}
-      ${statRow('mental','Mental')}
+      ${renderTapeStatRow('power','Power')}
+      ${renderTapeStatRow('speed','Speed')}
+      ${renderTapeStatRow('defense','Defense')}
+      ${renderTapeStatRow('stamina','Stamina')}
+      ${renderTapeStatRow('chin','Chin')}
+      ${renderTapeStatRow('technique','Technique')}
+      ${renderTapeStatRow('slip','Slip')}
+      ${renderTapeStatRow('mental','Mental')}
     </div>
 
     ${(() => {
@@ -6226,6 +6555,13 @@ function renderHomeTab(){
     </div>
 
     <div class="card">
+      <div style="display:flex; justify-content:space-between; align-items:center;">
+        <span style="font-size:12px; color:var(--text-muted);">App Version</span>
+        <span style="font-family:'Oswald',sans-serif; font-weight:700; font-size:13px; color:var(--belt-gold);">${GAME_VERSION}</span>
+      </div>
+    </div>
+
+    <div class="card">
       <div style="font-size:13px; font-weight:600;">☁️ Cloud Backup</div>
       ${isGoogleLinked() ? `
         <div style="font-size:11px; color:var(--champ-teal); margin-top:6px;">✅ Linked as ${escapeHtml(_auth.currentUser.email || 'your Google account')}</div>
@@ -6315,6 +6651,30 @@ function buildCompanionStages(name, role, pronoun){
       `${firstName} cooks you a full pre-fight dinner and stays to watch you eat every bite. "Now go win."`,
       `${firstName} starts planning meals for two without asking first, and neither of you mentions it.`,
     ],
+    manager: [
+      `${firstName} sizes you up like a spreadsheet, already calculating your future purses.`,
+      `"You're worth more than you think," ${firstName} says, tapping numbers into ${she==='she'?'her':'his'} phone without looking up.`,
+      `${firstName} starts remembering your fight schedule better than you do.`,
+      `${firstName} starts fighting FOR you in negotiations, not just billing you for it.`,
+      `"I actually believe in you," ${firstName} admits, like the sentiment cost ${she==='she'?'her':'him'} something to say out loud.`,
+      `${firstName} shows up to your training sessions "to scout the competition," conveniently every single time.`,
+      `"You're not just a paycheck to me anymore," ${firstName} admits, looking almost embarrassed by it.`,
+      `${firstName} turns down a bigger client to keep managing just you.`,
+      `${firstName} shows up with contract papers and a different kind of proposal altogether. "Say yes to this one too."`,
+      `${firstName} stops taking new clients entirely. "You're the only account I care about now."`,
+    ],
+    physio: [
+      `${firstName} checks your range of motion with clinical detachment, saying little.`,
+      `"You've been favoring that shoulder," ${firstName} says, noticing something you hadn't mentioned.`,
+      `${firstName} starts greeting you with an actual smile instead of just a chart.`,
+      `${firstName} starts texting you recovery tips outside of scheduled sessions.`,
+      `"I worry about you more than the job requires," ${firstName} admits, surprised at ${she==='she'?'herself':'himself'}.`,
+      `${firstName} extends your sessions longer than necessary, and neither of you mentions it.`,
+      `"I look forward to these appointments," ${firstName} admits, hands lingering a moment too long on a routine stretch.`,
+      `${firstName} shows up on fight night just to check on you, no appointment needed.`,
+      `${firstName} massages the tension from your shoulders before your next fight and presses a kiss to your temple. "Now go take care of business."`,
+      `${firstName} starts treating your health like it's personally ${she==='she'?'her':'his'} responsibility — because now it is.`,
+    ],
   };
   const titles = ['Stranger','Acquaintance','Friendly','Close Friend','Trusted Friend','Warming Up','Mutual Spark','Close','Dating','Devoted'];
   const thresholds = [0, 30, 70, 120, 180, 250, 330, 420, 520, 650];
@@ -6342,16 +6702,68 @@ const ROSTER_SEED = [
   { name:'Caleb Storm',     role:'trainer',      pronoun:'him', bodyShape:'broad',    skin:'#E8B894', gear:'#E8483C', hairStyle:'buzz',     hairColor:'#9C6A33', statTrait:{stamina:4}, tattoo:true },
   { name:'Felix Adeyemi',   role:'nutritionist', pronoun:'him', bodyShape:'lean',     skin:'#5C3A21', gear:'#F2C744', hairStyle:'short',    hairColor:'#0D0D0D', statTrait:{mental:4} },
   { name:'Owen Bledsoe',    role:'nutritionist', pronoun:'him', bodyShape:'athletic', skin:'#E8B894', gear:'#2DD4BF', hairStyle:'short',    hairColor:'#5C3A21', statTrait:{technique:2,mental:2} },
+
+  // --- Expansion: filling coach/trainer/nutritionist to 12 each, plus two new roles ---
+  // Women
+  { name:'Priya Nandy',       role:'nutritionist', pronoun:'her', bodyShape:'straight', skin:'#A66835', gear:'#5B6EE1', hairStyle:'long',     hairColor:'#0D0D0D', statTrait:{stamina:2,mental:2} },
+  { name:'Naomi Reddick',     role:'nutritionist', pronoun:'her', bodyShape:'curvy',    skin:'#8D5524', gear:'#F2C744', hairStyle:'afro',     hairColor:'#1A1A1A', statTrait:{chin:3,stamina:1}, jewelry:true },
+  { name:'Elena Vasquez',     role:'nutritionist', pronoun:'her', bodyShape:'athletic', skin:'#E8B894', gear:'#2DD4BF', hairStyle:'ponytail', hairColor:'#7A4A1F', statTrait:{mental:3,technique:1} },
+  { name:'Zara Delacroix',    role:'coach',        pronoun:'her', bodyShape:'broad',    skin:'#5C3A21', gear:'#E8483C', hairStyle:'short',    hairColor:'#0D0D0D', statTrait:{power:4}, tattoo:true },
+  { name:'Chloe Winters',     role:'coach',        pronoun:'her', bodyShape:'lean',     skin:'#F5D0A9', gear:'#7C3AED', hairStyle:'long',     hairColor:'#D4AF37', statTrait:{slip:4} },
+  { name:'Ingrid Solberg',    role:'coach',        pronoun:'her', bodyShape:'athletic', skin:'#E8B894', gear:'#22C55E', hairStyle:'ponytail', hairColor:'#9C6A33', statTrait:{chin:4} },
+  { name:'Amara Osei',        role:'trainer',      pronoun:'her', bodyShape:'curvy',    skin:'#6B3F1D', gear:'#EC4899', hairStyle:'afro',     hairColor:'#0D0D0D', statTrait:{technique:4}, jewelry:true },
+  { name:'Yuki Kimura',       role:'trainer',      pronoun:'her', bodyShape:'straight', skin:'#F5D0A9', gear:'#F97316', hairStyle:'short',    hairColor:'#1A1A1A', statTrait:{mental:4} },
+  { name:'Camila Duarte',     role:'trainer',      pronoun:'her', bodyShape:'athletic', skin:'#C68642', gear:'#5B6EE1', hairStyle:'long',     hairColor:'#3A2418', statTrait:{power:2,speed:2} },
+  { name:'Freya Hartwell',    role:'manager',      pronoun:'her', bodyShape:'straight', skin:'#F5D0A9', gear:'#F2C744', hairStyle:'short',    hairColor:'#7A4A1F', statTrait:{mental:3,technique:1} },
+  { name:'Nadia Alagic',      role:'manager',      pronoun:'her', bodyShape:'lean',     skin:'#D4A276', gear:'#2DD4BF', hairStyle:'ponytail', hairColor:'#1A1A1A', statTrait:{technique:4} },
+  { name:'Isla Brennan',      role:'manager',      pronoun:'her', bodyShape:'curvy',    skin:'#F5D0A9', gear:'#7C3AED', hairStyle:'long',     hairColor:'#E63946', statTrait:{mental:4}, jewelry:true },
+  { name:'Rosa Montoya',      role:'manager',      pronoun:'her', bodyShape:'athletic', skin:'#A66835', gear:'#E8483C', hairStyle:'buzz',     hairColor:'#0D0D0D', statTrait:{power:2,mental:2} },
+  { name:'Keisha Fairweather',role:'manager',      pronoun:'her', bodyShape:'broad',    skin:'#6B3F1D', gear:'#22C55E', hairStyle:'short',    hairColor:'#1A1A1A', statTrait:{chin:2,mental:2}, tattoo:true },
+  { name:'Mei Novak',         role:'manager',      pronoun:'her', bodyShape:'straight', skin:'#E8B894', gear:'#5B6EE1', hairStyle:'long',     hairColor:'#0D0D0D', statTrait:{technique:2,mental:2} },
+  { name:'Aaliyah Pham',      role:'physio',       pronoun:'her', bodyShape:'athletic', skin:'#8D5524', gear:'#2DD4BF', hairStyle:'ponytail', hairColor:'#0D0D0D', statTrait:{stamina:4} },
+  { name:'Sasha Dvorak',      role:'physio',       pronoun:'her', bodyShape:'lean',     skin:'#F5D0A9', gear:'#F2C744', hairStyle:'short',    hairColor:'#D4AF37', statTrait:{defense:4} },
+  { name:'Bianca Correia',    role:'physio',       pronoun:'her', bodyShape:'curvy',    skin:'#C68642', gear:'#EC4899', hairStyle:'long',     hairColor:'#3A2418', statTrait:{stamina:2,defense:2}, jewelry:true },
+  { name:'Willow Aldridge',   role:'physio',       pronoun:'her', bodyShape:'straight', skin:'#F5D0A9', gear:'#7C3AED', hairStyle:'afro',     hairColor:'#8B5CF6', statTrait:{defense:3,stamina:1} },
+  { name:'Harper Escobar',    role:'physio',       pronoun:'her', bodyShape:'athletic', skin:'#D4A276', gear:'#F97316', hairStyle:'ponytail', hairColor:'#1A1A1A', statTrait:{stamina:4} },
+  { name:'Noor Hollis',       role:'physio',       pronoun:'her', bodyShape:'broad',    skin:'#6B3F1D', gear:'#22C55E', hairStyle:'short',    hairColor:'#0D0D0D', statTrait:{defense:2,chin:2}, tattoo:true },
+  // Men
+  { name:'Rafael Nazari',     role:'nutritionist', pronoun:'him', bodyShape:'athletic', skin:'#A66835', gear:'#5B6EE1', hairStyle:'short',    hairColor:'#0D0D0D', statTrait:{mental:2,technique:2} },
+  { name:'Kenji Rocha',       role:'nutritionist', pronoun:'him', bodyShape:'lean',     skin:'#C68642', gear:'#F2C744', hairStyle:'buzz',     hairColor:'#1A1A1A', statTrait:{stamina:3,chin:1} },
+  { name:'Dominic Feld',      role:'nutritionist', pronoun:'him', bodyShape:'broad',    skin:'#F5D0A9', gear:'#2DD4BF', hairStyle:'short',    hairColor:'#7A4A1F', statTrait:{mental:4} },
+  { name:'Idris Yamada',      role:'nutritionist', pronoun:'him', bodyShape:'athletic', skin:'#5C3A21', gear:'#E8483C', hairStyle:'buzz',     hairColor:'#0D0D0D', statTrait:{technique:3,mental:1} },
+  { name:'Miguel Andrade',    role:'coach',        pronoun:'him', bodyShape:'broad',    skin:'#8D5524', gear:'#F97316', hairStyle:'buzz',     hairColor:'#1A1A1A', statTrait:{power:4}, tattoo:true },
+  { name:'Soren Larsson',     role:'coach',        pronoun:'him', bodyShape:'athletic', skin:'#F5D0A9', gear:'#5B6EE1', hairStyle:'short',    hairColor:'#D4AF37', statTrait:{speed:4} },
+  { name:'Tobias Winters',    role:'coach',        pronoun:'him', bodyShape:'broad',    skin:'#D4A276', gear:'#7C3AED', hairStyle:'buzz',     hairColor:'#3A2418', statTrait:{chin:4} },
+  { name:'Malik Abara',       role:'trainer',      pronoun:'him', bodyShape:'athletic', skin:'#6B3F1D', gear:'#22C55E', hairStyle:'short',    hairColor:'#0D0D0D', statTrait:{speed:4} },
+  { name:'Enzo Beaumont',     role:'trainer',      pronoun:'him', bodyShape:'lean',     skin:'#E8B894', gear:'#EC4899', hairStyle:'long',     hairColor:'#1A1A1A', statTrait:{slip:4} },
+  { name:'Hassan Nakamura',   role:'trainer',      pronoun:'him', bodyShape:'broad',    skin:'#C68642', gear:'#F2C744', hairStyle:'buzz',     hairColor:'#0D0D0D', statTrait:{stamina:4}, tattoo:true },
+  { name:'Julian Castellanos',role:'manager',      pronoun:'him', bodyShape:'athletic', skin:'#A66835', gear:'#F2C744', hairStyle:'short',    hairColor:'#1A1A1A', statTrait:{mental:4} },
+  { name:'Rowan Whitmore',    role:'manager',      pronoun:'him', bodyShape:'lean',     skin:'#F5D0A9', gear:'#2DD4BF', hairStyle:'short',    hairColor:'#7A4A1F', statTrait:{technique:4} },
+  { name:'Xavier Blackwood',  role:'manager',      pronoun:'him', bodyShape:'broad',    skin:'#3D2314', gear:'#5B6EE1', hairStyle:'buzz',     hairColor:'#0D0D0D', statTrait:{power:2,mental:2}, tattoo:true },
+  { name:'Diego Solano',      role:'manager',      pronoun:'him', bodyShape:'athletic', skin:'#8D5524', gear:'#E8483C', hairStyle:'short',    hairColor:'#1A1A1A', statTrait:{mental:2,technique:2} },
+  { name:'Kwame Osei',        role:'manager',      pronoun:'him', bodyShape:'broad',    skin:'#5C3A21', gear:'#F97316', hairStyle:'buzz',     hairColor:'#0D0D0D', statTrait:{chin:2,mental:2} },
+  { name:'Lars Novak',        role:'manager',      pronoun:'him', bodyShape:'lean',     skin:'#F5D0A9', gear:'#7C3AED', hairStyle:'short',    hairColor:'#D4AF37', statTrait:{technique:3,mental:1} },
+  { name:'Nikolai Volkov',    role:'physio',       pronoun:'him', bodyShape:'broad',    skin:'#E8B894', gear:'#2DD4BF', hairStyle:'buzz',     hairColor:'#0D0D0D', statTrait:{defense:4}, tattoo:true },
+  { name:'Amir Tehrani',      role:'physio',       pronoun:'him', bodyShape:'athletic', skin:'#A66835', gear:'#F2C744', hairStyle:'short',    hairColor:'#1A1A1A', statTrait:{stamina:4} },
+  { name:'Cesar Rocha',       role:'physio',       pronoun:'him', bodyShape:'lean',     skin:'#C68642', gear:'#22C55E', hairStyle:'short',    hairColor:'#0D0D0D', statTrait:{defense:2,stamina:2} },
+  { name:'Bruno Ferreira',    role:'physio',       pronoun:'him', bodyShape:'broad',    skin:'#8D5524', gear:'#EC4899', hairStyle:'buzz',     hairColor:'#1A1A1A', statTrait:{stamina:3,chin:1} },
+  { name:'Gabriel Duarte',    role:'physio',       pronoun:'him', bodyShape:'athletic', skin:'#F5D0A9', gear:'#F97316', hairStyle:'short',    hairColor:'#7A4A1F', statTrait:{defense:4} },
+  { name:'Tariq Hassan',      role:'physio',       pronoun:'him', bodyShape:'lean',     skin:'#5C3A21', gear:'#5B6EE1', hairStyle:'buzz',     hairColor:'#0D0D0D', statTrait:{stamina:2,defense:2} },
 ];
 
 const ROLE_TAGLINES = {
   coach:        d => `Your ${d.role}. Sharp eyes, no patience for excuses.`,
   trainer:      d => `Your strength & conditioning trainer. Exacting, but it works.`,
   nutritionist: d => `Your nutritionist. Knows your macros better than you do.`,
+  manager:      d => `Your manager. Negotiates every purse like it's personal.`,
+  physio:       d => `Your physio. Knows exactly how much you can push before you shouldn't.`,
 };
-const ROLE_COOLDOWN = { coach:20000, trainer:20000, nutritionist:20000 };
-const ROLE_SPAR_COOLDOWN = { coach:60000, trainer:60000, nutritionist:60000 }; // 3x chat's cooldown
-const ROLE_AFFECTION = { coach:{chat:4,gift:14,spar:9}, trainer:{chat:4,gift:14,spar:9}, nutritionist:{chat:4,gift:14,spar:9} };
+const ROLE_COOLDOWN = { coach:20000, trainer:20000, nutritionist:20000, manager:20000, physio:20000 };
+const ROLE_SPAR_COOLDOWN = { coach:60000, trainer:60000, nutritionist:60000, manager:60000, physio:60000 }; // 3x chat's cooldown
+const ROLE_AFFECTION = {
+  coach:{chat:4,gift:14,spar:9}, trainer:{chat:4,gift:14,spar:9}, nutritionist:{chat:4,gift:14,spar:9},
+  manager:{chat:4,gift:14,spar:9}, physio:{chat:4,gift:14,spar:9},
+};
 
 function slugify(name){ return name.toLowerCase().replace(/[^a-z]+/g,'_').replace(/^_|_$/g,''); }
 
@@ -6521,6 +6933,8 @@ const CORNER_CATEGORIES = [
   { key:'coach',        label:'Coaches',       icon:'🥊' },
   { key:'trainer',      label:'Trainers',      icon:'💪' },
   { key:'nutritionist', label:'Nutritionists', icon:'🥗' },
+  { key:'manager',      label:'Managers',      icon:'💼' },
+  { key:'physio',       label:'Physios',       icon:'🩹' },
 ];
 
 function renderCompanionsTab(){
@@ -6729,6 +7143,12 @@ function attachContentHandlers(){
   if(rolesInfoBtn){
     rolesInfoBtn.addEventListener('click', openRolesInfo);
   }
+  document.querySelectorAll('[data-view-stat]').forEach(el => {
+    el.addEventListener('click', () => openStatDetail(el.dataset.viewStat));
+  });
+  document.querySelectorAll('[data-view-powerup]').forEach(el => {
+    el.addEventListener('click', () => openPowerUpDetail(el.dataset.viewPowerup));
+  });
   const autoOpenBtn = document.querySelector('[data-toggle-autoopen]');
   if(autoOpenBtn){
     autoOpenBtn.addEventListener('click', () => {
@@ -7244,6 +7664,14 @@ document.getElementById('levelup-modal').addEventListener('click', (e) => {
   if(e.target.id === 'levelup-modal') document.getElementById('levelup-modal').style.display = 'none';
 });
 
+/* ---------------------------- STAT DETAIL MODAL ---------------------------- */
+document.getElementById('stat-detail-modal-close').addEventListener('click', () => {
+  document.getElementById('stat-detail-modal').style.display = 'none';
+});
+document.getElementById('stat-detail-modal').addEventListener('click', (e) => {
+  if(e.target.id === 'stat-detail-modal') document.getElementById('stat-detail-modal').style.display = 'none';
+});
+
 /* ---------------------------- ROLES INFO MODAL ---------------------------- */
 document.getElementById('roles-info-modal-close').addEventListener('click', () => {
   document.getElementById('roles-info-modal').style.display = 'none';
@@ -7437,6 +7865,18 @@ function startLoop(){
   // hammering Firestore's write quota for it.
   setInterval(() => {
     if(state.fighter.name) saveGame();
+    if(state.social.leagueId){
+      ensureWeeklyReset();
+      // Cheap local computation, safe to run every tick — only the actual Firestore push below
+      // is throttled, since that's the part with real network/quota cost.
+      const eff = effectiveStats();
+      STAT_KEYS_ALL.forEach(key => {
+        if(eff[key] > state.social.weeklyPeakStatValue){
+          state.social.weeklyPeakStatValue = eff[key];
+          state.social.weeklyPeakStatKey = key;
+        }
+      });
+    }
     // Push this player's weekly league contribution + activity heartbeat to shared storage too,
     // but throttled to once a minute (not every 10s) since these are writes to shared,
     // all-players storage. The heartbeat is what keeps an active-but-League-tab-avoidant player
