@@ -259,6 +259,16 @@
     position:relative; top:auto; left:auto; transform:none; margin:0 auto 12px auto;
     width:100px; height:50px; font-size:24px; opacity:0.9;
   }
+  .partner-message-bubble{
+    position:absolute; top:44px; left:8px; z-index:8; max-width:62%;
+    background:rgba(232,72,116,0.92); border-radius:14px 14px 14px 3px; padding:8px 12px;
+    display:flex; align-items:flex-start; gap:6px; cursor:pointer;
+    box-shadow:0 3px 10px rgba(0,0,0,0.4); animation:partnerMsgIn 0.3s ease-out;
+  }
+  .partner-message-bubble .heart-icon{ font-size:15px; flex-shrink:0; line-height:1.3; }
+  .partner-message-bubble .msg-text{ font-size:11px; line-height:1.3; color:#fff; }
+  .partner-message-bubble .msg-name{ font-weight:700; }
+  @keyframes partnerMsgIn{ from{ opacity:0; transform:translateX(-12px); } to{ opacity:1; transform:translateX(0); } }
 
   /* ---------- FIGHT CARD HP EDGES ---------- */
   .fightcard-edge{
@@ -675,8 +685,12 @@
   <div id="log-modal" class="modal-overlay" style="display:none;">
     <div class="modal-card">
       <div class="modal-header">
-        <div class="modal-title">Fight Log</div>
+        <div class="modal-title" id="log-modal-title">Fight Log</div>
         <button class="modal-close" id="log-modal-close">✕</button>
+      </div>
+      <div style="display:flex; gap:6px; padding:0 16px 10px 16px;">
+        <button class="btn btn-teal" style="flex:1; padding:7px; font-size:11px;" id="log-tab-activity" data-log-tab="activity">📋 Activity</button>
+        <button class="btn btn-ghost" style="flex:1; padding:7px; font-size:11px;" id="log-tab-changelog" data-log-tab="changelog">🆕 Change Log</button>
       </div>
       <div class="modal-body" id="log-modal-body"></div>
     </div>
@@ -728,6 +742,19 @@
         <button class="modal-close" id="welcome-modal-close">✕</button>
       </div>
       <div class="modal-body" id="welcome-modal-body"></div>
+    </div>
+  </div>
+
+  <!-- TIME SKIP REWARD MODAL (purchased/won skips — deliberately separate from Welcome Back,
+       since these were never actually an absence. Supports stacking: buying/watching another
+       skip while this is open adds to the running total instead of replacing it. -->
+  <div id="timeskip-modal" class="modal-overlay" style="display:none;">
+    <div class="modal-card">
+      <div class="modal-header">
+        <div class="modal-title" id="timeskip-modal-title">⏩ Time Skip Reward!</div>
+        <button class="modal-close" id="timeskip-modal-close">✕</button>
+      </div>
+      <div class="modal-body" id="timeskip-modal-body"></div>
     </div>
   </div>
 
@@ -988,7 +1015,55 @@ window.storage = {
 // Semantic version label (MAJOR.MINOR.PATCH), tracking development stages through beta.
 // Displayed in Home -> Settings so testers can confirm which build they're actually running.
 // >>> BUMP THE PATCH NUMBER HERE ON EVERY SHIP, matching the sw.js CACHE_NAME version <<<
-const GAME_VERSION = 'v0.0.39';
+const GAME_VERSION = 'v0.0.54';
+
+// Player-facing changelog, shown in the clipboard/log modal's "Change Log" tab. Most recent
+// entry FIRST. >>> ADD A NEW ENTRY HERE ON EVERY SHIP GOING FORWARD, same routine as bumping
+// GAME_VERSION and sw.js's CACHE_NAME above — this is now a required 3rd step, not optional. <<<
+const GAME_CHANGELOG = [
+  { version:'v0.0.54', date:'2026-07-09', changes:[
+    'Added 2 new roulette prizes: "2 Free Spins" (banked, use anytime) and a low-chance "Nothing" dud',
+    'Roulette spin cost now escalates +2 Teeth per spin taken that day, capping at 50, resetting daily',
+  ]},
+  { version:'v0.0.53', date:'2026-07-09', changes:[
+    'Roulette rewards now scale with progression (level, power, career tier, +1.5%/prestige) — up to 15x at extreme late-game, was flat regardless of progress',
+    'Spin cost kept flat at 10 Teeth — scaling rewards while keeping cost fixed IS the reward for progressing',
+  ]},
+  { version:'v0.0.52', date:'2026-07-09', changes:[
+    'Added a Change Log tab to the clipboard/log popup (far-right tab) — shows recent updates, most recent first',
+  ]},
+  { version:'v0.0.51', date:'2026-07-09', changes:[
+    'Gift system rebalanced — higher-tier gifts are now genuinely the better value (was backwards before)',
+    'Expanded to 12 gift tiers (was 8), added a free "Hang Out" interaction (5min cooldown, no cost)',
+  ]},
+  { version:'v0.0.49 - v0.0.50', date:'2026-07-09', changes:[
+    'Gifts now lock automatically once a companion hits max affection, so cash can\'t be wasted',
+    'Gift pricing now scales with relationship stage (+1.5%/stage, caps ~+12%)',
+  ]},
+  { version:'v0.0.47 - v0.0.48', date:'2026-07-09', changes:[
+    'Membership Tiers recalibrated — "Legend" status used to be reachable in minutes, now a genuine long-term goal',
+    'Completing all daily quests in a day now earns a bonus tenure day (~2x tenure progression if active)',
+    'Added an info popup showing gear/vehicle rarity tiers and their power ranges',
+  ]},
+  { version:'v0.0.44 - v0.0.46', date:'2026-07-09', changes:[
+    'Partners can now send random messages during fights (~every 7-10 min) as a dismissible heart bubble',
+    'Added daily affection decay (-24/day) if a companion goes unattended',
+    'Fixed Time Skip purchases incorrectly showing the "Welcome Back" modal meant for real absences',
+    'Time Skip purchases can now stack — buy another while the reward modal is open instead of closing first',
+  ]},
+  { version:'v0.0.40 - v0.0.43', date:'2026-07-09', changes:[
+    'Added 2 new companion roles (Manager, Physio) — 60 total companions now (12 per role x 5 roles)',
+    'Every companion role now has unique masculine/feminine dialogue (400 lines) instead of one shared script',
+    'Fixed a bug where a gym could get permanently stuck without a Head Coach if the only one left',
+    'Gym poster/banner is now actually visible in-game (previously did nothing when selected)',
+  ]},
+  { version:'v0.0.36 - v0.0.39', date:'2026-07-09', changes:[
+    'Prestige retention now shows an honest preview before committing — actual result can reveal a surprise Iron Will bonus after',
+    'Super Prestige moved to every 50th prestige (was 25), now also grants a one-time +20% retention boost',
+    'Added a real ceiling on retention (15% cap) — flat prestige stat bonus stays uncapped',
+    'Deployed a backend fix for a real scaling bug in leaderboard costs at higher player counts',
+  ]},
+];
 
 /* ---------------------------- STATE ---------------------------- */
 const AVATAR_SETS = {
@@ -1089,6 +1164,7 @@ let state = {
   roulette: {
     cycleStart: 0,       // when the current prize set was rolled; refreshes every few days
     segments: null,      // cached prize list for the current cycle
+    bonusFreeSpins: 0,   // won from the "2 Free Spins" prize — persists until used, doesn't expire daily
   },
   gym: {
     // Each upgrade: level (purchased count) and cost scales with level
@@ -1161,6 +1237,7 @@ let state = {
     powerUpsExpanded: true,   // Career tab Power-Ups list
     cosmeticsExpanded: true,  // Home tab Cosmetic Gear list
     questsExpanded: true,     // League tab Daily Quests list
+    logModalView: 'activity', // 'activity' | 'changelog' — which tab the clipboard modal shows
     weeklyScoreExpanded: true,  // League tab "Gym Wars Score — This Week" list
     gymWarsExpanded: true,      // League tab full Gym Wars section (Top Gyms/Growth/Players)
     teethSpendExpanded: true,   // League tab Teeth Spent Leaderboard
@@ -1203,6 +1280,8 @@ let state = {
     leagueId: null,       // which of the 10 LEAGUES this player has joined, if any
     contributedXp: 0,     // lifetime XP earned while a member of the CURRENT league (resets on switch)
     joinedAt: 0,
+    bonusTenureDays: 0,   // extra tenure days earned by completing ALL daily quests — see claimQuest()
+    bonusTenureAwardedDateKey: '', // prevents double-awarding the bonus day if something re-checks the same day
     weekKey: '',           // local week bucket (see getWeekKey) — resets weeklyXp when it changes
     weeklyXp: 0,           // XP earned toward the CURRENT league this week — basis for the weekly leaderboard
     weeklyWins: 0,         // wins earned THIS WEEK, immune to prestige resets — see addWeeklyWins()
@@ -1231,6 +1310,8 @@ let state = {
     questsClaimed: [],       // quest ids already claimed today
     spendUSD: 0,             // real-money $ spent today across all IAP paths — see DAILY_SPEND_CAP_USD
     freeSpinsUsedToday: 0,   // roulette spins granted via watching an ad — see FREE_AD_SPINS_PER_DAY
+    rouletteSpinsToday: 0,   // ALL spins today (paid, ad, or bonus) — drives the escalating Teeth cost, see rouletteSpinCost()
+    questResetUsedToday: false, // whether today's paid quest reset has already been used
   },
 };
 
@@ -2343,21 +2424,15 @@ function idleCapMs(){
   return Math.min(IDLE_CAP_MAX_MS, IDLE_CAP_BASE_MS + state.prestige.count * IDLE_CAP_PER_PRESTIGE_MS);
 }
 
-function processOfflineProgress(){
-  const now = Date.now();
-  const last = state.meta.lastTick || now;
-  let deltaMs = now - last;
-  if(deltaMs < 2000) { state.meta.lastTick = now; return; }
-
-  // Cap offline simulation to the idle window (2h base, +30s per prestige)
-  const cappedMs = Math.min(deltaMs, idleCapMs());
-  const wasAway = cappedMs > 30000;
-
-  // Simulate in coarse steps for performance (10s steps). Any banked 2x-speed time (or a
-  // permanently-owned "Diamond in the Rough" boost) doubles the simulated progress for the
-  // portion of real elapsed time it covers.
+// Pure simulation core — ticks the game forward by exactly `ms`, returns what was earned.
+// Doesn't touch state.meta.lastTick and doesn't show any modal/toast — callers decide how to
+// present the result. Used by BOTH genuine offline-absence detection (processOfflineProgress)
+// AND instant purchased/won time skips (runInstantTimeSkip) — previously those skips reused
+// processOfflineProgress() via a "backdate lastTick then call it" hack, which incorrectly
+// triggered the "Welcome Back!" modal for something that was never actually an absence.
+function runSimulation(ms){
   const STEP = 10000;
-  let remaining = cappedMs;
+  let remaining = ms;
   const startCash = state.economy.cash;
   const startWins = state.fighter.wins;
   const startLosses = state.fighter.losses;
@@ -2377,31 +2452,107 @@ function processOfflineProgress(){
   }
   if(!sb.noAdsOwned) sb.bankedMs = Math.max(0, boostRealMsLeft);
 
+  return {
+    cashEarned: state.economy.cash - startCash,
+    winsEarned: state.fighter.wins - startWins,
+    lossesEarned: state.fighter.losses - startLosses,
+    levelsEarned: state.fighter.level - startLevel,
+    tierChanged: state.fighter.tier !== startTier,
+    newTier: state.fighter.tier,
+    newlyPrestigeEligible: !wasPrestigeEligible && isPrestigeEligible(),
+  };
+}
+
+function processOfflineProgress(){
+  const now = Date.now();
+  const last = state.meta.lastTick || now;
+  let deltaMs = now - last;
+  if(deltaMs < 2000) { state.meta.lastTick = now; return; }
+
+  // Cap offline simulation to the idle window (2h base, +30s per prestige)
+  const cappedMs = Math.min(deltaMs, idleCapMs());
+  const wasAway = cappedMs > 30000;
+
+  const result = runSimulation(cappedMs);
   state.meta.lastTick = now;
 
   if(wasAway){
-    const cashEarned = state.economy.cash - startCash;
-    const winsEarned = state.fighter.wins - startWins;
-    const lossesEarned = state.fighter.losses - startLosses;
-    const levelsEarned = state.fighter.level - startLevel;
     const mins = Math.round(cappedMs/60000);
-    pushLog(`Away ${mins}m: earned $${fmtNum(cashEarned)}, ${winsEarned} wins${levelsEarned>0 ? `, ${levelsEarned} level ups` : ''}`, 'level');
+    pushLog(`Away ${mins}m: earned $${fmtNum(result.cashEarned)}, ${result.winsEarned} wins${result.levelsEarned>0 ? `, ${result.levelsEarned} level ups` : ''}`, 'level');
 
     // Longer absences get a proper summary modal (more like a mobile game's "welcome back"
     // screen); short pauses (quick tab-switch, screen lock for a minute) stay a lightweight
     // toast so it doesn't feel intrusive for something barely noticeable.
     if(cappedMs > 5*60*1000){
       showWelcomeBackModal({
-        mins, cashEarned, winsEarned, lossesEarned, levelsEarned,
-        tierChanged: state.fighter.tier !== startTier,
-        newTier: state.fighter.tier,
-        newlyPrestigeEligible: !wasPrestigeEligible && isPrestigeEligible(),
+        mins, cashEarned: result.cashEarned, winsEarned: result.winsEarned,
+        lossesEarned: result.lossesEarned, levelsEarned: result.levelsEarned,
+        tierChanged: result.tierChanged, newTier: result.newTier,
+        newlyPrestigeEligible: result.newlyPrestigeEligible,
         wasCapped: deltaMs > idleCapMs(),
       });
     } else {
-      showToast(`Welcome back! +$${fmtNum(cashEarned)}, +${winsEarned} wins while away`);
+      showToast(`Welcome back! +$${fmtNum(result.cashEarned)}, +${result.winsEarned} wins while away`);
     }
   }
+}
+
+// Instant purchased/won time skip — a completely SEPARATE notification path from the Welcome
+// Back modal above, since this was never actually an absence. Runs the same simulation core;
+// callers show showTimeSkipRewardModal() themselves with their own context (method/source label).
+function runInstantTimeSkip(minutes, sourceLabel){
+  const result = runSimulation(minutes*60000);
+  pushLog(`⏩ Time Skip (${sourceLabel}, ${minutes}m): earned $${fmtNum(result.cashEarned)}, ${result.winsEarned} wins${result.levelsEarned>0 ? `, ${result.levelsEarned} level ups` : ''}`, 'level');
+  return result;
+}
+
+// Shows (or STACKS onto, if already open) the Time Skip Reward modal. `data` needs: minutes,
+// sourceLabel, cashEarned, winsEarned, lossesEarned, levelsEarned, and optionally `method` (only
+// present for ad-skip-sourced skips, which are directly repeatable — roulette-won skips omit it
+// and just get a "Done" button, since there's no on-demand way to "skip again" from a prize).
+function showTimeSkipRewardModal(data){
+  if(!state.ui.timeSkipStack) state.ui.timeSkipStack = [];
+  state.ui.timeSkipStack.push(data);
+  const stack = state.ui.timeSkipStack;
+  const totalCash = stack.reduce((s,r) => s+r.cashEarned, 0);
+  const totalWins = stack.reduce((s,r) => s+r.winsEarned, 0);
+  const totalLevels = stack.reduce((s,r) => s+r.levelsEarned, 0);
+  const totalMinutes = stack.reduce((s,r) => s+r.minutes, 0);
+  const lastMethod = data.method;
+
+  document.getElementById('timeskip-modal-title').textContent = stack.length > 1 ? `⏩ ${stack.length} Time Skips Stacked!` : '⏩ Time Skip Reward!';
+
+  let againBtnHtml = '';
+  if(lastMethod === 'teeth'){
+    const canAfford = state.economy.teeth >= 5;
+    againBtnHtml = `<button class="btn btn-gold btn-block" style="margin-top:12px;" data-timeskip-again="teeth" ${canAfford?'':'disabled'}>⏩ Skip Again — 🦷5</button>`;
+  } else if(lastMethod === 'money'){
+    againBtnHtml = `<button class="btn btn-gold btn-block" style="margin-top:12px;" data-timeskip-again="money">⏩ Skip Again — $10</button>`;
+  } else if(lastMethod === 'ad'){
+    const onCooldown = (Date.now() - state.adSkip.lastUsedAt) < state.adSkip.cooldownMs;
+    againBtnHtml = `<button class="btn ${onCooldown?'btn-ghost':'btn-gold'} btn-block" style="margin-top:12px;" data-timeskip-again="ad" ${onCooldown?'disabled':''}>${onCooldown?'⏩ Ad Skip on Cooldown':'⏩ Watch Another Ad'}</button>`;
+  }
+
+  document.getElementById('timeskip-modal-body').innerHTML = `
+    <div style="text-align:center; margin-bottom:10px; font-size:12px; color:var(--text-muted);">
+      ${totalMinutes} total minute${totalMinutes===1?'':'s'} skipped${stack.length>1?` across ${stack.length} skips`:''}
+    </div>
+    <div style="display:flex; justify-content:space-between; align-items:center; padding:8px 0; border-bottom:1px solid var(--border-soft);">
+      <span style="font-size:13px;">💰 Cash earned</span><span style="font-weight:700; color:var(--champ-teal);">+$${fmtNum(totalCash)}</span>
+    </div>
+    <div style="display:flex; justify-content:space-between; align-items:center; padding:8px 0; border-bottom:1px solid var(--border-soft);">
+      <span style="font-size:13px;">🥊 Wins</span><span style="font-weight:700;">+${totalWins}</span>
+    </div>
+    ${totalLevels>0 ? `<div style="display:flex; justify-content:space-between; align-items:center; padding:8px 0; border-bottom:1px solid var(--border-soft);"><span style="font-size:13px;">⭐ Levels gained</span><span style="font-weight:700;">+${totalLevels}</span></div>` : ''}
+    ${againBtnHtml}
+    <button class="btn btn-ghost btn-block" style="margin-top:8px;" data-timeskip-done>Done</button>
+  `;
+  document.getElementById('timeskip-modal').style.display = 'flex';
+}
+
+function closeTimeSkipModal(){
+  state.ui.timeSkipStack = [];
+  document.getElementById('timeskip-modal').style.display = 'none';
 }
 
 function showWelcomeBackModal(data){
@@ -2693,6 +2844,18 @@ function renderFighterTab(){
     <div class="fight-scene" data-fight-click>
       <svg class="venue-bg" viewBox="0 0 400 220" preserveAspectRatio="xMidYMax slice">${renderVenueBackground(venue)}</svg>
       ${renderPosterDecor(f.appearance.poster)}
+      ${(() => {
+        if(!state.ui.partnerMessage) return '';
+        if(Date.now() - state.ui.partnerMessage.shownAt > 6000){ state.ui.partnerMessage = null; return ''; }
+        const def = COMPANION_DEFS[state.ui.partnerMessage.partnerId];
+        if(!def) return '';
+        return `
+          <div class="partner-message-bubble" data-dismiss-partner-msg>
+            <span class="heart-icon">❤️</span>
+            <span class="msg-text"><span class="msg-name">${escapeHtml(def.name.split(' ')[0])}:</span> "${escapeHtml(state.ui.partnerMessage.text)}"</span>
+          </div>
+        `;
+      })()}
       ${sceneInner}
       ${(bout.phase === 'exchange' || bout.phase === 'resolved') ? '' : `<div class="venue-label">🏆 ${f.tier} Ring (${venue}-sided)</div>`}
       ${bout.phase === 'none' ? `<button class="roulette-fab" data-open-roulette title="Roulette">🎰</button>` : ''}
@@ -2788,7 +2951,7 @@ function renderFighterTab(){
     </div>
 
     <div class="panel-title" data-toggle-section="gearExpanded" style="cursor:pointer; display:flex; justify-content:space-between; align-items:center;">
-      <span>Gear</span><span style="font-size:12px;">${state.ui.gearExpanded ? '▾' : '▸'}</span>
+      <span>Gear <span data-open-tier-legend style="cursor:pointer; opacity:0.7; font-size:12px;" title="Rarity tier reference">ℹ️</span></span><span style="font-size:12px;">${state.ui.gearExpanded ? '▾' : '▸'}</span>
     </div>
     ${state.ui.gearExpanded ? `
     <div class="gear-grid">
@@ -3581,8 +3744,43 @@ const SHOP_COSMETICS = [
    ROULETTE WHEEL — spends Teeth for a random prize. The 8-segment prize pool
    re-rolls every few days so there's always something new to chase.
    ======================================================================== */
-const ROULETTE_SPIN_COST = 10;         // Teeth per spin
+const ROULETTE_SPIN_COST = 10;         // Base Teeth cost — see rouletteSpinCost() for the actual (escalating) cost
+const ROULETTE_SPIN_COST_STEP = 2;     // +2 Teeth per spin already taken today
+const ROULETTE_SPIN_COST_MAX = 50;     // hard ceiling — resets with the daily counter, not a permanent cap
 const ROULETTE_REFRESH_MS = 3*24*60*60*1000; // prize set refreshes every 3 days
+
+// Escalating spin cost — +2 Teeth per spin already taken TODAY (any spin counts: paid, ad, or
+// bonus), capped at 50, resetting at the same daily boundary as everything else (ensureDailyReset).
+// So spin 1 costs 10, spin 2 costs 12, spin 3 costs 14... reaching the 50 cap at spin 21, then
+// flat 50 for any further spins that day.
+function rouletteSpinCost(){
+  ensureDailyReset();
+  return Math.min(ROULETTE_SPIN_COST_MAX, ROULETTE_SPIN_COST + (state.daily.rouletteSpinsToday||0) * ROULETTE_SPIN_COST_STEP);
+}
+
+// Scales roulette rewards with actual progression (level, power, career tier, prestige count) so
+// prizes stay meaningful late-game instead of the flat $150-500 cash / 5-15 Teeth that felt
+// increasingly trivial once weekly XP and cash economies were already in the hundreds of
+// thousands. Level/power use SQRT growth specifically to avoid runaway scaling at extreme
+// prestige counts (where totalPower() can reach tens of thousands from the flat +10/stat/prestige
+// bonus alone) — verified this stays sane end to end: ~1.3x for a brand new fighter, ~5.7x at
+// first Hall of Fame, capping at 15x for very extreme late-game accounts, never below 1x.
+//
+// Spin cost DOES now escalate per spin today (see rouletteSpinCost() above) — the earlier version
+// of this comment argued against that, but the escalating cost is specifically there to prevent
+// spin-spamming the now-much-more-valuable scaled rewards, which is a different concern than
+// "should the base cost go up as YOU progress" (it still doesn't — cost only rises within a
+// single day's repeated spins, then resets).
+function rouletteScalingMultiplier(){
+  const tier = currentTier();
+  const tierIndex = TIERS.findIndex(t => t.name === tier.name) + 1; // 1-10
+  const levelFactor = 1 + Math.sqrt(state.fighter.level||1) / 15;
+  const powerFactor = 1 + Math.sqrt(totalPower()) / 60;
+  const tierFactor = 1 + tierIndex / 12;
+  const prestigeBonus = (state.prestige.count||0) * 0.015; // additive, +1.5%/prestige, per the request
+  const raw = levelFactor * powerFactor * tierFactor + prestigeBonus;
+  return Math.min(15, Math.max(1, raw));
+}
 
 // Finds the N stats currently lagging furthest behind the rest (by effective, gear-inclusive
 // value) — used by the roulette wheel's "Targeted Training" prize so it reinforces whatever a
@@ -3593,13 +3791,15 @@ function findWeakestStats(count){
 }
 
 const ROULETTE_PRIZE_POOL = [
-  { type:'cash',      icon:'💰', weight:24, label:()=>{ const amt = 150+Math.floor(Math.random()*350); return `$${amt} Cash`; } },
-  { type:'teeth',     icon:'🦷', weight:20, label:()=>{ const amt = 5+Math.floor(Math.random()*11); return `${amt} Teeth`; } },
+  { type:'cash',      icon:'💰', weight:24, label:()=>{ const mult = rouletteScalingMultiplier(); const amt = Math.round((150+Math.floor(Math.random()*350))*mult); return `$${amt} Cash`; } },
+  { type:'teeth',     icon:'🦷', weight:20, label:()=>{ const mult = rouletteScalingMultiplier(); const amt = Math.round((5+Math.floor(Math.random()*11))*mult); return `${amt} Teeth`; } },
   { type:'timeSkip',  icon:'⏩', weight:18, label:()=>{ const mins = [10,20,30][Math.floor(Math.random()*3)]; return `${mins}m Time Skip`; } },
   { type:'statBoost', icon:'📈', weight:14, label:()=>{ const n = 3+Math.floor(Math.random()*2); return `Targeted Training (${n} stats)`; } },
   { type:'freeWins',  icon:'🏆', weight:12, label:()=>'10 Free Wins' },
   { type:'gear',      icon:'🎁', weight:12, label:()=>'Specialty Gear' },
-  { type:'jackpot',   icon:'💎', weight:4,  label:()=>'JACKPOT: 40 Teeth' },
+  { type:'twoSpins',  icon:'🔁', weight:8,  label:()=>'2 Free Spins' },
+  { type:'jackpot',   icon:'💎', weight:4,  label:()=>{ const mult = rouletteScalingMultiplier(); const amt = Math.round(40*mult); return `JACKPOT: ${amt} Teeth`; } },
+  { type:'nothing',   icon:'💨', weight:5,  label:()=>'Nothing — Better Luck Next Time' },
 ];
 
 // Rolls (or returns the cached) prize set for the current cycle. Re-rolled amounts/order every
@@ -3648,14 +3848,14 @@ function applyRoulettePrize(segment){
       return `+${amt} 🦷 Teeth added`;
     }
     case 'jackpot': {
-      state.economy.teeth += 40;
-      return `💎 JACKPOT! +40 🦷 Teeth`;
+      const amt = parseInt(segment.label.replace(/\D/g,''));
+      state.economy.teeth += amt;
+      return `💎 JACKPOT! +${amt} 🦷 Teeth`;
     }
     case 'timeSkip': {
       const mins = parseInt(segment.label);
-      const now = Date.now();
-      state.meta.lastTick = now - mins*60*1000;
-      processOfflineProgress();
+      const result = runInstantTimeSkip(mins, 'Roulette');
+      showTimeSkipRewardModal({ minutes:mins, method:null, ...result }); // no method = roulette win, no "skip again" button
       return `Skipped ahead ${mins} minutes of training & fighting`;
     }
     case 'freeWins': {
@@ -3672,7 +3872,7 @@ function applyRoulettePrize(segment){
     case 'statBoost': {
       const match = segment.label.match(/\((\d+)/);
       const n = match ? parseInt(match[1]) : 3;
-      const pointsPerStat = 5;
+      const pointsPerStat = Math.round(5 * rouletteScalingMultiplier());
       const targets = findWeakestStats(n);
       targets.forEach(k => { state.fighter.stats[k] += pointsPerStat; });
       const names = targets.map(k => k.charAt(0).toUpperCase()+k.slice(1)).join(', ');
@@ -3685,6 +3885,13 @@ function applyRoulettePrize(segment){
       const result = autoResolveItem(item, false);
       return `${itemDisplayName(item)}: ${result.equipped ? 'Equipped!' : `Sold for $${result.soldValue}`}`;
     }
+    case 'twoSpins': {
+      state.roulette.bonusFreeSpins = (state.roulette.bonusFreeSpins||0) + 2;
+      return `+2 free spins banked — use them anytime, they don't expire`;
+    }
+    case 'nothing': {
+      return `Nothing this time — better luck on the next spin`;
+    }
   }
   return '';
 }
@@ -3692,8 +3899,17 @@ function applyRoulettePrize(segment){
 const FREE_AD_SPINS_PER_DAY = 2;
 
 function spinRoulette(){
-  if(state.economy.teeth < ROULETTE_SPIN_COST){ showToast('Not enough Teeth'); return; }
-  spendTeeth(ROULETTE_SPIN_COST);
+  // Bonus free spins (won from the "2 Free Spins" prize) get used first, automatically, before
+  // any Teeth are touched — no separate button needed, the main Spin button just goes free.
+  if((state.roulette.bonusFreeSpins||0) > 0){
+    state.roulette.bonusFreeSpins--;
+    pushLog(`🔁 Used a bonus free spin (${state.roulette.bonusFreeSpins} left)`, 'level');
+    runRouletteSpin();
+    return;
+  }
+  const cost = rouletteSpinCost();
+  if(state.economy.teeth < cost){ showToast('Not enough Teeth'); return; }
+  spendTeeth(cost);
   runRouletteSpin();
 }
 
@@ -3713,6 +3929,8 @@ function watchAdForFreeSpin(){
 // Shared by both entry points above — handles the actual wheel animation, prize selection, and
 // reveal. Cost/limit checks happen in the caller BEFORE this runs, not in here.
 function runRouletteSpin(){
+  ensureDailyReset();
+  state.daily.rouletteSpinsToday = (state.daily.rouletteSpinsToday||0) + 1; // counts EVERY spin (paid/ad/bonus) toward the next paid spin's escalating cost
   const segments = getRouletteSegments();
   const winIndex = pickRouletteSegmentIndex(segments);
   const segment = segments[winIndex];
@@ -3761,7 +3979,9 @@ function showRouletteResult(segment, resultText){
 function renderShopRoulette(){
   const segments = getRouletteSegments();
   const segAngle = 360 / segments.length;
-  const canSpin = state.economy.teeth >= ROULETTE_SPIN_COST;
+  const spinCost = rouletteSpinCost();
+  const bonusSpins = state.roulette.bonusFreeSpins||0;
+  const canSpin = bonusSpins > 0 || state.economy.teeth >= spinCost;
   const refreshMs = rouletteTimeUntilRefresh();
   const refreshHrs = Math.ceil(refreshMs / 3600000);
   const wheelSlices = segments.map((s,i) => {
@@ -3772,7 +3992,8 @@ function renderShopRoulette(){
   return `
     <div class="panel-title">Prize Wheel</div>
     <div style="font-size:11px; color:var(--text-muted); margin-bottom:10px;">
-      ${ROULETTE_SPIN_COST} 🦷 per spin. New prize set in ${refreshHrs}h.
+      ${ROULETTE_SPIN_COST} 🦷 base cost, +${ROULETTE_SPIN_COST_STEP} per spin already taken today (caps at ${ROULETTE_SPIN_COST_MAX} 🦷, resets daily). New prize set in ${refreshHrs}h.
+      ${bonusSpins > 0 ? `<br><span style="color:var(--champ-teal);">🔁 ${bonusSpins} bonus free spin${bonusSpins===1?'':'s'} banked — used automatically before Teeth.</span>` : ''}
     </div>
     <div class="roulette-wrap">
       <div class="roulette-pointer">▼</div>
@@ -3784,7 +4005,7 @@ function renderShopRoulette(){
       </div>
     </div>
     <button class="btn btn-gold btn-block" style="margin-top:14px;" data-spin-roulette ${canSpin?'':'disabled'}>
-      ${canSpin ? `🎡 SPIN — 🦷 ${ROULETTE_SPIN_COST}` : 'Not Enough Teeth'}
+      ${bonusSpins > 0 ? `🎡 SPIN — FREE (bonus spin)` : (canSpin ? `🎡 SPIN — 🦷 ${spinCost}` : 'Not Enough Teeth')}
     </button>
     ${(() => {
       const spinsLeft = FREE_AD_SPINS_PER_DAY - (state.daily.freeSpinsUsedToday||0);
@@ -4186,10 +4407,9 @@ function useAdSkip(method){
 function executeAdSkip(method, now){
   if(method === 'teeth') spendTeeth(5);
   if(method === 'ad') state.adSkip.lastUsedAt = now;
-  // Simulate 10 minutes of idle progress instantly via the same offline-catchup math.
-  state.meta.lastTick = now - 10*60*1000;
-  processOfflineProgress();
-  pushLog(`⏩ Skipped ahead 10 minutes (${method === 'ad' ? 'watched ad' : method === 'teeth' ? 'spent 5 Teeth' : 'real-money skip'})`, 'level');
+  const sourceLabel = method === 'ad' ? 'watched ad' : method === 'teeth' ? 'spent 5 Teeth' : 'real-money skip';
+  const result = runInstantTimeSkip(10, sourceLabel);
+  showTimeSkipRewardModal({ minutes:10, method, ...result });
   render();
   renderShopBody();
   scheduleSave();
@@ -4483,13 +4703,19 @@ function gymTag(leagueId){
 
 // Membership tier thresholds are lifetime XP contributed while a member of your CURRENT league
 // (resets if you switch leagues). Bonus stacks with Home Perks / Power-Ups on cash & XP gain.
+// Recalibrated for the long-term XP economy — contributedXp shares the same pool as weeklyXp,
+// which real player data showed can exceed 1.3M in a single very active day. The old thresholds
+// (topping out at 3,200) meant "Legend" status was reached in minutes for any active player,
+// nowhere close to the genuine long-term achievement it's meant to be. New ceiling (1,000,000)
+// is calibrated against that same real-world scale — reachable in days for very active players,
+// weeks to months for moderate ones, matching how Gym Level and other systems were paced.
 const MEMBERSHIP_TIERS = [
-  { name:'Rookie',  minXp:0,    bonusPct:0  },
-  { name:'Member',  minXp:150,  bonusPct:2  },
-  { name:'Regular', minXp:400,  bonusPct:4  },
-  { name:'Veteran', minXp:900,  bonusPct:6  },
-  { name:'Captain', minXp:1800, bonusPct:9  },
-  { name:'Legend',  minXp:3200, bonusPct:12 },
+  { name:'Rookie',  minXp:0,       bonusPct:0  },
+  { name:'Member',  minXp:5000,    bonusPct:2  },
+  { name:'Regular', minXp:25000,   bonusPct:4  },
+  { name:'Veteran', minXp:100000,  bonusPct:6  },
+  { name:'Captain', minXp:350000,  bonusPct:9  },
+  { name:'Legend',  minXp:1000000, bonusPct:12 },
 ];
 
 function currentMembershipTier(){
@@ -4690,7 +4916,8 @@ const TENURE_TIERS = [
 ];
 function daysInGym(){
   if(!state.social.leagueId || !state.social.joinedAt) return 0;
-  return Math.floor((Date.now() - state.social.joinedAt) / 86400000);
+  const realDays = Math.floor((Date.now() - state.social.joinedAt) / 86400000);
+  return realDays + (state.social.bonusTenureDays||0);
 }
 function currentTenureTier(){
   const days = daysInGym();
@@ -4772,6 +4999,15 @@ const DAILY_QUEST_TIERS = [
   { tier:10, id:'tier10', label:'Win 70 fights',             type:'winsToday',  goal:70,   rewardCash:0,   rewardTeeth:8, gymXp:160 },
 ];
 
+// Icon/label per underlying counter type, used to render the 4 stacked quest chains (grouping
+// the 10 tiers by shared progress value) instead of 10 separate full-width cards.
+const QUEST_CHAIN_META = {
+  winsToday:  { icon:'🏆', label:'Wins Today' },
+  trainToday: { icon:'🏋️', label:'Training Today' },
+  cashToday:  { icon:'💰', label:'Cash Earned Today' },
+  critsToday: { icon:'💥', label:'Knockouts Today' },
+};
+
 function getDateKey(d = new Date()){
   return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`;
 }
@@ -4816,6 +5052,7 @@ function addWeeklyWins(n){
 // their local dateKey already matched today's date before the update went live.
 const QUEST_SCHEME_VERSION = 2;
 
+const AFFECTION_DAILY_DECAY = 24;
 function ensureDailyReset(){
   const today = getDateKey();
   if(state.daily.dateKey === today && state.daily.questSchemeVersion === QUEST_SCHEME_VERSION) return;
@@ -4835,6 +5072,26 @@ function ensureDailyReset(){
     state.daily.questsClaimed = [];
     state.daily.spendUSD = 0;
     state.daily.freeSpinsUsedToday = 0;
+    state.daily.rouletteSpinsToday = 0;
+    state.daily.questResetUsedToday = false;
+    // Daily affection decay — relationships need occasional upkeep, or they quietly drift. 24/day
+    // is easily offset by ~6 chats or ~3 spars (roughly 2-3 minutes of actual engagement spread
+    // across the day), so this is a "check in occasionally" nudge, not a punishing treadmill.
+    // Deliberately does NOT revoke Partner status once earned, even if affection decays below the
+    // original Dating threshold — it lowers message frequency and Corner Bonus % (both scale off
+    // current affection), which is real stakes without a nasty "they broke up with you" surprise.
+    if(!isFirstEver && state.companions){
+      let decayedCount = 0;
+      Object.values(state.companions).forEach(c => {
+        if(c.affection > 0){
+          c.affection = Math.max(0, c.affection - AFFECTION_DAILY_DECAY);
+          decayedCount++;
+        }
+      });
+      if(decayedCount > 0){
+        pushLog(`💔 ${decayedCount} companion relationship${decayedCount===1?'':'s'} decayed -${AFFECTION_DAILY_DECAY} affection from a day away — check in to keep things warm.`, 'level');
+      }
+    }
   }
   if(!isFirstEver && !isSchemeChangeOnly){
     fireLocalNotification('🎯 New Daily Quests!', 'Fresh quests are up in the League tab.');
@@ -4845,6 +5102,37 @@ function questDef(id){ return DAILY_QUEST_TIERS.find(q => q.id === id); }
 
 function questProgressValue(quest){
   return state.daily[quest.type] || 0;
+}
+
+const DAILY_QUEST_RESET_COST_TEETH = 15;
+// Fully resets today's quest progress (all 4 underlying counters, not just claim status) so the
+// whole 10-tier ladder can be earned again from scratch — a genuine second pass at the day's
+// rewards, not just re-claiming what you already qualified for. Limited to once per real day.
+function resetDailyQuestsForFee(){
+  ensureDailyReset();
+  if(state.daily.questResetUsedToday){ showToast('Already used today\'s reset — back tomorrow!'); return; }
+  if(state.economy.teeth < DAILY_QUEST_RESET_COST_TEETH){ showToast('Not enough Teeth'); return; }
+  spendTeeth(DAILY_QUEST_RESET_COST_TEETH);
+  state.daily.winsToday = 0;
+  state.daily.trainToday = 0;
+  state.daily.cashToday = 0;
+  state.daily.critsToday = 0;
+  state.daily.questProgress = {};
+  state.daily.questsClaimed = [];
+  state.daily.questResetUsedToday = true;
+  pushLog(`🔄 Reset today's quests for 🦷${DAILY_QUEST_RESET_COST_TEETH} — full ladder available again`, 'level');
+  showToast('Daily quests reset — go earn them again!');
+  render();
+  scheduleSave();
+}
+
+function renderDailyQuestResetButton(){
+  const used = state.daily.questResetUsedToday;
+  return `
+    <button class="btn btn-ghost btn-block" style="margin-top:8px; border-color:var(--belt-gold); color:${used?'var(--text-muted)':'var(--belt-gold)'};" data-reset-quests ${used || state.economy.teeth<DAILY_QUEST_RESET_COST_TEETH ? 'disabled' : ''}>
+      ${used ? '🔄 Quest Reset Used Today' : `🔄 Reset All Quests — 🦷${DAILY_QUEST_RESET_COST_TEETH} (once/day)`}
+    </button>
+  `;
 }
 
 function claimQuest(id){
@@ -4866,6 +5154,19 @@ function claimQuest(id){
   }
   pushLog(`✅ Tier ${quest.tier} complete: ${quest.label} (${rewardParts.join(' ')})`, 'level');
   showToast(`Tier ${quest.tier} claimed! ${rewardParts.join(' ')}`);
+
+  // Completing ALL 10 daily quests in one day earns a bonus tenure day — an active, fully-engaged
+  // member effectively doubles their tenure progression versus someone just passively sitting in
+  // the gym. Guarded by dateKey so this can only ever fire once per real day, even if something
+  // re-checks after the fact.
+  if(state.social.leagueId && state.daily.questsClaimed.length === state.daily.questIds.length
+     && state.social.bonusTenureAwardedDateKey !== state.daily.dateKey){
+    state.social.bonusTenureDays = (state.social.bonusTenureDays||0) + 1;
+    state.social.bonusTenureAwardedDateKey = state.daily.dateKey;
+    pushLog(`🌟 All daily quests complete! +1 bonus tenure day (${state.social.bonusTenureDays} bonus day${state.social.bonusTenureDays===1?'':'s'} total) — active members climb tenure roughly 2x faster.`, 'level');
+    showToast(`🌟 Full quest ladder complete! +1 bonus tenure day.`);
+  }
+
   render();
   scheduleSave();
 }
@@ -4967,7 +5268,26 @@ async function removeFromRoster(leagueId, playerId){
     const res = await window.storage.get(key, true);
     let arr = res && res.value ? JSON.parse(res.value) : [];
     if(!Array.isArray(arr)) arr = [];
+    const departing = arr.find(m => m.playerId === playerId);
     arr = arr.filter(m => m.playerId !== playerId);
+
+    // Auto-succession: if the departing member was the gym's only Head Coach, promote whoever's
+    // been a member the LONGEST (earliest joinedAt) — same tenure-based rule already used by the
+    // inactivity-pruning path in refreshLeagueRosterDetail, kept consistent rather than
+    // introducing a second, different succession rule for what's conceptually the same event.
+    // Without this, promoteToHeadCoach() would have no one left able to use it — it requires the
+    // ACTOR to already be a Head Coach, which permanently locks a headless gym out of ever
+    // getting a new one on its own.
+    if(departing && departing.role === 'head_coach' && arr.length > 0){
+      const stillHasHeadCoach = arr.some(m => m.role === 'head_coach');
+      if(!stillHasHeadCoach){
+        arr.sort((a,b) => (a.joinedAt||0) - (b.joinedAt||0));
+        const successor = arr[0];
+        successor.role = 'head_coach';
+        successor.isPrimaryHeadCoach = true; // inherited leadership counts as primary going forward
+      }
+    }
+
     await window.storage.set(key, JSON.stringify(arr), true);
   } catch(e){ /* key may not exist yet — nothing to remove */ }
 }
@@ -4995,6 +5315,8 @@ async function leaveLeague(){
   state.social.weeklyXp = 0;
   state.social.weeklyWins = 0;
   state.social.joinedAt = null;
+  state.social.bonusTenureDays = 0;
+  state.social.bonusTenureAwardedDateKey = '';
   state.social.role = null;
   state.social.gymXpContributed = 0;
   state.social.knownGymLevel = 1;
@@ -5044,6 +5366,8 @@ async function joinLeague(leagueId){
     state.social.weekKey = getWeekKey();
     state.social.weeklyXp = 0;
     state.social.joinedAt = Date.now();
+    state.social.bonusTenureDays = 0;
+    state.social.bonusTenureAwardedDateKey = '';
     state.social.role = role;
     state.social.gymXpContributed = 0;
     state.social.knownGymLevel = 1;
@@ -5692,6 +6016,25 @@ async function setMemberRole(targetPlayerId, newRole){
 // name, gym/corner percentage bonuses, and the flat prestige bonus, ending at the same total
 // shown on Tale of the Tape (computeStatBreakdown traces the identical formula effectiveStats
 // uses, so this can never drift out of sync with the real number).
+// Shared by both Gear and Garage — they use the exact same RARITY_TIERS system, so one
+// reference legend covers both rather than needing two near-identical modals.
+function openTierLegend(){
+  document.getElementById('stat-detail-modal-title').textContent = 'Rarity Tier Reference';
+  document.getElementById('stat-detail-modal-body').innerHTML = `
+    <div style="font-size:11px; color:var(--text-muted); margin-bottom:10px;">
+      Applies to both Gear and Vehicles — same 10 tiers, same power ranges either way. Actual
+      stat points awarded are randomized within each tier's range when an item drops.
+    </div>
+    ${RARITY_TIERS.map(t => `
+      <div style="display:flex; justify-content:space-between; align-items:center; padding:7px 0; border-bottom:1px solid var(--border-soft);">
+        <span style="font-weight:700; color:${t.color};">${t.name}</span>
+        <span style="font-size:12px; color:var(--text-muted);">${t.statPointsMin}–${t.statPointsMax} power</span>
+      </div>
+    `).join('')}
+  `;
+  document.getElementById('stat-detail-modal').style.display = 'flex';
+}
+
 function openStatDetail(key){
   const steps = computeStatBreakdown(key);
   const total = steps[steps.length-1].running;
@@ -5994,33 +6337,55 @@ function renderLeagueTab(){
   });
   const questsHtml = `
     ${renderCollapsibleHeader('Daily Quests <span style="color:var(--text-muted); font-size:11px; text-transform:none; letter-spacing:0;">(10-tier ladder, resets daily, same for everyone)</span>', 'questsExpanded', anyQuestClaimable)}
-    ${state.ui.questsExpanded ? state.daily.questIds.map(id => {
-      const quest = questDef(id);
-      if(!quest) return '';
-      const progress = questProgressValue(quest);
-      const pct = clamp((progress/quest.goal)*100, 0, 100);
-      const done = progress >= quest.goal;
-      const claimed = state.daily.questsClaimed.includes(id);
-      const rewardParts = [];
-      if(quest.rewardCash) rewardParts.push(`$${quest.rewardCash}`);
-      if(quest.rewardTeeth) rewardParts.push(`🦷${quest.rewardTeeth}`);
-      rewardParts.push(`+${quest.gymXp} Gym XP`);
-      return `
-        <div class="card" style="${claimed?'opacity:0.55;':''}">
-          <div style="display:flex; justify-content:space-between; align-items:center;">
-            <div style="font-size:13px; font-weight:600;"><span style="color:var(--belt-gold);">Tier ${quest.tier}</span> — ${quest.label}</div>
-            <div style="font-size:11px; color:var(--belt-gold); flex-shrink:0; margin-left:8px; text-align:right;">${rewardParts.join(' + ')}</div>
+    ${state.ui.questsExpanded ? (() => {
+      // Group by underlying counter type — tiers sharing a type read the SAME progress value
+      // (e.g. all 4 "wins" tiers watch state.daily.winsToday), so they're independently
+      // claimable checkpoints along ONE shared value, not sequential gates. Stacking them into
+      // one card per chain (instead of one full card per tier) cuts 10 cards down to 4.
+      const chains = {};
+      state.daily.questIds.forEach(id => {
+        const quest = questDef(id);
+        if(!quest) return;
+        if(!chains[quest.type]) chains[quest.type] = [];
+        chains[quest.type].push(quest);
+      });
+      return Object.entries(chains).map(([type, quests]) => {
+        const meta = QUEST_CHAIN_META[type] || { icon:'🎯', label:type };
+        const progress = questProgressValue(quests[0]);
+        const maxGoal = quests[quests.length-1].goal;
+        const pct = clamp((progress/maxGoal)*100, 0, 100);
+        const claimedCount = quests.filter(q => state.daily.questsClaimed.includes(q.id)).length;
+        return `
+          <div class="card">
+            <div style="display:flex; justify-content:space-between; align-items:center;">
+              <div style="font-size:13px; font-weight:600;">${meta.icon} ${meta.label}</div>
+              <div style="font-size:11px; color:var(--text-muted);">${claimedCount}/${quests.length} claimed</div>
+            </div>
+            <div class="bar-track" style="margin-top:10px; position:relative;">
+              <div class="bar-fill xp" style="width:${pct}%"></div>
+              ${quests.map(q => `<div style="position:absolute; top:-3px; left:${clamp((q.goal/maxGoal)*100,0,100)}%; width:2px; height:12px; background:var(--bg-panel); transform:translateX(-1px);"></div>`).join('')}
+            </div>
+            <div style="font-size:11px; color:var(--text-muted); margin-top:4px;">${fmtNum(Math.min(progress,maxGoal))} / ${fmtNum(maxGoal)}</div>
+            <div style="display:flex; flex-wrap:wrap; gap:6px; margin-top:8px;">
+              ${quests.map(q => {
+                const done = progress >= q.goal;
+                const claimed = state.daily.questsClaimed.includes(q.id);
+                const rewardParts = [];
+                if(q.rewardCash) rewardParts.push(`$${q.rewardCash}`);
+                if(q.rewardTeeth) rewardParts.push(`🦷${q.rewardTeeth}`);
+                rewardParts.push(`+${q.gymXp}XP`);
+                return `
+                  <button class="btn ${claimed ? 'btn-ghost' : (done ? 'btn-gold' : 'btn-ghost')}" style="flex:1 1 auto; font-size:10px; padding:6px 8px; ${!done&&!claimed?'opacity:0.6;':''}" data-claim-quest="${q.id}" ${(!done||claimed)?'disabled':''}>
+                    ${claimed ? `✓ ${fmtNum(q.goal)}` : (done ? `Claim: ${rewardParts.join(' ')}` : `${fmtNum(q.goal)}: ${rewardParts.join(' ')}`)}
+                  </button>
+                `;
+              }).join('')}
+            </div>
           </div>
-          <div class="bar-track" style="margin-top:8px;"><div class="bar-fill xp" style="width:${pct}%"></div></div>
-          <div style="display:flex; justify-content:space-between; align-items:center; margin-top:6px;">
-            <div style="font-size:11px; color:var(--text-muted);">${Math.min(progress,quest.goal)} / ${quest.goal}</div>
-            <button class="btn ${claimed ? 'btn-ghost' : (done ? 'btn-gold' : 'btn-ghost')}" style="padding:6px 14px; font-size:11px;" data-claim-quest="${id}" ${(!done||claimed)?'disabled':''}>
-              ${claimed ? 'Claimed' : (done ? 'Claim' : 'In Progress')}
-            </button>
-          </div>
-        </div>
-      `;
-    }).join('') : ''}
+        `;
+      }).join('');
+    })() : ''}
+    ${state.ui.questsExpanded ? renderDailyQuestResetButton() : ''}
   `;
 
   const gymWarsStale = gymWarsCache.weekKey !== getWeekKey();
@@ -6216,7 +6581,7 @@ function renderLeagueTab(){
     <div class="card" style="display:flex; justify-content:space-between; align-items:center;">
       <div>
         <div style="font-family:'Oswald',sans-serif; font-weight:600; font-size:14px;">${ROLE_ICONS[state.social.role]||'🤝'} ${ROLE_LABELS[state.social.role]||'Member'}</div>
-        <div style="font-size:11px; color:var(--text-muted); margin-top:2px;">${tenure.name} • ${daysInGym()} day${daysInGym()===1?'':'s'} in this gym</div>
+        <div style="font-size:11px; color:var(--text-muted); margin-top:2px;">${tenure.name} • ${daysInGym()} day${daysInGym()===1?'':'s'} in this gym${state.social.bonusTenureDays>0?` <span style="color:var(--belt-gold);">(+${state.social.bonusTenureDays} bonus)</span>`:''}</div>
       </div>
     </div>
   `;
@@ -6505,7 +6870,7 @@ function renderHomeTab(){
     </div>
 
     <div class="panel-title" data-toggle-section="garageExpanded" style="cursor:pointer; display:flex; justify-content:space-between; align-items:center;">
-      <span>Garage ${state.prestige.vehicleSlots > 1 ? `<span style="color:var(--belt-gold); font-size:11px;">(${getActiveVehicleSlotKeys().length} slots)</span>` : ''}</span><span style="font-size:12px;">${state.ui.garageExpanded ? '▾' : '▸'}</span>
+      <span>Garage <span data-open-tier-legend style="cursor:pointer; opacity:0.7; font-size:12px;" title="Rarity tier reference">ℹ️</span> ${state.prestige.vehicleSlots > 1 ? `<span style="color:var(--belt-gold); font-size:11px;">(${getActiveVehicleSlotKeys().length} slots)</span>` : ''}</span><span style="font-size:12px;">${state.ui.garageExpanded ? '▾' : '▸'}</span>
     </div>
     ${state.ui.garageExpanded ? `
     <div class="gear-grid">
@@ -6746,6 +7111,652 @@ function renderHomeTab(){
 // Expanded from 5 to 10 stages (and thresholds scaled up ~4.6x at the top) specifically so maxing
 // out a relationship is a genuine long-term project again, especially now that Corner progress
 // resets on prestige — a 5-stage/140-affection arc would have been trivially fast to redo each cycle.
+// Deterministic variant picker — same companion always shows the same line at a given stage
+// (consistent across sessions/renders) without needing to store which variant was picked.
+// Pure string hash, no crypto needed, just needs to be stable and reasonably well-distributed.
+function pickDialogueVariant(seed, options){
+  let hash = 0;
+  for(let i=0; i<seed.length; i++){ hash = (hash*31 + seed.charCodeAt(i)) | 0; }
+  return options[Math.abs(hash) % options.length];
+}
+
+// Gendered dialogue pools — masculine/feminine VOICE (not just pronoun-swapped text), 4 written
+// variants per stage so companions sharing a role+gender don't all recite the identical line.
+// Starting with Coach; other roles still use the single shared TEMPLATES arc below until they
+// get the same treatment in a follow-up pass.
+const ROLE_DIALOGUE_POOLS = {
+  coach: {
+    masculine: (firstName) => [
+      [
+        `${firstName} watches your training from across the gym, arms crossed, saying nothing.`,
+        `${firstName} clocks your reps without a word, like he's grading you and you already failed.`,
+        `${firstName} barely glances up when you walk in — just another body taking up mat space, as far as he's concerned.`,
+        `${firstName} corrects another fighter's stance and doesn't spare you a second look.`,
+      ],
+      [
+        `"Your footwork's sloppy," ${firstName} says, stepping in to correct your stance. It's the first time he's bothered.`,
+        `${firstName} tosses you a pair of pads without asking — apparently you've earned that much.`,
+        `"You're late," ${firstName} grunts, tapping his watch. He noticed. That's new.`,
+        `${firstName} actually remembers your name today instead of just pointing at you.`,
+      ],
+      [
+        `${firstName} starts nodding at you across the gym floor now — a real acknowledgment, not just a glance.`,
+        `"Not bad," ${firstName} mutters after your sparring round, which from him is basically a standing ovation.`,
+        `${firstName} starts saving you the good pads instead of the cracked ones.`,
+        `${firstName} cracks something close to a joke at your expense. You'll take it.`,
+      ],
+      [
+        `${firstName} starts staying late to run extra pads with you. He still won't admit he enjoys it.`,
+        `${firstName} texts you fight footage at 11pm with zero context, just "watch this."`,
+        `${firstName} starts introducing you to other coaches as "one of mine."`,
+        `${firstName} shows up early just to catch you before the crowd rolls in.`,
+      ],
+      [
+        `"You've actually gotten better," ${firstName} admits — the closest thing to a compliment he's ever given you.`,
+        `${firstName} asks about your life outside the gym for the first time, gruffly, like it costs him something.`,
+        `${firstName} defends your gameplan to another coach without you even asking him to.`,
+        `${firstName} slips you advice that has nothing to do with fighting. You didn't expect that from him.`,
+      ],
+      [
+        `${firstName} shows up outside scheduled hours "to check the equipment," conveniently while you're training.`,
+        `${firstName} starts remembering how you take your coffee without being told twice.`,
+        `${firstName} lingers by the mats after your session ends, like he's not quite ready to leave yet.`,
+        `${firstName} catches himself staring and covers it by yelling at someone else's form.`,
+      ],
+      [
+        `"You're not terrible to be around," ${firstName} admits, almost smiling. He lingers longer than he needs to.`,
+        `${firstName} finds excuses to correct your form with his hands instead of just his words now.`,
+        `${firstName} goes quiet when you walk in, like he'd been thinking about what to say and forgot all of it.`,
+        `${firstName} starts showing up to watch you train even on his days off.`,
+      ],
+      [
+        `${firstName} catches your eye across the gym and doesn't look away first, for once.`,
+        `${firstName} walks you out to your car after a late session, not saying much, just... there.`,
+        `${firstName} gets visibly annoyed when another coach tries to take over your corner.`,
+        `${firstName} starts every session by asking how YOU'RE doing, not just your numbers.`,
+      ],
+      [
+        `${firstName} laces your gloves before your next fight and presses a kiss to your cheek. "Don't make me regret this, champ."`,
+        `${firstName} finally admits he's been into you since week two. "Took you long enough," you tell him.`,
+        `${firstName} shows up to your fight with your name stitched onto his corner jacket.`,
+        `${firstName} stops pretending the extra training sessions were ever about training.`,
+      ],
+      [
+        `${firstName} shows up to every fight now, front row, and doesn't pretend it's just professional anymore.`,
+        `${firstName} starts talking about your future like it's automatically his future too.`,
+        `${firstName} tells a rookie fighter, without a hint of irony, "that's my champ."`,
+        `${firstName} still corrects your form mid-argument, mid-dinner, mid-everything. Some things don't change.`,
+      ],
+    ],
+    feminine: (firstName) => [
+      [
+        `${firstName} watches your training from across the gym, arms crossed, saying nothing.`,
+        `${firstName} clocks your reps with a flat, assessing stare, like she's already decided you're not worth the effort yet.`,
+        `${firstName} corrects someone else's stance mid-sentence and doesn't acknowledge you exist.`,
+        `${firstName} walks past without a glance, like you're furniture she hasn't approved yet.`,
+      ],
+      [
+        `"Your footwork's sloppy," ${firstName} says, stepping in to correct your stance. It's the first time she's bothered.`,
+        `${firstName} corrects your grip without asking permission, like she already owns the problem.`,
+        `"You're late," ${firstName} says, not even looking up from her clipboard. She's keeping count.`,
+        `${firstName} actually uses your name instead of "you, in the corner."`,
+      ],
+      [
+        `${firstName} starts nodding at you across the gym floor now — a real acknowledgment, not just a glance.`,
+        `"Better," ${firstName} says after your round, which from her might as well be a trophy.`,
+        `${firstName} starts pairing you with stronger sparring partners. That's her version of a compliment.`,
+        `${firstName} makes a dry joke at your expense and almost smiles when you laugh at it.`,
+      ],
+      [
+        `${firstName} starts staying late to run extra pads with you. She still won't admit she enjoys it.`,
+        `${firstName} sends you a one-word text after watching your last fight: "Sloppy." Then, a minute later: "Better than last time though."`,
+        `${firstName} starts introducing you to other coaches as someone worth watching.`,
+        `${firstName} shows up early, mat already set up, like she was expecting you specifically.`,
+      ],
+      [
+        `"You've actually gotten better," ${firstName} admits — the closest thing to a compliment she's ever given you.`,
+        `${firstName} asks about your life outside the gym, brisk and businesslike, but she's actually listening to the answer.`,
+        `${firstName} shuts down another coach's criticism of you without a second thought.`,
+        `${firstName} gives you advice that has nothing to do with fighting, delivered like an order. You take it anyway.`,
+      ],
+      [
+        `${firstName} shows up outside scheduled hours "to check the equipment," conveniently while you're training.`,
+        `${firstName} remembers exactly how you take your coffee, down to the sugar, without ever asking twice.`,
+        `${firstName} lingers by the mats after your session, clipboard forgotten in her hand.`,
+        `${firstName} catches herself watching you a beat too long and pivots straight into barking orders at someone else.`,
+      ],
+      [
+        `"You're not terrible to be around," ${firstName} admits, almost smiling. She lingers longer than she needs to.`,
+        `${firstName} corrects your form with her hands now instead of just shouting instructions from across the mat.`,
+        `${firstName} goes quiet when you walk in, like she'd rehearsed something and lost her nerve.`,
+        `${firstName} starts showing up to watch you train even when she's technically off the clock.`,
+      ],
+      [
+        `${firstName} catches your eye across the gym and doesn't look away first, for once.`,
+        `${firstName} walks you out after a late session, quiet, like she's working up to saying something.`,
+        `${firstName} gets sharp and territorial when another coach tries to step into your corner.`,
+        `${firstName} starts every session asking how you're actually doing before she asks about your numbers.`,
+      ],
+      [
+        `${firstName} laces your gloves before your next fight and presses a kiss to your cheek. "Don't make me regret this, champ."`,
+        `${firstName} finally admits she's been into you since week two. "Took you long enough," you tell her.`,
+        `${firstName} shows up to your fight with your name stitched onto her corner jacket.`,
+        `${firstName} stops pretending the extra training sessions were ever really about training.`,
+      ],
+      [
+        `${firstName} shows up to every fight now, front row, and doesn't pretend it's just professional anymore.`,
+        `${firstName} starts talking about your future like it's automatically her future too.`,
+        `${firstName} tells a rookie fighter, flat and matter-of-fact, "that's my champ."`,
+        `${firstName} still corrects your form mid-argument, mid-dinner, mid-everything. Some things don't change.`,
+      ],
+    ],
+  },
+  trainer: {
+    masculine: (firstName) => [
+      [
+        `${firstName} clocks your reps from the corner of the room, clipboard in hand, expression unreadable.`,
+        `${firstName} times your rest periods to the second and doesn't bother explaining why.`,
+        `${firstName} corrects your form with a curt gesture, already moving to the next station.`,
+        `${firstName} barely looks up from his notes when you walk in.`,
+      ],
+      [
+        `"That's three sets short," ${firstName} says, adjusting your form with surprising gentleness for someone so exacting.`,
+        `${firstName} actually writes your name at the top of a new program instead of a generic sheet.`,
+        `"You're stronger than your numbers suggest," ${firstName} mutters, like the observation annoys him.`,
+        `${firstName} starts timing your reps out loud instead of silently judging them.`,
+      ],
+      [
+        `${firstName} starts greeting you by name instead of just pointing at the next station.`,
+        `${firstName} nods at your progress chart like it personally satisfies him.`,
+        `${firstName} adjusts your program without being asked, like he's been thinking about it.`,
+        `${firstName} lets a rare compliment slip: "Good rep. Do that again."`,
+      ],
+      [
+        `${firstName} starts texting you workout tweaks at odd hours. You suspect he thinks about your program more than he lets on.`,
+        `${firstName} shows up on your rest day "to check equipment," clipboard nowhere in sight.`,
+        `${firstName} starts saving your favorite station before you even ask.`,
+        `${firstName} corrects a new trainer's advice to you without hesitation. "That's not how they train."`,
+      ],
+      [
+        `"You're actually keeping up now," ${firstName} says, and it might be the nicest thing he's ever told you.`,
+        `${firstName} asks about your recovery outside the gym, genuinely, not just for the program.`,
+        `${firstName} defends your progress to a skeptical coach without you asking.`,
+        `${firstName} lets you see an actual smile, not the clipped nod he gives everyone else.`,
+      ],
+      [
+        `${firstName} starts saving you a spot at his usual station without being asked.`,
+        `${firstName} starts arriving earlier, like your session is the one he actually looks forward to.`,
+        `${firstName} catches himself watching your form a beat longer than professional distance allows.`,
+        `${firstName} brings an extra towel "just in case," every single session now.`,
+      ],
+      [
+        `"I don't usually do this," ${firstName} says, sitting closer than strictly necessary to review your progress chart.`,
+        `${firstName} starts finding excuses to correct your form hands-on instead of from across the room.`,
+        `${firstName} goes uncharacteristically quiet, like he's rehearsing something and losing his nerve.`,
+        `${firstName} shows up to watch your fights now, not just your training sessions.`,
+      ],
+      [
+        `${firstName} brings two coffees to your session now, and one's always exactly how you take it.`,
+        `${firstName} walks beside you to the parking lot without inventing a reason to.`,
+        `${firstName} gets oddly protective when another trainer offers you unsolicited advice.`,
+        `${firstName} starts every session with an actual "how are you," clipboard forgotten in hand.`,
+      ],
+      [
+        `${firstName} shows up to your fight in the front row, mouths "you've got this," and means every word.`,
+        `${firstName} finally admits the extra sessions were never really about your program.`,
+        `${firstName} shows up with a custom program labeled with a nickname only he uses for you.`,
+        `${firstName} stops pretending the closeness during spotting was ever purely professional.`,
+      ],
+      [
+        `${firstName} starts introducing you to the other trainers, then pretends he didn't say "mine."`,
+        `${firstName} still corrects your form mid-date, mid-argument, mid-everything. Some habits don't quit.`,
+        `${firstName} keeps your old progress charts in a drawer like they're something worth keeping.`,
+        `${firstName} tells a new trainer, flatly, "don't bother, that one's spoken for."`,
+      ],
+    ],
+    feminine: (firstName) => [
+      [
+        `${firstName} clocks your reps from the corner of the room, clipboard in hand, expression unreadable.`,
+        `${firstName} times your rest periods to the second, silent and unreadable about it.`,
+        `${firstName} corrects your form with a brisk gesture and moves on before you can respond.`,
+        `${firstName} barely glances at you between sets, focused entirely on her notes.`,
+      ],
+      [
+        `"That's three sets short," ${firstName} says, adjusting your form with surprising gentleness for someone so exacting.`,
+        `${firstName} writes your name at the top of an actual custom program instead of a generic sheet.`,
+        `"You're stronger than your numbers suggest," ${firstName} says, like she resents being impressed.`,
+        `${firstName} starts counting your reps out loud instead of just silently tracking them.`,
+      ],
+      [
+        `${firstName} starts greeting you by name instead of just pointing at the next station.`,
+        `${firstName} studies your progress chart like it genuinely pleases her.`,
+        `${firstName} adjusts your program unprompted, like she's already been thinking it over.`,
+        `${firstName} lets slip a rare compliment: "Good rep. Again."`,
+      ],
+      [
+        `${firstName} starts texting you workout tweaks at odd hours. You suspect she thinks about your program more than she lets on.`,
+        `${firstName} shows up on your rest day "to check equipment," clipboard nowhere in sight.`,
+        `${firstName} starts saving your favorite station before you even ask.`,
+        `${firstName} corrects another trainer's advice to you without hesitation. "That's not how they train."`,
+      ],
+      [
+        `"You're actually keeping up now," ${firstName} says, and it might be the nicest thing she's ever told you.`,
+        `${firstName} asks about your recovery outside the gym, genuinely, not just for the program.`,
+        `${firstName} defends your progress to a skeptical coach without you asking.`,
+        `${firstName} lets you see an actual smile, not the clipped nod she gives everyone else.`,
+      ],
+      [
+        `${firstName} starts saving you a spot at her usual station without being asked.`,
+        `${firstName} starts arriving earlier, like your session is the one she actually looks forward to.`,
+        `${firstName} catches herself watching your form a beat longer than professional distance allows.`,
+        `${firstName} brings an extra towel "just in case," every single session now.`,
+      ],
+      [
+        `"I don't usually do this," ${firstName} says, sitting closer than strictly necessary to review your progress chart.`,
+        `${firstName} starts finding excuses to correct your form hands-on instead of from across the room.`,
+        `${firstName} goes uncharacteristically quiet, like she's rehearsing something and losing her nerve.`,
+        `${firstName} shows up to watch your fights now, not just your training sessions.`,
+      ],
+      [
+        `${firstName} brings two coffees to your session now, and one's always exactly how you take it.`,
+        `${firstName} walks beside you to the parking lot without inventing a reason to.`,
+        `${firstName} gets oddly protective when another trainer offers you unsolicited advice.`,
+        `${firstName} starts every session with an actual "how are you," clipboard forgotten in hand.`,
+      ],
+      [
+        `${firstName} shows up to your fight in the front row, mouths "you've got this," and means every word.`,
+        `${firstName} finally admits the extra sessions were never really about your program.`,
+        `${firstName} shows up with a custom program labeled with a nickname only she uses for you.`,
+        `${firstName} stops pretending the closeness during spotting was ever purely professional.`,
+      ],
+      [
+        `${firstName} starts introducing you to the other trainers, then pretends she didn't say "mine."`,
+        `${firstName} still corrects your form mid-date, mid-argument, mid-everything. Some habits don't quit.`,
+        `${firstName} keeps your old progress charts in a drawer like they're something worth keeping.`,
+        `${firstName} tells a new trainer, flatly, "don't bother, that one's spoken for."`,
+      ],
+    ],
+  },
+  nutritionist: {
+    masculine: (firstName) => [
+      [
+        `${firstName} hands you a meal plan without much eye contact and walks off before you can ask questions.`,
+        `${firstName} glances at your food log with a raised eyebrow and says nothing.`,
+        `${firstName} slides a printed sheet across the counter, already turning to the next client.`,
+        `${firstName} corrects someone else's portions and doesn't spare you a second thought.`,
+      ],
+      [
+        `"You actually followed it this time," ${firstName} says, genuinely surprised, checking your log over a coffee.`,
+        `${firstName} actually asks what you like eating instead of just prescribing at you.`,
+        `"Better," ${firstName} grunts, tapping your log. Praise, from him, in miniature.`,
+        `${firstName} remembers you're the one who hates broccoli. Small thing. Still counts.`,
+      ],
+      [
+        `${firstName} starts remembering your usual order before you say a word.`,
+        `${firstName} swaps out something on your plan without asking, clearly thinking it over beforehand.`,
+        `${firstName} nods approvingly at your log, the closest thing to enthusiasm he shows.`,
+        `${firstName} starts greeting you by name at the gym kitchen instead of just handing you a sheet.`,
+      ],
+      [
+        `${firstName} starts packing an extra meal "by accident" whenever you're both at the gym kitchen.`,
+        `${firstName} texts you a recipe out of nowhere, no explanation, just "try this."`,
+        `${firstName} starts asking about your training schedule so he can plan around it.`,
+        `${firstName} saves you the good leftovers instead of tossing them.`,
+      ],
+      [
+        `"I actually look forward to these check-ins," ${firstName} admits, like the words surprised him too.`,
+        `${firstName} asks about your life outside your macros, and actually listens to the answer.`,
+        `${firstName} defends your progress to a skeptical coach without being asked.`,
+        `${firstName} lets an actual laugh slip during your session. First time you've heard it.`,
+      ],
+      [
+        `${firstName} starts texting you recipe ideas that are suspiciously tailored to exactly what you like.`,
+        `${firstName} starts showing up to the gym kitchen at the same time as you, every time.`,
+        `${firstName} lingers after handing you your plan, like there's more he wants to say.`,
+        `${firstName} catches himself watching you eat and pretends to check his notes instead.`,
+      ],
+      [
+        `"I made this one specifically for you," ${firstName} admits, sliding over a container he clearly spent real time on.`,
+        `${firstName} starts finding reasons to sit with you during meals instead of just dropping off food.`,
+        `${firstName} goes quiet mid-sentence, like he almost said something he wasn't planning to.`,
+        `${firstName} starts remembering things you mentioned once, weeks ago, like they mattered.`,
+      ],
+      [
+        `${firstName} shows up with your favorite pre-fight snack before you even mention feeling nervous.`,
+        `${firstName} walks you to your car with a container "for later," every single time now.`,
+        `${firstName} gets quietly annoyed when someone else brings you food instead of him.`,
+        `${firstName} starts every check-in asking how YOU'RE doing before he asks about your meals.`,
+      ],
+      [
+        `${firstName} cooks you a full pre-fight dinner and stays to watch you eat every bite. "Now go win."`,
+        `${firstName} finally admits the extra meals were never really about your macros.`,
+        `${firstName} shows up to your fight with a container of your favorite recovery meal, just in case.`,
+        `${firstName} stops pretending the lingering after check-ins was ever just professional.`,
+      ],
+      [
+        `${firstName} starts planning meals for two without asking first, and neither of you mentions it.`,
+        `${firstName} still corrects your portions mid-date, mid-argument, mid-everything. Some habits don't quit.`,
+        `${firstName} keeps a running list of things you love, updated constantly, like it matters to him.`,
+        `${firstName} tells a new client, flatly, "ask someone else, I'm booked for one person only now."`,
+      ],
+    ],
+    feminine: (firstName) => [
+      [
+        `${firstName} hands you a meal plan without much eye contact and walks off before you can ask questions.`,
+        `${firstName} glances at your food log with a raised eyebrow and says nothing.`,
+        `${firstName} slides a printed sheet across the counter, already turning to the next client.`,
+        `${firstName} corrects someone else's portions and doesn't spare you a second thought.`,
+      ],
+      [
+        `"You actually followed it this time," ${firstName} says, genuinely surprised, checking your log over a coffee.`,
+        `${firstName} actually asks what you like eating instead of just prescribing at you.`,
+        `"Better," ${firstName} says, tapping your log. High praise, from her, in miniature.`,
+        `${firstName} remembers you're the one who hates broccoli. Small thing. Still counts.`,
+      ],
+      [
+        `${firstName} starts remembering your usual order before you say a word.`,
+        `${firstName} swaps out something on your plan without asking, clearly thinking it over beforehand.`,
+        `${firstName} nods approvingly at your log, the closest thing to enthusiasm she shows.`,
+        `${firstName} starts greeting you by name at the gym kitchen instead of just handing you a sheet.`,
+      ],
+      [
+        `${firstName} starts packing an extra meal "by accident" whenever you're both at the gym kitchen.`,
+        `${firstName} texts you a recipe out of nowhere, no explanation, just "try this."`,
+        `${firstName} starts asking about your training schedule so she can plan around it.`,
+        `${firstName} saves you the good leftovers instead of tossing them.`,
+      ],
+      [
+        `"I actually look forward to these check-ins," ${firstName} admits, like the words surprised her too.`,
+        `${firstName} asks about your life outside your macros, and actually listens to the answer.`,
+        `${firstName} defends your progress to a skeptical coach without being asked.`,
+        `${firstName} lets an actual laugh slip during your session. First time you've heard it.`,
+      ],
+      [
+        `${firstName} starts texting you recipe ideas that are suspiciously tailored to exactly what you like.`,
+        `${firstName} starts showing up to the gym kitchen at the same time as you, every time.`,
+        `${firstName} lingers after handing you your plan, like there's more she wants to say.`,
+        `${firstName} catches herself watching you eat and pretends to check her notes instead.`,
+      ],
+      [
+        `"I made this one specifically for you," ${firstName} admits, sliding over a container she clearly spent real time on.`,
+        `${firstName} starts finding reasons to sit with you during meals instead of just dropping off food.`,
+        `${firstName} goes quiet mid-sentence, like she almost said something she wasn't planning to.`,
+        `${firstName} starts remembering things you mentioned once, weeks ago, like they mattered.`,
+      ],
+      [
+        `${firstName} shows up with your favorite pre-fight snack before you even mention feeling nervous.`,
+        `${firstName} walks you to your car with a container "for later," every single time now.`,
+        `${firstName} gets quietly annoyed when someone else brings you food instead of her.`,
+        `${firstName} starts every check-in asking how YOU'RE doing before she asks about your meals.`,
+      ],
+      [
+        `${firstName} cooks you a full pre-fight dinner and stays to watch you eat every bite. "Now go win."`,
+        `${firstName} finally admits the extra meals were never really about your macros.`,
+        `${firstName} shows up to your fight with a container of your favorite recovery meal, just in case.`,
+        `${firstName} stops pretending the lingering after check-ins was ever just professional.`,
+      ],
+      [
+        `${firstName} starts planning meals for two without asking first, and neither of you mentions it.`,
+        `${firstName} still corrects your portions mid-date, mid-argument, mid-everything. Some habits don't quit.`,
+        `${firstName} keeps a running list of things you love, updated constantly, like it matters to her.`,
+        `${firstName} tells a new client, flatly, "ask someone else, I'm booked for one person only now."`,
+      ],
+    ],
+  },
+  manager: {
+    masculine: (firstName) => [
+      [
+        `${firstName} sizes you up like a spreadsheet, already calculating your future purses.`,
+        `${firstName} barely looks up from his phone when you walk in, mid-negotiation with someone else.`,
+        `${firstName} flips through your stats like a stock ticker, expression unreadable.`,
+        `${firstName} shakes your hand too fast, already halfway to his next meeting.`,
+      ],
+      [
+        `"You're worth more than you think," ${firstName} says, tapping numbers into his phone without looking up.`,
+        `${firstName} actually remembers your name without checking his notes first.`,
+        `${firstName} pitches you to a promoter, unprompted, like he's already decided you're worth the call.`,
+        `${firstName} asks about your goals instead of just your stats, for once.`,
+      ],
+      [
+        `${firstName} starts remembering your fight schedule better than you do.`,
+        `${firstName} negotiates a better purse without you having to ask twice.`,
+        `${firstName} starts calling instead of texting. Apparently you've earned a voice now.`,
+        `${firstName} cracks a rare joke mid-negotiation, aimed squarely at you.`,
+      ],
+      [
+        `${firstName} starts fighting FOR you in negotiations, not just billing you for it.`,
+        `${firstName} turns down a shady deal on your behalf without asking permission first.`,
+        `${firstName} starts showing up to your sessions "to observe form," clipboard nowhere in sight.`,
+        `${firstName} remembers details about your life that have nothing to do with business.`,
+      ],
+      [
+        `"I actually believe in you," ${firstName} admits, like the sentiment cost him something to say out loud.`,
+        `${firstName} defends your worth to a skeptical promoter without blinking.`,
+        `${firstName} asks about your life outside the ring, and actually waits for the answer.`,
+        `${firstName} lets you see him nervous, just once, pitching you to someone important.`,
+      ],
+      [
+        `${firstName} shows up to your training sessions "to scout the competition," conveniently every single time.`,
+        `${firstName} starts calling just to check in, no business reason attached.`,
+        `${firstName} lingers after meetings that could've ended five minutes earlier.`,
+        `${firstName} catches himself smiling at your texts and blames it on a good deal closing.`,
+      ],
+      [
+        `"You're not just a paycheck to me anymore," ${firstName} admits, looking almost embarrassed by it.`,
+        `${firstName} starts scheduling things around your calendar instead of the other way around.`,
+        `${firstName} goes quiet mid-pitch, like he forgot what he was even negotiating for a second.`,
+        `${firstName} shows up to watch you train even when there's no deal on the table.`,
+      ],
+      [
+        `${firstName} turns down a bigger client to keep managing just you.`,
+        `${firstName} walks you out after meetings now, no business reason required.`,
+        `${firstName} gets sharp and territorial when another manager tries to poach you.`,
+        `${firstName} starts every call asking how YOU'RE doing before he asks about the numbers.`,
+      ],
+      [
+        `${firstName} shows up with contract papers and a different kind of proposal altogether. "Say yes to this one too."`,
+        `${firstName} finally admits he's been into you since week two. "Took you long enough," you tell him.`,
+        `${firstName} shows up to your fight in a suit that matches your corner colors, unprompted.`,
+        `${firstName} stops pretending the after-hours calls were ever really about business.`,
+      ],
+      [
+        `${firstName} stops taking new clients entirely. "You're the only account I care about now."`,
+        `${firstName} still negotiates on your behalf mid-date, mid-argument, mid-everything. Old habits.`,
+        `${firstName} introduces you to promoters as "mine" before catching himself.`,
+        `${firstName} tells a rival manager, flatly, "don't bother, they're not on the market."`,
+      ],
+    ],
+    feminine: (firstName) => [
+      [
+        `${firstName} sizes you up like a spreadsheet, already calculating your future purses.`,
+        `${firstName} barely looks up from her phone when you walk in, mid-negotiation with someone else.`,
+        `${firstName} flips through your stats like a stock ticker, expression unreadable.`,
+        `${firstName} shakes your hand too fast, already halfway to her next meeting.`,
+      ],
+      [
+        `"You're worth more than you think," ${firstName} says, tapping numbers into her phone without looking up.`,
+        `${firstName} actually remembers your name without checking her notes first.`,
+        `${firstName} pitches you to a promoter, unprompted, like she's already decided you're worth the call.`,
+        `${firstName} asks about your goals instead of just your stats, for once.`,
+      ],
+      [
+        `${firstName} starts remembering your fight schedule better than you do.`,
+        `${firstName} negotiates a better purse without you having to ask twice.`,
+        `${firstName} starts calling instead of texting. Apparently you've earned a voice now.`,
+        `${firstName} cracks a rare joke mid-negotiation, aimed squarely at you.`,
+      ],
+      [
+        `${firstName} starts fighting FOR you in negotiations, not just billing you for it.`,
+        `${firstName} turns down a shady deal on your behalf without asking permission first.`,
+        `${firstName} starts showing up to your sessions "to observe form," clipboard nowhere in sight.`,
+        `${firstName} remembers details about your life that have nothing to do with business.`,
+      ],
+      [
+        `"I actually believe in you," ${firstName} admits, like the sentiment cost her something to say out loud.`,
+        `${firstName} defends your worth to a skeptical promoter without blinking.`,
+        `${firstName} asks about your life outside the ring, and actually waits for the answer.`,
+        `${firstName} lets you see her nervous, just once, pitching you to someone important.`,
+      ],
+      [
+        `${firstName} shows up to your training sessions "to scout the competition," conveniently every single time.`,
+        `${firstName} starts calling just to check in, no business reason attached.`,
+        `${firstName} lingers after meetings that could've ended five minutes earlier.`,
+        `${firstName} catches herself smiling at your texts and blames it on a good deal closing.`,
+      ],
+      [
+        `"You're not just a paycheck to me anymore," ${firstName} admits, looking almost embarrassed by it.`,
+        `${firstName} starts scheduling things around your calendar instead of the other way around.`,
+        `${firstName} goes quiet mid-pitch, like she forgot what she was even negotiating for a second.`,
+        `${firstName} shows up to watch you train even when there's no deal on the table.`,
+      ],
+      [
+        `${firstName} turns down a bigger client to keep managing just you.`,
+        `${firstName} walks you out after meetings now, no business reason required.`,
+        `${firstName} gets sharp and territorial when another manager tries to poach you.`,
+        `${firstName} starts every call asking how YOU'RE doing before she asks about the numbers.`,
+      ],
+      [
+        `${firstName} shows up with contract papers and a different kind of proposal altogether. "Say yes to this one too."`,
+        `${firstName} finally admits she's been into you since week two. "Took you long enough," you tell her.`,
+        `${firstName} shows up to your fight in an outfit that matches your corner colors, unprompted.`,
+        `${firstName} stops pretending the after-hours calls were ever really about business.`,
+      ],
+      [
+        `${firstName} stops taking new clients entirely. "You're the only account I care about now."`,
+        `${firstName} still negotiates on your behalf mid-date, mid-argument, mid-everything. Old habits.`,
+        `${firstName} introduces you to promoters as "mine" before catching herself.`,
+        `${firstName} tells a rival manager, flatly, "don't bother, they're not on the market."`,
+      ],
+    ],
+  },
+  physio: {
+    masculine: (firstName) => [
+      [
+        `${firstName} checks your range of motion with clinical detachment, saying little.`,
+        `${firstName} notes something on your chart without explaining what he found.`,
+        `${firstName} presses on old scar tissue like he's already diagnosed you and moved on.`,
+        `${firstName} barely makes eye contact, entirely focused on the assessment.`,
+      ],
+      [
+        `"You've been favoring that shoulder," ${firstName} says, noticing something you hadn't mentioned.`,
+        `${firstName} actually explains what he's doing instead of just doing it silently.`,
+        `"That's healing well," ${firstName} says, like your recovery personally satisfies him.`,
+        `${firstName} remembers your injury history without checking his notes.`,
+      ],
+      [
+        `${firstName} starts greeting you with an actual smile instead of just a chart.`,
+        `${firstName} extends your session slightly, unprompted, "just to be thorough."`,
+        `${firstName} makes a dry joke mid-treatment, testing if you'll laugh.`,
+        `${firstName} starts remembering which spots actually hurt without you pointing them out.`,
+      ],
+      [
+        `${firstName} starts texting you recovery tips outside of scheduled sessions.`,
+        `${firstName} shows up on a day you don't have an appointment, "just checking in."`,
+        `${firstName} starts saving you the same table, same time slot, like it's already yours.`,
+        `${firstName} remembers details about your life that have nothing to do with your injuries.`,
+      ],
+      [
+        `"I worry about you more than the job requires," ${firstName} admits, surprised at himself.`,
+        `${firstName} asks about your life outside recovery, and actually listens.`,
+        `${firstName} defends your training pace to a skeptical coach without being asked.`,
+        `${firstName} lets an actual laugh slip mid-session. First time you've heard it.`,
+      ],
+      [
+        `${firstName} extends your sessions longer than necessary, and neither of you mentions it.`,
+        `${firstName} starts arriving early, like your appointment is the one he looks forward to.`,
+        `${firstName} catches himself lingering on a stretch a beat too long.`,
+        `${firstName} brings you water before you even ask, every single time now.`,
+      ],
+      [
+        `"I look forward to these appointments," ${firstName} admits, hands lingering a moment too long on a routine stretch.`,
+        `${firstName} starts finding reasons to check in between sessions, not just during them.`,
+        `${firstName} goes quiet mid-treatment, like he almost said something he wasn't planning to.`,
+        `${firstName} starts showing up to your fights, not just your recovery sessions.`,
+      ],
+      [
+        `${firstName} shows up on fight night just to check on you, no appointment needed.`,
+        `${firstName} walks you out after sessions now, no professional reason required.`,
+        `${firstName} gets quietly protective when someone else handles your recovery instead.`,
+        `${firstName} starts every session asking how you're actually doing before checking your body.`,
+      ],
+      [
+        `${firstName} massages the tension from your shoulders before your next fight and presses a kiss to your temple. "Now go take care of business."`,
+        `${firstName} finally admits the extended sessions were never really about recovery.`,
+        `${firstName} shows up to your fight with a recovery kit prepped specifically for you.`,
+        `${firstName} stops pretending the lingering hands were ever purely clinical.`,
+      ],
+      [
+        `${firstName} starts treating your health like it's personally his responsibility — because now it is.`,
+        `${firstName} still checks your form mid-date, mid-argument, mid-everything. Some habits don't quit.`,
+        `${firstName} keeps a running log of your recovery like it matters more than any other client's.`,
+        `${firstName} tells a new client, flatly, "I'm not taking anyone else right now."`,
+      ],
+    ],
+    feminine: (firstName) => [
+      [
+        `${firstName} checks your range of motion with clinical detachment, saying little.`,
+        `${firstName} notes something on your chart without explaining what she found.`,
+        `${firstName} presses on old scar tissue like she's already diagnosed you and moved on.`,
+        `${firstName} barely makes eye contact, entirely focused on the assessment.`,
+      ],
+      [
+        `"You've been favoring that shoulder," ${firstName} says, noticing something you hadn't mentioned.`,
+        `${firstName} actually explains what she's doing instead of just doing it silently.`,
+        `"That's healing well," ${firstName} says, like your recovery personally satisfies her.`,
+        `${firstName} remembers your injury history without checking her notes.`,
+      ],
+      [
+        `${firstName} starts greeting you with an actual smile instead of just a chart.`,
+        `${firstName} extends your session slightly, unprompted, "just to be thorough."`,
+        `${firstName} makes a dry joke mid-treatment, testing if you'll laugh.`,
+        `${firstName} starts remembering which spots actually hurt without you pointing them out.`,
+      ],
+      [
+        `${firstName} starts texting you recovery tips outside of scheduled sessions.`,
+        `${firstName} shows up on a day you don't have an appointment, "just checking in."`,
+        `${firstName} starts saving you the same table, same time slot, like it's already yours.`,
+        `${firstName} remembers details about your life that have nothing to do with your injuries.`,
+      ],
+      [
+        `"I worry about you more than the job requires," ${firstName} admits, surprised at herself.`,
+        `${firstName} asks about your life outside recovery, and actually listens.`,
+        `${firstName} defends your training pace to a skeptical coach without being asked.`,
+        `${firstName} lets an actual laugh slip mid-session. First time you've heard it.`,
+      ],
+      [
+        `${firstName} extends your sessions longer than necessary, and neither of you mentions it.`,
+        `${firstName} starts arriving early, like your appointment is the one she looks forward to.`,
+        `${firstName} catches herself lingering on a stretch a beat too long.`,
+        `${firstName} brings you water before you even ask, every single time now.`,
+      ],
+      [
+        `"I look forward to these appointments," ${firstName} admits, hands lingering a moment too long on a routine stretch.`,
+        `${firstName} starts finding reasons to check in between sessions, not just during them.`,
+        `${firstName} goes quiet mid-treatment, like she almost said something she wasn't planning to.`,
+        `${firstName} starts showing up to your fights, not just your recovery sessions.`,
+      ],
+      [
+        `${firstName} shows up on fight night just to check on you, no appointment needed.`,
+        `${firstName} walks you out after sessions now, no professional reason required.`,
+        `${firstName} gets quietly protective when someone else handles your recovery instead.`,
+        `${firstName} starts every session asking how you're actually doing before checking your body.`,
+      ],
+      [
+        `${firstName} massages the tension from your shoulders before your next fight and presses a kiss to your temple. "Now go take care of business."`,
+        `${firstName} finally admits the extended sessions were never really about recovery.`,
+        `${firstName} shows up to your fight with a recovery kit prepped specifically for you.`,
+        `${firstName} stops pretending the lingering hands were ever purely clinical.`,
+      ],
+      [
+        `${firstName} starts treating your health like it's personally her responsibility — because now it is.`,
+        `${firstName} still checks your form mid-date, mid-argument, mid-everything. Some habits don't quit.`,
+        `${firstName} keeps a running log of your recovery like it matters more than any other client's.`,
+        `${firstName} tells a new client, flatly, "I'm not taking anyone else right now."`,
+      ],
+    ],
+  },
+};
+
 function buildCompanionStages(name, role, pronoun){
   const firstName = name.split(' ')[0];
   const p = pronoun; // 'her' | 'him'
@@ -6815,6 +7826,15 @@ function buildCompanionStages(name, role, pronoun){
   };
   const titles = ['Stranger','Acquaintance','Friendly','Close Friend','Trusted Friend','Warming Up','Mutual Spark','Close','Dating','Devoted'];
   const thresholds = [0, 30, 70, 120, 180, 250, 330, 420, 520, 650];
+
+  const genderedPool = ROLE_DIALOGUE_POOLS[role];
+  if(genderedPool){
+    const stagesForGender = (p === 'her' ? genderedPool.feminine : genderedPool.masculine)(firstName);
+    return thresholds.map((threshold,i) => ({
+      threshold, title:titles[i],
+      text: pickDialogueVariant(`${name}_stage${i}`, stagesForGender[i]),
+    }));
+  }
   return thresholds.map((threshold,i) => ({ threshold, title:titles[i], text:TEMPLATES[role][i] }));
 }
 
@@ -6897,9 +7917,10 @@ const ROLE_TAGLINES = {
 };
 const ROLE_COOLDOWN = { coach:20000, trainer:20000, nutritionist:20000, manager:20000, physio:20000 };
 const ROLE_SPAR_COOLDOWN = { coach:60000, trainer:60000, nutritionist:60000, manager:60000, physio:60000 }; // 3x chat's cooldown
+const ROLE_HANGOUT_COOLDOWN = { coach:300000, trainer:300000, nutritionist:300000, manager:300000, physio:300000 }; // 5x spar's, 15x chat's
 const ROLE_AFFECTION = {
-  coach:{chat:4,gift:14,spar:9}, trainer:{chat:4,gift:14,spar:9}, nutritionist:{chat:4,gift:14,spar:9},
-  manager:{chat:4,gift:14,spar:9}, physio:{chat:4,gift:14,spar:9},
+  coach:{chat:4,gift:14,spar:9,hangout:25}, trainer:{chat:4,gift:14,spar:9,hangout:25}, nutritionist:{chat:4,gift:14,spar:9,hangout:25},
+  manager:{chat:4,gift:14,spar:9,hangout:25}, physio:{chat:4,gift:14,spar:9,hangout:25},
 };
 
 function slugify(name){ return name.toLowerCase().replace(/[^a-z]+/g,'_').replace(/^_|_$/g,''); }
@@ -6922,8 +7943,10 @@ ROSTER_SEED.forEach(seed => {
     affectionPerChat: ROLE_AFFECTION[seed.role].chat,
     affectionPerGift: ROLE_AFFECTION[seed.role].gift,
     affectionPerSpar: ROLE_AFFECTION[seed.role].spar,
+    affectionPerHangout: ROLE_AFFECTION[seed.role].hangout,
     chatCooldownMs: ROLE_COOLDOWN[seed.role],
     sparCooldownMs: ROLE_SPAR_COOLDOWN[seed.role],
+    hangoutCooldownMs: ROLE_HANGOUT_COOLDOWN[seed.role],
     stages: buildCompanionStages(seed.name, seed.role, seed.pronoun),
   };
 });
@@ -6939,7 +7962,7 @@ function visibleCompanions(){
 
 function getCompanionProgress(id){
   if(!state.companions[id]){
-    state.companions[id] = { affection:0, stage:0, lastChatAt:0, lastSparAt:0, isPartner:false };
+    state.companions[id] = { affection:0, stage:0, lastChatAt:0, lastSparAt:0, lastHangoutAt:0, isPartner:false };
   }
   return state.companions[id];
 }
@@ -7016,28 +8039,120 @@ function sparWithCompanion(id){
   scheduleSave();
 }
 
+// Third free interaction — 5x Spar's cooldown (5 minutes), continuing the same diminishing-rate-
+// but-increasing-absolute-payoff pattern already established between Chat and Spar. Free, no
+// cash cost — a genuine third option for players who don't want to spend on gifts but are willing
+// to wait longer for a bigger single payoff than Chat or Spar offer.
+function hangOutWithCompanion(id){
+  const def = COMPANION_DEFS[id];
+  const progress = getCompanionProgress(id);
+  const now = Date.now();
+  if(now - (progress.lastHangoutAt||0) < def.hangoutCooldownMs){
+    const waitSec = Math.ceil((def.hangoutCooldownMs - (now - (progress.lastHangoutAt||0)))/1000);
+    const waitMin = Math.ceil(waitSec/60);
+    showToast(`${def.name.split(' ')[0]} is busy — try again in ${waitMin}m`);
+    return;
+  }
+  progress.lastHangoutAt = now;
+  applyAffectionGain(id, def.affectionPerHangout);
+  pushLog(`Hung out with ${def.name.split(' ')[0]} (+${def.affectionPerHangout} affection)`, 'level');
+  render();
+  scheduleSave();
+}
+
+// Rebalanced from a flat "affectionPerGift + cost/10" formula that made cheaper gifts strictly
+// MORE efficient (Letter was 9x better affection-per-$ than Trip, making every gift above Letter
+// purely decorative for anyone optimizing). Now efficiency increases ~3.5%/tier — pricier gifts
+// are genuinely the better deal, not just bigger numbers. Also scaled by stage — see
+// giftCostForStage() — gifts cost up to 12% more as a relationship deepens (stages 0-8, since
+// gifting locks entirely at max stage/9 already).
+// Rebalanced twice now: originally flat pricing made cheap gifts strictly MORE efficient
+// (backwards). First fix (3.5%/tier over 8 tiers, $10-$220) technically satisfied "higher tier =
+// better return" but the math forced the top gift to +336 affection (over half the entire 0-650
+// climb from one purchase) — too extreme. This version compresses the price ceiling to $150 (the
+// real lever, not just a softer growth rate) and spreads 12 tiers across it instead of 8, landing
+// the top gift at +232 (~36% of max) — still a genuine "big purchase" reward, not a near-instant-max
+// button. Every tier-to-tier step is strictly positive (verified programmatically, not hand-tuned).
 const GIFT_OPTIONS = [
-  { key:'letter',  label:'💌 Handwritten Letter', cost:10 },
-  { key:'cake',    label:'🎂 Cake', cost:25 },
-  { key:'flowers', label:'🌹 Flowers', cost:25 },
-  { key:'dinner',  label:'🍲 Home-Cooked Dinner', cost:45 },
-  { key:'gear',    label:'🥊 Custom Gear', cost:60 },
-  { key:'tickets', label:'🎫 Concert Tickets', cost:90 },
-  { key:'jewelry', label:'💎 Jewelry', cost:140 },
-  { key:'trip',    label:'✈️ Weekend Getaway', cost:220 },
+  { key:'letter',      label:'💌 Handwritten Letter', cost:10,  baseGain:12  },
+  { key:'coffee',      label:'☕ Coffee Date',         cost:16,  baseGain:21  },
+  { key:'flowers',     label:'🌹 Flowers',             cost:24,  baseGain:33  },
+  { key:'cake',        label:'🎂 Cake',                cost:34,  baseGain:48  },
+  { key:'dinner',      label:'🍲 Home-Cooked Dinner',  cost:46,  baseGain:66  },
+  { key:'movie',       label:'🎬 Movie Night',         cost:60,  baseGain:88  },
+  { key:'gear',        label:'🥊 Custom Gear',         cost:76,  baseGain:113 },
+  { key:'tickets',     label:'🎫 Concert Tickets',     cost:94,  baseGain:141 },
+  { key:'fancydinner', label:'🍾 Fancy Dinner',        cost:112, baseGain:169 },
+  { key:'jewelry',     label:'💎 Jewelry',             cost:130, baseGain:198 },
+  { key:'surprise',    label:'🎁 Surprise Gift Box',   cost:140, baseGain:215 },
+  { key:'trip',        label:'✈️ Weekend Getaway',     cost:150, baseGain:232 },
 ];
+
+// Gift cost scales +1.5% per affection stage reached (0-8; gifting locks entirely at stage 9) —
+// a modest "relationships get pricier as they get serious" curve, capping at +12% around Dating.
+const GIFT_STAGE_COST_SCALE_PCT = 0.015;
+function giftCostForStage(baseCost, stageIndex){
+  return Math.round(baseCost * (1 + GIFT_STAGE_COST_SCALE_PCT * stageIndex));
+}
 
 function giveGiftToCompanion(id, giftKey){
   const def = COMPANION_DEFS[id];
   const progress = getCompanionProgress(id);
+  if(!companionNextStage(def, progress)){ showToast('Already at max stage — gift locked'); return; }
   const gift = GIFT_OPTIONS.find(g => g.key === giftKey);
-  if(state.economy.cash < gift.cost){ showToast('Not enough cash'); return; }
-  state.economy.cash -= gift.cost;
-  const gain = def.affectionPerGift + Math.round(gift.cost/10);
+  const stageIndex = companionCurrentStageIndex(def, progress);
+  const actualCost = giftCostForStage(gift.cost, stageIndex);
+  if(state.economy.cash < actualCost){ showToast('Not enough cash'); return; }
+  state.economy.cash -= actualCost;
+  const gain = gift.baseGain;
   applyAffectionGain(id, gain);
   pushLog(`Gave ${def.name.split(' ')[0]} ${gift.label} (+${gain} affection)`, 'level');
   render();
   scheduleSave();
+}
+
+// Random flavor messages from an active Partner (Dating-stage companion) — a small, fun,
+// non-blocking touch during fights. Deliberately NOT a modal that interrupts anything — just a
+// dismissible bubble that fades on its own.
+const PARTNER_MESSAGES = [
+  "I miss you 💕",
+  "When are we going out again?",
+  "I want a vacation... just the two of us.",
+  "Thinking about you between rounds 😊",
+  "Don't forget dinner tonight!",
+  "You've been in the gym ALL day...",
+  "Bring me something nice when you win 😉",
+  "I saved you a seat at ringside.",
+  "Can we talk when you're done training?",
+  "Missing your face today.",
+];
+
+// Passive partner messages roll on a scheduled 7-10 minute window (random each time), not a
+// per-check probability — this makes two things trivially guaranteed rather than approximated:
+// (1) no stacking — checking late (e.g. after a long idle stretch) can only ever fire ONE message
+// and then reschedule, never "catch up" multiple at once; (2) the clock can be cleanly restarted
+// on returning from background (see visibilitychange below), so a long time away doesn't leave a
+// message queued up and waiting the instant you reopen the app.
+const PARTNER_MSG_MIN_INTERVAL_MS = 7*60*1000;
+const PARTNER_MSG_MAX_INTERVAL_MS = 10*60*1000;
+
+function scheduleNextPartnerMessage(){
+  const span = PARTNER_MSG_MAX_INTERVAL_MS - PARTNER_MSG_MIN_INTERVAL_MS;
+  state.ui.nextPartnerMsgAt = Date.now() + PARTNER_MSG_MIN_INTERVAL_MS + Math.random()*span;
+}
+
+function maybeTriggerPartnerMessage(){
+  const partners = Object.entries(state.companions||{}).filter(([id,c]) => c.isPartner);
+  if(partners.length === 0) return;
+  if(state.ui.partnerMessage) return; // one at a time — don't stack a new one over an existing bubble
+  if(!state.ui.nextPartnerMsgAt){ scheduleNextPartnerMessage(); return; } // first time ever — wait out one full window before the very first message too
+  if(Date.now() < state.ui.nextPartnerMsgAt) return; // not yet time
+
+  const [partnerId] = partners[Math.floor(Math.random()*partners.length)];
+  const text = PARTNER_MESSAGES[Math.floor(Math.random()*PARTNER_MESSAGES.length)];
+  state.ui.partnerMessage = { partnerId, text, shownAt: Date.now() };
+  scheduleNextPartnerMessage(); // immediately reschedule for the NEXT one — this is what makes stacking impossible
+  render();
 }
 
 function applyAffectionGain(id, amount){
@@ -7161,6 +8276,8 @@ function renderCompanionProfile(id){
   const cooldownSec = onCooldown ? Math.ceil((def.chatCooldownMs - (now - progress.lastChatAt))/1000) : 0;
   const onSparCooldown = (now - (progress.lastSparAt||0)) < def.sparCooldownMs;
   const sparCooldownSec = onSparCooldown ? Math.ceil((def.sparCooldownMs - (now - (progress.lastSparAt||0)))/1000) : 0;
+  const onHangoutCooldown = (now - (progress.lastHangoutAt||0)) < def.hangoutCooldownMs;
+  const hangoutCooldownMin = onHangoutCooldown ? Math.ceil((def.hangoutCooldownMs - (now - (progress.lastHangoutAt||0)))/60000) : 0;
 
   return `
     <button class="btn btn-ghost" data-companion-back style="margin-bottom:10px;">← Back to Corner</button>
@@ -7182,14 +8299,23 @@ function renderCompanionProfile(id){
     <button class="btn ${onSparCooldown ? 'btn-ghost' : 'btn-teal'} btn-block" style="margin-top:6px;" data-companion-spar="${id}" ${onSparCooldown?'disabled':''}>
       🥊 Spar Together ${onSparCooldown ? `(${sparCooldownSec}s)` : `(+${def.affectionPerSpar} affection)`}
     </button>
+    <button class="btn ${onHangoutCooldown ? 'btn-ghost' : 'btn-teal'} btn-block" style="margin-top:6px;" data-companion-hangout="${id}" ${onHangoutCooldown?'disabled':''}>
+      🌆 Hang Out ${onHangoutCooldown ? `(${hangoutCooldownMin}m)` : `(+${def.affectionPerHangout} affection, free)`}
+    </button>
 
     <div class="panel-title">Gifts</div>
+    ${!nextStage ? `<div style="font-size:11px; color:var(--text-muted); margin-bottom:8px;">Max stage reached — gifts locked so cash doesn't go to waste. (One tradeoff worth knowing: daily decay can still erode affection if this companion goes unattended, and there's currently no way to gift a "buffer" above max to protect against that.)</div>` : ''}
     <div class="btn-row" style="flex-wrap:wrap;">
-      ${GIFT_OPTIONS.map(g => `
-        <button class="btn btn-gold" style="flex:1 1 30%; font-size:11px; padding:10px 6px;" data-companion-gift="${id}" data-gift-key="${g.key}" ${state.economy.cash<g.cost?'disabled':''}>
-          ${g.label}<br>$${g.cost}
+      ${GIFT_OPTIONS.map(g => {
+        const maxed = !nextStage;
+        const stageIndex = companionCurrentStageIndex(def, progress);
+        const actualCost = giftCostForStage(g.cost, stageIndex);
+        return `
+        <button class="btn btn-gold" style="flex:1 1 30%; font-size:11px; padding:10px 6px;" data-companion-gift="${id}" data-gift-key="${g.key}" ${(maxed || state.economy.cash<actualCost)?'disabled':''}>
+          ${maxed ? `${g.label}<br>MAXED` : `${g.label}<br>$${fmtNum(actualCost)} <span style="opacity:0.85;">(+${g.baseGain})</span>`}
         </button>
-      `).join('')}
+      `;
+      }).join('')}
     </div>
   `;
 }
@@ -7235,6 +8361,9 @@ function attachContentHandlers(){
   document.querySelectorAll('[data-companion-spar]').forEach(btn => {
     btn.addEventListener('click', () => sparWithCompanion(btn.dataset.companionSpar));
   });
+  document.querySelectorAll('[data-companion-hangout]').forEach(btn => {
+    btn.addEventListener('click', () => hangOutWithCompanion(btn.dataset.companionHangout));
+  });
   document.querySelectorAll('[data-companion-gift]').forEach(btn => {
     btn.addEventListener('click', () => giveGiftToCompanion(btn.dataset.companionGift, btn.dataset.giftKey));
   });
@@ -7262,6 +8391,14 @@ function attachContentHandlers(){
       }
     });
   }
+  const partnerMsgBubble = document.querySelector('[data-dismiss-partner-msg]');
+  if(partnerMsgBubble){
+    partnerMsgBubble.addEventListener('click', (e) => {
+      e.stopPropagation(); // don't also register as a hype-tap on the fight scene underneath
+      state.ui.partnerMessage = null;
+      render();
+    });
+  }
   const rouletteFab = document.querySelector('[data-open-roulette]');
   if(rouletteFab){
     rouletteFab.addEventListener('click', (e) => {
@@ -7285,6 +8422,12 @@ function attachContentHandlers(){
   });
   document.querySelectorAll('[data-view-powerup]').forEach(el => {
     el.addEventListener('click', () => openPowerUpDetail(el.dataset.viewPowerup));
+  });
+  document.querySelectorAll('[data-open-tier-legend]').forEach(el => {
+    el.addEventListener('click', (e) => {
+      e.stopPropagation(); // parent header has its own click handler that toggles collapse — don't also trigger that
+      openTierLegend();
+    });
   });
   const autoOpenBtn = document.querySelector('[data-toggle-autoopen]');
   if(autoOpenBtn){
@@ -7430,6 +8573,8 @@ function attachContentHandlers(){
   document.querySelectorAll('[data-claim-quest]').forEach(btn => {
     btn.addEventListener('click', () => claimQuest(btn.dataset.claimQuest));
   });
+  const resetQuestsBtn = document.querySelector('[data-reset-quests]');
+  if(resetQuestsBtn) resetQuestsBtn.addEventListener('click', resetDailyQuestsForFee);
   const pushRecoveryBtn = document.querySelector('[data-push-recovery]');
   if(pushRecoveryBtn){
     pushRecoveryBtn.addEventListener('click', () => pushRecoverySnapshot());
@@ -7570,15 +8715,44 @@ document.querySelectorAll('.nav-btn').forEach(btn => {
   btn.addEventListener('click', () => switchToTab(btn.dataset.tab));
 });
 
-/* ---------------------------- FIGHT LOG MODAL ---------------------------- */
+/* ---------------------------- FIGHT LOG / CHANGE LOG MODAL ---------------------------- */
 function renderLogModalBody(){
   if(state.log.length === 0) return '<div class="empty-state">No activity yet. Loops will start producing results shortly.</div>';
   return `<div class="log-feed">${state.log.slice(0,40).map(l => `<div class="log-entry ${l.type}">${escapeHtml(l.text)}</div>`).join('')}</div>`;
 }
 
+function renderChangelogBody(){
+  return GAME_CHANGELOG.map(entry => `
+    <div class="card" style="margin-bottom:8px;">
+      <div style="display:flex; justify-content:space-between; align-items:center;">
+        <div style="font-family:'Oswald',sans-serif; font-weight:700; font-size:13px; color:var(--belt-gold);">${entry.version}</div>
+        <div style="font-size:10px; color:var(--text-muted);">${entry.date}</div>
+      </div>
+      <ul style="margin:8px 0 0 0; padding-left:18px; font-size:12px; line-height:1.5;">
+        ${entry.changes.map(c => `<li>${escapeHtml(c)}</li>`).join('')}
+      </ul>
+    </div>
+  `).join('');
+}
+
+function refreshLogModal(){
+  const isChangelog = state.ui.logModalView === 'changelog';
+  document.getElementById('log-modal-title').textContent = isChangelog ? 'Change Log' : 'Fight Log';
+  document.getElementById('log-modal-body').innerHTML = isChangelog ? renderChangelogBody() : renderLogModalBody();
+  document.getElementById('log-tab-activity').className = `btn ${isChangelog?'btn-ghost':'btn-teal'}`;
+  document.getElementById('log-tab-changelog').className = `btn ${isChangelog?'btn-teal':'btn-ghost'}`;
+}
+
 document.getElementById('log-toggle-btn').addEventListener('click', () => {
-  document.getElementById('log-modal-body').innerHTML = renderLogModalBody();
+  state.ui.logModalView = 'activity'; // always open back to Activity — Change Log is opt-in via the tab
+  refreshLogModal();
   document.getElementById('log-modal').style.display = 'flex';
+});
+document.querySelectorAll('[data-log-tab]').forEach(btn => {
+  btn.addEventListener('click', () => {
+    state.ui.logModalView = btn.dataset.logTab;
+    refreshLogModal();
+  });
 });
 document.getElementById('log-modal-close').addEventListener('click', () => {
   document.getElementById('log-modal').style.display = 'none';
@@ -7776,6 +8950,20 @@ document.getElementById('welcome-modal-close').addEventListener('click', () => {
 document.getElementById('welcome-modal').addEventListener('click', (e) => {
   if(e.target.id === 'welcome-modal') document.getElementById('welcome-modal').style.display = 'none';
   if(e.target.id === 'welcome-modal-ok') document.getElementById('welcome-modal').style.display = 'none';
+});
+
+/* ---------------------------- TIME SKIP REWARD MODAL ---------------------------- */
+document.getElementById('timeskip-modal-close').addEventListener('click', closeTimeSkipModal);
+document.getElementById('timeskip-modal').addEventListener('click', (e) => {
+  if(e.target.id === 'timeskip-modal') closeTimeSkipModal();
+  if(e.target.dataset.timeskipDone !== undefined) closeTimeSkipModal();
+  if(e.target.dataset.timeskipAgain){
+    // Delegated (the button gets replaced every time the modal content re-renders, so a
+    // one-time addEventListener on the button itself wouldn't survive a stack update) —
+    // routes back through useAdSkip() so cost/cooldown checks and the real-money confirm
+    // dialog all still apply on every repeat, not just the first purchase.
+    useAdSkip(e.target.dataset.timeskipAgain);
+  }
 });
 
 /* ---------------------------- LEVEL-UP NOTICES MODAL ---------------------------- */
@@ -7994,7 +9182,9 @@ function startLoop(){
     state.meta.lastTick = Date.now();
     render();
     const logModal = document.getElementById('log-modal');
-    if(logModal && logModal.style.display === 'flex'){
+    if(logModal && logModal.style.display === 'flex' && state.ui.logModalView === 'activity'){
+      // Only live-refresh the Activity tab — the Change Log is static reference content, no need
+      // to re-render it every tick, and doing so would also be harmless but wasteful.
       document.getElementById('log-modal-body').innerHTML = renderLogModalBody();
     }
   }, TICK_MS);
@@ -8005,6 +9195,7 @@ function startLoop(){
   // hammering Firestore's write quota for it.
   setInterval(() => {
     if(state.fighter.name) saveGame();
+    maybeTriggerPartnerMessage();
     if(state.social.leagueId){
       ensureWeeklyReset();
       // Cheap local computation, safe to run every tick — only the actual Firestore push below
@@ -8232,6 +9423,7 @@ function init(){
 document.addEventListener('visibilitychange', () => {
   if(document.visibilityState === 'visible' && state.fighter.name){
     processOfflineProgress();
+    if(state.ui.nextPartnerMsgAt) scheduleNextPartnerMessage(); // restart the 7-10min clock fresh — don't let backgrounded time count toward it
     render();
   } else if(document.visibilityState === 'hidden' && state.fighter.name){
     // Going to background (switching apps, locking the phone) — force a cloud sync right now
