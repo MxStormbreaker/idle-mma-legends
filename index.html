@@ -988,7 +988,7 @@ window.storage = {
 // Semantic version label (MAJOR.MINOR.PATCH), tracking development stages through beta.
 // Displayed in Home -> Settings so testers can confirm which build they're actually running.
 // >>> BUMP THE PATCH NUMBER HERE ON EVERY SHIP, matching the sw.js CACHE_NAME version <<<
-const GAME_VERSION = 'v0.0.33';
+const GAME_VERSION = 'v0.0.39';
 
 /* ---------------------------- STATE ---------------------------- */
 const AVATAR_SETS = {
@@ -1230,6 +1230,7 @@ let state = {
     questProgress: {},       // questId -> progress count
     questsClaimed: [],       // quest ids already claimed today
     spendUSD: 0,             // real-money $ spent today across all IAP paths — see DAILY_SPEND_CAP_USD
+    freeSpinsUsedToday: 0,   // roulette spins granted via watching an ad — see FREE_AD_SPINS_PER_DAY
   },
 };
 
@@ -1883,11 +1884,17 @@ function prestigeStatBonus(){
   return state.prestige.count * PRESTIGE_STAT_BONUS_PER_PRESTIGE;
 }
 
-// SUPER PRESTIGE — now specifically the every-25th-prestige PvE-easing milestone (the stat bonus
+// SUPER PRESTIGE — now specifically the every-50th-prestige PvE-easing milestone (the stat bonus
 // above is no longer tied to this; it's a separate, always-on reward every single prestige).
-// Deliberately NOT a multiple of 10, so it no longer stacks an extra vehicle/partner slot on top
-// of the regular every-10th bonus — slots stay strictly on their own 10-prestige cadence.
-const SUPER_PRESTIGE_INTERVAL = 25;
+// 50 is deliberately not a multiple of the 10-prestige slot cadence's own significance — it just
+// happens to also be a multiple of 10, but slots stay driven purely by their own % 10 check, not
+// by this constant, so changing this number never affects slot timing either way.
+const SUPER_PRESTIGE_INTERVAL = 50;
+// One-time +20 percentage points to the retention RATE (not a flat stat count) specifically on
+// the prestige that hits a Super Prestige milestone — allowed to push retention above the normal
+// retentionCap() for that single prestige, since it's a rare guaranteed reward, not part of the
+// routine grind that cap exists to bound.
+const SUPER_PRESTIGE_RETENTION_BONUS_PCT = 0.20;
 
 // PvE gets a little gentler with every Super Prestige tier EARNED AFTER the regular prestige
 // win-rate ramp caps out (at PRESTIGE_WINRATE_CAP_AT, currently 250) — deliberately NOT counting
@@ -2859,40 +2866,54 @@ function renderCareerTab(){
         </div>
       </div>
     ` : ''}
-    ${state.prestige.count > 0 ? `
-      <div class="card" style="border-color:var(--belt-gold); margin-bottom:8px;">
-        <div style="display:flex; justify-content:space-between; align-items:center;">
-          <div style="font-family:'Oswald',sans-serif; font-weight:700; font-size:14px; color:var(--belt-gold);">💪 Prestige Stat Bonus</div>
-          <div style="font-size:11px; color:var(--champ-teal);">+${prestigeStatBonus()} all stats</div>
-        </div>
-        <div style="font-size:11px; color:var(--text-muted); margin-top:4px;">Every prestige permanently adds +${PRESTIGE_STAT_BONUS_PER_PRESTIGE} to all 8 stats — this stacks forever, no cap.</div>
-      </div>
-    ` : ''}
-    ${superPrestigeDifficultyTier() > 0 ? `
-      <div class="card" style="border-color:var(--champ-teal); margin-bottom:8px;">
-        <div style="display:flex; justify-content:space-between; align-items:center;">
-          <div style="font-family:'Oswald',sans-serif; font-weight:700; font-size:14px; color:var(--champ-teal);">🌟 Super Prestige Tier ${superPrestigeDifficultyTier()}</div>
-          <div style="font-size:11px; color:var(--belt-gold);">PvE range ±${(superPrestigeDifficultyTier()*SUPER_PRESTIGE_OPPONENT_REDUCTION_PER_TIER*100).toFixed(0)}% tighter</div>
-        </div>
-        <div style="font-size:11px; color:var(--text-muted); margin-top:4px;">${prestigesToNextSuperTier()} more prestige${prestigesToNextSuperTier()===1?'':'s'} to Tier ${superPrestigeDifficultyTier()+1}</div>
-        <div style="display:flex; flex-wrap:wrap; align-items:center; gap:5px; margin-top:8px;">
-          ${superPrestigeDifficultyTier() > 10 ? `<span style="font-size:10px; color:var(--text-muted);">+${superPrestigeDifficultyTier()-10} earlier •</span>` : ''}
-          ${Array.from({length: Math.min(10, superPrestigeDifficultyTier())}, (_, i) => superPrestigeDifficultyTier() - Math.min(10, superPrestigeDifficultyTier()) + i + 1).map(n => `
-            <span style="font-family:'Oswald',sans-serif; font-size:10px; font-weight:700; color:#082624; background:var(--champ-teal); padding:3px 8px; border-radius:999px;">SP:${n}</span>
-          `).join('')}
-        </div>
-      </div>
-    ` : (state.prestige.count > 0 ? `
-      <div class="card empty-state" style="padding:14px; margin-bottom:8px;">🌟 Reach prestige ${PRESTIGE_WINRATE_CAP_AT + SUPER_PRESTIGE_INTERVAL} for your first Super Prestige tier: PvE opponent power range narrows ${(SUPER_PRESTIGE_OPPONENT_REDUCTION_PER_TIER*100).toFixed(0)}% tighter on both ends, stacking every ${SUPER_PRESTIGE_INTERVAL} prestiges after that. (Held back until prestige ${PRESTIGE_WINRATE_CAP_AT} specifically so it doesn't double up with the win-rate ramp that's already easing things during your early prestiges.)</div>
-    ` : '')}
     <div class="card" style="${eligible ? 'border-color:var(--belt-gold);' : ''}">
       <div style="font-size:13px; color:${eligible?'var(--text-main)':'var(--text-muted)'};">
         ${eligible
-          ? `You've reached Hall of Fame! Prestige to reset your career and carry forward <strong style="color:var(--belt-gold);">${(previewRetainPct(winsSinceHallOfFame())*100).toFixed(1)}%</strong> of your stats (scales with wins earned SINCE reaching Hall of Fame — ${winsSinceHallOfFame()} so far: 0.5% at Hall of Fame, +0.5% every 200 wins, caps at ${(retentionCap()*100).toFixed(1)}% — keep fighting for a bigger cut if you're not in a rush). Every 10th prestige permanently grants an extra vehicle and partner slot, plus +0.5% to this retention cap (currently ${(retentionCap()*100).toFixed(1)}%).`
+          ? (() => {
+              const pct = previewRetainPct(winsSinceHallOfFame());
+              const totalRetained = STAT_KEYS_ALL.reduce((sum,key) => sum + Math.max(0, Math.round((f.stats[key]||0) * pct)), 0);
+              return `You've reached Hall of Fame! Prestige to reset your career and carry forward <strong style="color:var(--belt-gold);">${(pct*100).toFixed(1)}%</strong> of your current stats — <strong style="color:var(--champ-teal);">~${fmtNum(totalRetained)} total stat points</strong> across all 8 stats, based on where you stand right now. Scales with wins earned SINCE reaching Hall of Fame (${winsSinceHallOfFame()} so far: 0.5% at Hall of Fame, +0.5% every 200 wins, caps at ${(retentionCap()*100).toFixed(1)}% — keep fighting for a bigger cut if you're not in a rush). Every 10th prestige permanently grants an extra vehicle and partner slot, plus +0.5% to this retention cap.`;
+            })()
           : 'Reach Hall of Fame to unlock Prestige — a permanent reset that keeps a slice of your stats (more wins this run = more retained) and unlocks long-term bonuses.'}
       </div>
       ${eligible ? `<button class="btn btn-gold btn-block" style="margin-top:10px;" data-do-prestige>🌟 Prestige Now</button>` : ''}
     </div>
+    ${state.prestige.count > 0 ? `
+      <div class="card" style="border-color:var(--belt-gold); margin-top:8px;">
+        <div style="display:flex; justify-content:space-between; align-items:center;">
+          <div style="font-family:'Oswald',sans-serif; font-weight:700; font-size:14px; color:var(--belt-gold);">💪 Separate Permanent Bonus</div>
+          <div style="font-size:11px; color:var(--champ-teal);">+${prestigeStatBonus()} all stats</div>
+        </div>
+        <div style="font-size:11px; color:var(--text-muted); margin-top:4px;">Not related to the % retained above — this is a flat bonus every prestige adds permanently on top of everything else, stacking forever with no cap. Currently +${PRESTIGE_STAT_BONUS_PER_PRESTIGE} per prestige × ${state.prestige.count} prestiges = +${prestigeStatBonus()}.</div>
+      </div>
+    ` : ''}
+    ${(() => {
+      const remaining = prestigesToNextSuperTier();
+      const windowSize = state.prestige.count < PRESTIGE_WINRATE_CAP_AT ? (PRESTIGE_WINRATE_CAP_AT + SUPER_PRESTIGE_INTERVAL) : SUPER_PRESTIGE_INTERVAL;
+      const progress = Math.max(0, Math.min(1, (windowSize - remaining) / windowSize));
+      const nextTier = superPrestigeDifficultyTier() + 1;
+      const aboutToHit = remaining === 1; // the VERY NEXT prestige triggers it
+
+      if(aboutToHit){
+        return `
+          <div class="card" style="border-color:var(--champ-teal); margin-top:8px; background:rgba(45,212,191,0.08);">
+            <div style="font-family:'Oswald',sans-serif; font-weight:700; font-size:14px; color:var(--champ-teal);">🌟 Your Next Prestige Is a SUPER PRESTIGE!</div>
+            <div style="font-size:12px; color:var(--text-main); margin-top:6px;">
+              Reaching Tier ${nextTier} narrows PvE opponent power range ±${(nextTier*SUPER_PRESTIGE_OPPONENT_REDUCTION_PER_TIER*100).toFixed(0)}% tighter, PLUS a one-time <strong style="color:var(--belt-gold);">+${(SUPER_PRESTIGE_RETENTION_BONUS_PCT*100).toFixed(0)}% retention boost</strong> on top of your normal retention for this prestige only.
+            </div>
+          </div>
+        `;
+      }
+      return `
+        <div class="card" style="margin-top:8px;">
+          <div style="display:flex; justify-content:space-between; align-items:center;">
+            <div style="font-size:12px; color:var(--text-muted);">🌟 Next Super Prestige (Tier ${nextTier})</div>
+            <div style="font-size:11px; color:var(--text-muted);">${remaining} prestige${remaining===1?'':'s'} to go</div>
+          </div>
+          <div class="bar-track" style="margin-top:6px;"><div class="bar-fill xp" style="width:${(progress*100).toFixed(1)}%"></div></div>
+        </div>
+      `;
+    })()}
 
     ${(() => {
       const qty = state.ui.bulkBuyQty === 'max' ? Infinity : state.ui.bulkBuyQty;
@@ -3414,8 +3435,18 @@ const RETENTION_STEP_VALUES = [0.005,0.010,0.015,0.020,0.025,0.030,0.035,0.040];
 // by +0.5%. The win-based step table above stays fixed (still tops out at its own 4.0%), but this
 // growing outer ceiling gives long-term Iron Will investment continued room to matter at high
 // prestige counts, rather than being wasted once a fixed 4% wall is reached.
+//
+// HARD CEILING at 15% (reached around prestige 220 — roughly a year+ of dedicated play): without
+// this, the growth is unbounded and at extreme prestige counts (QA'd this at prestige 1000, which
+// found 54%) retention would start eating its own purpose — a prestige reset should always mean
+// a real reset, not "keep most of what you had." This ceiling only bounds RETENTION specifically;
+// the actual prestige-stacking power growth (+10 flat stats every single prestige, no cap at all)
+// stays completely uncapped, so committed players can still reach effectively unlimited power
+// through sheer prestige count — that growth just doesn't come from retained stats anymore once
+// you're past this ceiling, it comes from the ever-growing flat bonus instead.
+const RETENTION_CAP_CEILING = 0.15;
 function retentionCap(){
-  return 0.04 + Math.floor((state.prestige.count||0) / 10) * 0.005;
+  return Math.min(RETENTION_CAP_CEILING, 0.04 + Math.floor((state.prestige.count||0) / 10) * 0.005);
 }
 
 // PREVIEW percentage — win-based curve ONLY, no Iron Will. This is what's shown on the Career
@@ -3452,13 +3483,7 @@ function executePrestige(){
   // number you saw before committing to prestige.
   const ironWillSurprise = retainPct - previewRetainPct(winsSinceHoF);
 
-  const retained = {};
-  STAT_KEYS_ALL.forEach(key => {
-    retained[key] = Math.max(0, Math.round(state.fighter.stats[key] * retainPct));
-  });
-
   state.prestige.count++;
-  state.prestige.retainedStats = retained;
   const slotMilestone = state.prestige.count % 10 === 0;
   if(slotMilestone){
     state.prestige.vehicleSlots++;
@@ -3469,13 +3494,25 @@ function executePrestige(){
   // every raw multiple of 25. Being a multiple of 25 alone doesn't yet mean anything changed.
   const pastRampCap = state.prestige.count > PRESTIGE_WINRATE_CAP_AT;
   const superPrestigeMilestone = pastRampCap && (state.prestige.count - PRESTIGE_WINRATE_CAP_AT) % SUPER_PRESTIGE_INTERVAL === 0;
+
+  // Super Prestige milestones boost the RETENTION RATE ITSELF by +20 percentage points for this
+  // one prestige specifically — deliberately allowed to exceed the normal retentionCap(), since
+  // this is a rare, guaranteed, one-time spike as a reward for the milestone, not part of the
+  // routine wins-based grind that cap is meant to bound.
+  const effectiveRetainPct = superPrestigeMilestone ? (retainPct + SUPER_PRESTIGE_RETENTION_BONUS_PCT) : retainPct;
+  const retained = {};
+  STAT_KEYS_ALL.forEach(key => {
+    retained[key] = Math.max(0, Math.round(state.fighter.stats[key] * effectiveRetainPct));
+  });
+  state.prestige.retainedStats = retained;
+
   const surpriseNote = ironWillSurprise > 0.0005
     ? ` 🛡️ Iron Will bumped your retention from ${(previewRetainPct(winsSinceHoF)*100).toFixed(1)}% to ${(retainPct*100).toFixed(1)}%!`
     : '';
   if(superPrestigeMilestone){
     const tier = superPrestigeDifficultyTier();
-    pushLog(`🌟 SUPER PRESTIGE #${state.prestige.count}! Tier ${tier} reached — PvE opponent range narrows further. +${PRESTIGE_STAT_BONUS_PER_PRESTIGE} to all stats permanently, as with every prestige.${surpriseNote}`, 'level');
-    showToast(`🌟 SUPER PRESTIGE! Tier ${tier} — PvE range tightened!${surpriseNote}`);
+    pushLog(`🌟 SUPER PRESTIGE #${state.prestige.count}! Tier ${tier} reached — PvE opponent range narrows further, plus a one-time +${(SUPER_PRESTIGE_RETENTION_BONUS_PCT*100).toFixed(0)}% retention boost (${(effectiveRetainPct*100).toFixed(1)}% total this prestige). +${PRESTIGE_STAT_BONUS_PER_PRESTIGE} to all stats permanently, as with every prestige.${surpriseNote}`, 'level');
+    showToast(`🌟 SUPER PRESTIGE! Tier ${tier} — PvE range tightened, +${(SUPER_PRESTIGE_RETENTION_BONUS_PCT*100).toFixed(0)}% bonus retention!${surpriseNote}`);
   } else if(slotMilestone){
     showToast(`Prestige ${state.prestige.count}! New vehicle + partner slot, +${PRESTIGE_STAT_BONUS_PER_PRESTIGE} to all stats.${surpriseNote}`);
   } else {
@@ -3652,10 +3689,31 @@ function applyRoulettePrize(segment){
   return '';
 }
 
+const FREE_AD_SPINS_PER_DAY = 2;
+
 function spinRoulette(){
   if(state.economy.teeth < ROULETTE_SPIN_COST){ showToast('Not enough Teeth'); return; }
-  const segments = getRouletteSegments();
   spendTeeth(ROULETTE_SPIN_COST);
+  runRouletteSpin();
+}
+
+// Free spin via ad — limited per day so it doesn't devalue the Teeth-spending economy, but gives
+// F2P players a real reason to engage with the wheel without needing Teeth at all.
+function watchAdForFreeSpin(){
+  ensureDailyReset();
+  if(state.daily.freeSpinsUsedToday >= FREE_AD_SPINS_PER_DAY){
+    showToast(`Already used today's ${FREE_AD_SPINS_PER_DAY} free ad spins — back tomorrow!`);
+    return;
+  }
+  state.daily.freeSpinsUsedToday++;
+  pushLog(`📺 Watched an ad for a free roulette spin (${state.daily.freeSpinsUsedToday}/${FREE_AD_SPINS_PER_DAY} today)`, 'level');
+  runRouletteSpin();
+}
+
+// Shared by both entry points above — handles the actual wheel animation, prize selection, and
+// reveal. Cost/limit checks happen in the caller BEFORE this runs, not in here.
+function runRouletteSpin(){
+  const segments = getRouletteSegments();
   const winIndex = pickRouletteSegmentIndex(segments);
   const segment = segments[winIndex];
 
@@ -3671,7 +3729,7 @@ function spinRoulette(){
       wheelEl.style.transition = 'transform 3.2s cubic-bezier(0.15,0.68,0.2,1)';
       wheelEl.style.transform = `rotate(${targetAngle}deg)`;
     });
-    document.querySelectorAll('[data-spin-roulette]').forEach(b => b.disabled = true);
+    document.querySelectorAll('[data-spin-roulette], [data-watch-ad-spin]').forEach(b => b.disabled = true);
     setTimeout(() => {
       const resultText = applyRoulettePrize(segment);
       pushLog(`🎡 Roulette: ${segment.label} — ${resultText}`, 'level');
@@ -3728,6 +3786,12 @@ function renderShopRoulette(){
     <button class="btn btn-gold btn-block" style="margin-top:14px;" data-spin-roulette ${canSpin?'':'disabled'}>
       ${canSpin ? `🎡 SPIN — 🦷 ${ROULETTE_SPIN_COST}` : 'Not Enough Teeth'}
     </button>
+    ${(() => {
+      const spinsLeft = FREE_AD_SPINS_PER_DAY - (state.daily.freeSpinsUsedToday||0);
+      return `<button class="btn btn-ghost btn-block" style="margin-top:8px; border-color:var(--champ-teal); color:var(--champ-teal);" data-watch-ad-spin ${spinsLeft<=0?'disabled':''}>
+        📺 Watch Ad for Free Spin (${Math.max(0,spinsLeft)}/${FREE_AD_SPINS_PER_DAY} today)
+      </button>`;
+    })()}
     <div class="panel-title" style="margin-top:16px;">This Cycle's Prizes</div>
     ${segments.map(s => `
       <div class="shop-item-card">
@@ -4301,6 +4365,8 @@ function attachShopHandlers(){
   if(buyDiamondBtn) buyDiamondBtn.addEventListener('click', buyDiamondInTheRough);
   const spinBtn = document.querySelector('[data-spin-roulette]');
   if(spinBtn) spinBtn.addEventListener('click', spinRoulette);
+  const watchAdSpinBtn = document.querySelector('[data-watch-ad-spin]');
+  if(watchAdSpinBtn) watchAdSpinBtn.addEventListener('click', watchAdForFreeSpin);
   const backBtn = document.querySelector('[data-shop-back-to-chests]');
   if(backBtn) backBtn.addEventListener('click', () => { activeShopTab = backBtn.dataset.shopBackToChests || 'chests'; renderShopBody(); });
   document.querySelectorAll('[data-buy-bundle]').forEach(btn => {
@@ -4768,6 +4834,7 @@ function ensureDailyReset(){
     state.daily.questProgress = {};
     state.daily.questsClaimed = [];
     state.daily.spendUSD = 0;
+    state.daily.freeSpinsUsedToday = 0;
   }
   if(!isFirstEver && !isSchemeChangeOnly){
     fireLocalNotification('🎯 New Daily Quests!', 'Fresh quests are up in the League tab.');
@@ -5255,11 +5322,27 @@ async function aggregateGymWarsForWeek(weekKey){
 // UI-facing refresh for the CURRENT week's live standings — this is the only function that
 // writes to gymWarsCache, so the live display can never be clobbered by the payout settlement
 // aggregating a different (past) week concurrently.
+// Reads the Cloud Function's pre-computed summary (one cheap read) instead of the expensive
+// client-side fan-out — falls back to the old live aggregation ONLY if the summary document
+// doesn't exist yet (Cloud Function not deployed) or is stale (hasn't run since the week rolled
+// over yet, a brief window right after a week boundary). This fallback means deploying the
+// Cloud Function is a pure upgrade — the game works correctly either way, just cheaper once it's live.
+async function fetchGymWarsSummary(weekKey){
+  try {
+    const res = await window.storage.get('gymwars_summary:current', true);
+    if(res && res.value){
+      const summary = JSON.parse(res.value);
+      if(summary.weekKey === weekKey) return summary;
+    }
+  } catch(e){ /* no summary yet — fall through to live aggregation below */ }
+  return aggregateGymWarsForWeek(weekKey);
+}
+
 async function refreshGymWars(){
   const weekKey = getWeekKey();
   gymWarsCache = { ...gymWarsCache, loading: true };
   try {
-    const result = await aggregateGymWarsForWeek(weekKey);
+    const result = await fetchGymWarsSummary(weekKey);
     gymWarsCache = { ...result, loading: false };
     leagueStorageOk = true; // list() succeeding (even with zero matches) means the backend is reachable
   } catch(e){
