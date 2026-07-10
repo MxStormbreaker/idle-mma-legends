@@ -1037,12 +1037,15 @@ window.storage = {
 // Semantic version label (MAJOR.MINOR.PATCH), tracking development stages through beta.
 // Displayed in Home -> Settings so testers can confirm which build they're actually running.
 // >>> BUMP THE PATCH NUMBER HERE ON EVERY SHIP, matching the sw.js CACHE_NAME version <<<
-const GAME_VERSION = 'v0.0.69';
+const GAME_VERSION = 'v0.0.70';
 
 // Player-facing changelog, shown in the clipboard/log modal's "Change Log" tab. Most recent
 // entry FIRST. >>> ADD A NEW ENTRY HERE ON EVERY SHIP GOING FORWARD, same routine as bumping
 // GAME_VERSION and sw.js's CACHE_NAME above — this is now a required 3rd step, not optional. <<<
 const GAME_CHANGELOG = [
+  { version:'v0.0.70', date:'2026-07-09', changes:[
+    'Fixed a real bug: the Gym tab was completely broken for everyone above Level 10 — a missing variable declaration (leagueRosterCache) caused the tab to silently fail to render, leaving the previous tab showing with no error message. Found by actually executing the render function in an isolated test rather than just reading the code',
+  ]},
   { version:'v0.0.69', date:'2026-07-09', changes:[
     'Gym Roster member names are now clickable too, same stat/status view as leaderboards — power, tier, and status message refresh automatically each time you visit the League tab',
   ]},
@@ -5537,6 +5540,7 @@ let leagueStorageOk = true;
 
 let leagueRosterLoading = false;
 
+let leagueRosterCache = {};
 async function refreshLeagueRosters(){
   if(leagueRosterLoading) return;
   leagueRosterLoading = true;
