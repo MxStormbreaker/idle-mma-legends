@@ -636,6 +636,7 @@
         <div class="ob-options" id="ob-gender">
           <div class="ob-option" data-val="male">♂ Male</div>
           <div class="ob-option" data-val="female">♀ Female</div>
+          <div class="ob-option" data-val="other">⚧ Other</div>
         </div>
       </div>
 
@@ -644,7 +645,8 @@
         <div class="ob-options" id="ob-orientation">
           <div class="ob-option" data-val="men">Men</div>
           <div class="ob-option" data-val="women">Women</div>
-          <div class="ob-option" data-val="both">Both</div>
+          <div class="ob-option" data-val="other">Other</div>
+          <div class="ob-option" data-val="both">Everyone</div>
         </div>
       </div>
 
@@ -758,6 +760,23 @@
     </div>
   </div>
 
+  <!-- VERSION UPDATE MODAL — shown once, the first time a returning player loads a build newer
+       than the one they last played. -->
+  <div id="version-update-modal" class="modal-overlay" style="display:none;">
+    <div class="modal-card">
+      <div class="modal-header">
+        <div class="modal-title">🆕 New Version Live</div>
+        <button class="modal-close" id="version-update-modal-close">✕</button>
+      </div>
+      <div class="modal-body" style="text-align:center; padding:20px 16px;">
+        <div style="font-family:'Oswald',sans-serif; font-weight:700; font-size:16px; color:var(--belt-gold); margin-bottom:10px;" id="version-update-number"></div>
+        <div style="font-size:13px; color:var(--text-main); line-height:1.6;">
+          Check <span id="version-update-changelog-link" style="color:var(--champ-teal); text-decoration:underline; cursor:pointer; font-weight:600;">change log</span> or explore to find out :)
+        </div>
+      </div>
+    </div>
+  </div>
+
   <!-- LEVEL-UP NOTICES MODAL -->
   <div id="levelup-modal" class="modal-overlay" style="display:none;">
     <div class="modal-card">
@@ -820,6 +839,7 @@
         <div class="modal-title">🛍️ Shop</div>
         <button class="modal-close" id="shop-modal-close">✕</button>
       </div>
+      <div id="shop-balance-bar" style="display:flex; justify-content:center; gap:16px; padding:6px 16px 10px 16px; font-family:'Oswald',sans-serif; font-weight:700; font-size:13px;"></div>
       <div class="shop-tabs">
         <button class="shop-tab-btn active" data-shop-tab="featured">Featured</button>
         <button class="shop-tab-btn" data-shop-tab="chests">Chests</button>
@@ -841,7 +861,7 @@
     <button class="nav-btn active" data-tab="fighter"><span class="nav-icon">🥊<span class="nav-badge" id="badge-fighter" style="display:none;"></span></span>FIGHTER</button>
     <button class="nav-btn" data-tab="career"><span class="nav-icon">🏟️<span class="nav-badge" id="badge-career" style="display:none;"></span></span>CAREER</button>
     <button class="nav-btn" data-tab="gym"><span class="nav-icon">🏋️</span>TRAIN</button>
-    <button class="nav-btn" data-tab="home"><span class="nav-icon">🏠</span>HOME</button>
+    <button class="nav-btn" data-tab="home"><span class="nav-icon">🎨</span>STYLE</button>
     <button class="nav-btn" data-tab="companions"><span class="nav-icon">❤️</span>CORNER</button>
     <button class="nav-btn" data-tab="league"><span class="nav-icon">🌐<span class="nav-badge" id="badge-league" style="display:none;"></span></span>GYM</button>
   </div>
@@ -1015,12 +1035,61 @@ window.storage = {
 // Semantic version label (MAJOR.MINOR.PATCH), tracking development stages through beta.
 // Displayed in Home -> Settings so testers can confirm which build they're actually running.
 // >>> BUMP THE PATCH NUMBER HERE ON EVERY SHIP, matching the sw.js CACHE_NAME version <<<
-const GAME_VERSION = 'v0.0.54';
+const GAME_VERSION = 'v0.0.65';
 
 // Player-facing changelog, shown in the clipboard/log modal's "Change Log" tab. Most recent
 // entry FIRST. >>> ADD A NEW ENTRY HERE ON EVERY SHIP GOING FORWARD, same routine as bumping
 // GAME_VERSION and sw.js's CACHE_NAME above — this is now a required 3rd step, not optional. <<<
 const GAME_CHANGELOG = [
+  { version:'v0.0.65', date:'2026-07-09', changes:[
+    'Fixed a separate, real issue: Gym Equipment (gloves/ropes/mats) cost was compounding at 1.5x/level — $133,010 for a single upgrade by level 20, $7.67M by level 30. Never literally tied to prestige, but behaved the same way. Rebalanced to 1.15x/level ($655 at level 20), matching cash\'s slower, more limited income',
+  ]},
+  { version:'v0.0.64', date:'2026-07-09', changes:[
+    'Moved Garage and Home Perks to the Train tab',
+    'Renamed Home tab to Style tab — cosmetics now lead the tab, remaining content (Fighter Name/Settings/Dev Code) moved to the bottom',
+    'Moved Venue to the Career tab, right under Career Ladder',
+    'Added a live fighter preview and HEX color input (skin/eye/hair/outfit) to the Style tab',
+    'Shop now shows Teeth/Cash balance on every tab including Roulette',
+    'Partner message bubble redesigned: shows as a heart only, tap to reveal the message, tap again to jump straight to that partner — gift requests unlock that exact gift free for one use',
+    'Level-up rewards now scale with level (primary) and prestige (secondary) instead of flat amounts',
+  ]},
+  { version:'v0.0.63', date:'2026-07-09', changes:[
+    'Affection curve halved again (max now 666,670) — plus decay is now proportional for Partner-status companions specifically (~20 days of neglect costs a full stage), while non-partners stay at the flat 24/day nudge',
+    'Fixed a real bug: equipment/vehicle stat bonuses were being amplified by Gym Level and Corner Bonus percentages before those applied, silently inflating gear power the longer a save had been played. Reverted so gear scales purely off what you spent, same as before',
+    'Shop now shows your Teeth and Cash balance at all times, including while spinning Roulette — previously invisible while shopping',
+  ]},
+  { version:'v0.0.62', date:'2026-07-09', changes:[
+    'Full affection curve rewrite — honors the requested 500 base, but growth tuned to stay numerically playable (the literal spec would have required 193.7 billion affection to max — mathematically unreachable)',
+    'New max threshold: 1,333,339 (was 1,300) — roughly 4,000 Trip-gift purchases to fully max a relationship, a genuine long-term goal',
+    'Corner Bonus doubled to match: 10%/companion max (was 5%), 50% aggregate cap (was 25%)',
+  ]},
+  { version:'v0.0.61', date:'2026-07-09', changes:[
+    'Added 10 new gear/vehicle rarity tiers above Eternal (Transcendent through Omnipotent), unlocking one every 50 prestiges',
+    'Added 3 new chest tiers (Platinum/Diamond/Obsidian) to drop them, unlocking one every 100 prestiges, including in the Teeth shop',
+    'These new tiers are chest-exclusive — regular win/loot-box drops stay within the original 10 tiers regardless of prestige',
+  ]},
+  { version:'v0.0.60', date:'2026-07-09', changes:[
+    'Corner Story box is now tappable — opens your full chronological conversation history with that companion, from Stranger up to their current stage',
+  ]},
+  { version:'v0.0.59', date:'2026-07-09', changes:[
+    'Time-skip base rate changed to 10 Teeth/minute (was 5 Teeth for 10 min = 0.5 Teeth/min)',
+    'Added 5 Teeth-skip packages (1/5/15/30/60 min) with efficiency discounts up to 40% for buying bigger chunks directly',
+    'Roulette Time Skip prize capped at 2 min (was 10-30 min) to stay consistent with the new base rate',
+  ]},
+  { version:'v0.0.58', date:'2026-07-09', changes:[
+    'Roulette pity mechanic: each spin taken at the 50-Teeth max cost adds +0.1% bonus Jackpot chance for the rest of the day',
+  ]},
+  { version:'v0.0.57', date:'2026-07-09', changes:[
+    'Added a "New Version Live" popup for returning players when a new build has shipped since they last played, with a direct link to the Change Log',
+  ]},
+  { version:'v0.0.56', date:'2026-07-09', changes:[
+    'Grim Corner Athletics icon changed to a skull',
+    'All Home tab cosmetic/appearance options moved into one collapsed accordion at the bottom of the tab',
+  ]},
+  { version:'v0.0.55', date:'2026-07-09', changes:[
+    'Added "Other" as a gender/orientation option, plus 6 new they/them companions (66 total roster now)',
+    'Corner affection tiers doubled (10->20 stages) and max threshold doubled (650->1300) — repeated Trip-gift spam now takes ~2x longer to max a relationship',
+  ]},
   { version:'v0.0.54', date:'2026-07-09', changes:[
     'Added 2 new roulette prizes: "2 Free Spins" (banked, use anytime) and a low-chance "Nothing" dud',
     'Roulette spin cost now escalates +2 Teeth per spin taken that day, capping at 50, resetting daily',
@@ -1068,7 +1137,8 @@ const GAME_CHANGELOG = [
 /* ---------------------------- STATE ---------------------------- */
 const AVATAR_SETS = {
   male:   ['🥊','🦾','😤','🧔'],
-  female: ['🥊','🦾','😤','👩']
+  female: ['🥊','🦾','😤','👩'],
+  other:  ['🥊','🦾','😤','🧑'],
 };
 
 let state = {
@@ -1077,6 +1147,7 @@ let state = {
     lastTick: Date.now(),
     notifiedPrestigeReady: false, // avoids re-firing the same "prestige ready" notification repeatedly
     lastSavedAt: 0, // set on every save (local or cloud) — lets loadGame() tell which copy is newer
+    lastSeenVersion: '', // triggers the "New version live" popup when GAME_VERSION differs on load
   },
   fighter: {
     name: '',
@@ -1238,6 +1309,7 @@ let state = {
     cosmeticsExpanded: true,  // Home tab Cosmetic Gear list
     questsExpanded: true,     // League tab Daily Quests list
     logModalView: 'activity', // 'activity' | 'changelog' — which tab the clipboard modal shows
+    homeCosmeticsExpanded: true, // expanded by default — Style tab now leads with cosmetics
     weeklyScoreExpanded: true,  // League tab "Gym Wars Score — This Week" list
     gymWarsExpanded: true,      // League tab full Gym Wars section (Top Gyms/Growth/Players)
     teethSpendExpanded: true,   // League tab Teeth Spent Leaderboard
@@ -1311,6 +1383,7 @@ let state = {
     spendUSD: 0,             // real-money $ spent today across all IAP paths — see DAILY_SPEND_CAP_USD
     freeSpinsUsedToday: 0,   // roulette spins granted via watching an ad — see FREE_AD_SPINS_PER_DAY
     rouletteSpinsToday: 0,   // ALL spins today (paid, ad, or bonus) — drives the escalating Teeth cost, see rouletteSpinCost()
+    roulettePityCounter: 0,  // increments once per spin taken AT the 50-Teeth max cost — see rouletteJackpotPityBonus()
     questResetUsedToday: false, // whether today's paid quest reset has already been used
   },
 };
@@ -1477,6 +1550,12 @@ function renderFaceMarkup(appearance, skin, cx, headCY){
     <line x1="${cx-9}" y1="${headCY-5+browLift}" x2="${cx-2.5}" y2="${headCY-5.5}" stroke="${browShade}" stroke-width="1.6" stroke-linecap="round"/>
     <line x1="${cx+2.5}" y1="${headCY-5.5}" x2="${cx+9}" y2="${headCY-5+browLift}" stroke="${browShade}" stroke-width="1.6" stroke-linecap="round"/>
   `;
+}
+
+// Shared HEX input for any color picker — sits alongside the swatch buttons rather than
+// replacing them, letting players type an exact color instead of only picking from presets.
+function renderHexInput(fieldKey, currentValue){
+  return `<input type="text" class="hex-input" data-set-hex="${fieldKey}" value="${escapeAttr(currentValue)}" maxlength="7" placeholder="#RRGGBB" style="width:78px; padding:5px 7px; font-size:11px; font-family:monospace; background:var(--bg-panel-raised); border:1px solid var(--border-soft); border-radius:6px; color:var(--text-main);">`;
 }
 
 function renderFighterRig(pose, appearance, mirror=false){
@@ -1753,6 +1832,21 @@ async function fireLocalNotification(title, body){
 // UI should read from, not state.fighter.stats directly, so gear actually matters in fights.
 function effectiveStats(){
   const result = { ...state.fighter.stats };
+  // Multiplicative bonuses apply to BASE stats only (training + retained-from-prestige) — NOT to
+  // equipment/vehicles, which was the actual bug: gear was being added to the running total
+  // BEFORE these percentages applied, silently inflating it by up to 1.8x (20% gym level x 50%
+  // Corner Bonus) beyond its nominal value. Since gym level and Corner Bonus both take sustained
+  // playtime to build up (correlating with prestige count even without a direct formula tying
+  // them together), that inflation compounded worse the longer a save had been played, which is
+  // what read as "equipment scaling with prestige." Reverted so money spent on gear buys a
+  // stable, predictable amount of power again, same as prestigeBonus already correctly does.
+  if(state.social.leagueId){
+    const pct = gymLevelBonusPct();
+    if(pct > 0) STAT_KEYS_ALL.forEach(key => { result[key] = Math.round((result[key] || 0) * (1 + pct)); });
+  }
+  const cornerPct = cornerBonusPct();
+  if(cornerPct > 0) STAT_KEYS_ALL.forEach(key => { result[key] = Math.round((result[key] || 0) * (1 + cornerPct)); });
+
   Object.values(state.fighter.equipment).forEach(item => {
     if(!item) return;
     Object.entries(item.statBonuses).forEach(([key, val]) => {
@@ -1765,12 +1859,6 @@ function effectiveStats(){
       result[key] = (result[key] || 0) + val;
     });
   });
-  if(state.social.leagueId){
-    const pct = gymLevelBonusPct();
-    if(pct > 0) STAT_KEYS_ALL.forEach(key => { result[key] = Math.round((result[key] || 0) * (1 + pct)); });
-  }
-  const cornerPct = cornerBonusPct();
-  if(cornerPct > 0) STAT_KEYS_ALL.forEach(key => { result[key] = Math.round((result[key] || 0) * (1 + cornerPct)); });
   const prestigeBonus = prestigeStatBonus();
   if(prestigeBonus > 0) STAT_KEYS_ALL.forEach(key => { result[key] = (result[key] || 0) + prestigeBonus; });
   return result;
@@ -1789,20 +1877,6 @@ function computeStatBreakdown(key){
   let running = state.fighter.stats[key] || 0;
   steps.push({ label:'Base (training + retained from prestige)', delta:running, running, type:'base' });
 
-  Object.values(state.fighter.equipment).forEach(item => {
-    if(!item || !item.statBonuses[key]) return;
-    const val = item.statBonuses[key];
-    running += val;
-    steps.push({ label:itemDisplayName(item), delta:val, running, type:'gear' });
-  });
-
-  Object.values(state.garage).forEach(vehicle => {
-    if(!vehicle || !vehicle.statBonuses[key]) return;
-    const val = vehicle.statBonuses[key];
-    running += val;
-    steps.push({ label:`${vehicle.rarityName} ${vehicle.name}`, delta:val, running, type:'vehicle' });
-  });
-
   if(state.social.leagueId){
     const pct = gymLevelBonusPct();
     if(pct > 0){
@@ -1818,6 +1892,20 @@ function computeStatBreakdown(key){
     running = Math.round(running * (1+cornerPct));
     steps.push({ label:`Corner Bonus (+${(cornerPct*100).toFixed(1)}%)`, delta:running-before, running, type:'pct' });
   }
+
+  Object.values(state.fighter.equipment).forEach(item => {
+    if(!item || !item.statBonuses[key]) return;
+    const val = item.statBonuses[key];
+    running += val;
+    steps.push({ label:itemDisplayName(item), delta:val, running, type:'gear' });
+  });
+
+  Object.values(state.garage).forEach(vehicle => {
+    if(!vehicle || !vehicle.statBonuses[key]) return;
+    const val = vehicle.statBonuses[key];
+    running += val;
+    steps.push({ label:`${vehicle.rarityName} ${vehicle.name}`, delta:val, running, type:'vehicle' });
+  });
 
   const prestigeBonus = prestigeStatBonus();
   if(prestigeBonus > 0){
@@ -2333,28 +2421,35 @@ function updateCombatAnimation(){
 // would be disruptive rather than exciting. Every 10th level upgrades to a bigger, TARGETED bonus
 // (aimed at your weakest stat, like the roulette's own Targeted Training prize) with its own toast,
 // since milestone levels are rare enough that a little extra fanfare doesn't get old.
+// Scales primarily with level (the main driver), with a smaller additional prestige factor —
+// "slightly with prestige" as requested, not the dominant term. Verified: Lv1/Pr0 -> +1 stat/$12/
+// +1 Teeth; Lv60/Pr0 -> +5 stat/$130/+4 Teeth; Lv60/Pr300 -> +17 stat/$520/+11 Teeth. Balanced
+// growth, not runaway.
 const LEVELUP_BONUS_POOL = [
   { weight:55, apply: () => {
       const stat = STAT_KEYS_ALL[Math.floor(Math.random()*STAT_KEYS_ALL.length)];
-      state.fighter.stats[stat] += 1;
-      return `+1 ${capitalize(stat)}`;
+      const amt = 1 + Math.floor(state.fighter.level/15) + Math.floor((state.prestige.count||0)/25);
+      state.fighter.stats[stat] += amt;
+      return `+${amt} ${capitalize(stat)}`;
     } },
   { weight:35, apply: () => {
-      const amt = 10 + state.fighter.level*2;
+      const amt = Math.round((10 + state.fighter.level*2) * (1 + (state.prestige.count||0)*0.01));
       state.economy.cash += amt;
       return `+$${amt}`;
     } },
   { weight:10, apply: () => {
-      state.economy.teeth += 1;
-      return `+1 🦷`;
+      const amt = 1 + Math.floor(state.fighter.level/20) + Math.floor((state.prestige.count||0)/40);
+      state.economy.teeth += amt;
+      return `+${amt} 🦷`;
     } },
 ];
 
 function applyLevelUpBonus(){
   if(state.fighter.level % 10 === 0){
     const stat = findWeakestStats(1)[0];
-    state.fighter.stats[stat] += 3;
-    const text = `+3 ${capitalize(stat)} (weakest stat)`;
+    const amt = 3 + Math.floor(state.fighter.level/10) + Math.floor((state.prestige.count||0)/15);
+    state.fighter.stats[stat] += amt;
+    const text = `+${amt} ${capitalize(stat)} (weakest stat)`;
     showToast(`⭐ Level ${state.fighter.level}! ${text}`);
     return text;
   }
@@ -2524,8 +2619,8 @@ function showTimeSkipRewardModal(data){
 
   let againBtnHtml = '';
   if(lastMethod === 'teeth'){
-    const canAfford = state.economy.teeth >= 5;
-    againBtnHtml = `<button class="btn btn-gold btn-block" style="margin-top:12px;" data-timeskip-again="teeth" ${canAfford?'':'disabled'}>⏩ Skip Again — 🦷5</button>`;
+    const canAfford = state.economy.teeth >= data.pkgCost;
+    againBtnHtml = `<button class="btn btn-gold btn-block" style="margin-top:12px;" data-timeskip-again-teeth="${data.pkgMins},${data.pkgCost}" ${canAfford?'':'disabled'}>⏩ Skip Again — 🦷${data.pkgCost} (${data.pkgMins}min)</button>`;
   } else if(lastMethod === 'money'){
     againBtnHtml = `<button class="btn btn-gold btn-block" style="margin-top:12px;" data-timeskip-again="money">⏩ Skip Again — $10</button>`;
   } else if(lastMethod === 'ad'){
@@ -2553,6 +2648,17 @@ function showTimeSkipRewardModal(data){
 function closeTimeSkipModal(){
   state.ui.timeSkipStack = [];
   document.getElementById('timeskip-modal').style.display = 'none';
+}
+
+// Shown once per version — the first time a RETURNING player (not a brand new one, see
+// state.meta.lastSeenVersion being pre-set at fighter creation) loads a build newer than the one
+// they last played.
+function checkVersionUpdate(){
+  if(!state.meta.lastSeenVersion || state.meta.lastSeenVersion === GAME_VERSION) return;
+  document.getElementById('version-update-number').textContent = `New version live: ${GAME_VERSION}`;
+  document.getElementById('version-update-modal').style.display = 'flex';
+  state.meta.lastSeenVersion = GAME_VERSION;
+  scheduleSave();
 }
 
 function showWelcomeBackModal(data){
@@ -2773,7 +2879,7 @@ function getCornerTeamMembers(){
   return Object.entries(state.companions)
     .filter(([id, c]) => !c.isPartner && COMPANION_DEFS[id])
     .map(([id, c]) => ({ def: COMPANION_DEFS[id], progress: c }))
-    .filter(({def, progress}) => companionCurrentStageIndex(def, progress) >= 7) // Close or better
+    .filter(({def, progress}) => companionCurrentStageIndex(def, progress) >= 14) // Close or better (out of 20 stages now)
     .sort((a,b) => b.progress.affection - a.progress.affection)
     .slice(0, CORNER_TEAM_MAX_VISIBLE)
     .map(({def}) => def);
@@ -2846,13 +2952,19 @@ function renderFighterTab(){
       ${renderPosterDecor(f.appearance.poster)}
       ${(() => {
         if(!state.ui.partnerMessage) return '';
-        if(Date.now() - state.ui.partnerMessage.shownAt > 6000){ state.ui.partnerMessage = null; return ''; }
-        const def = COMPANION_DEFS[state.ui.partnerMessage.partnerId];
+        const msg = state.ui.partnerMessage;
+        const expiryMs = msg.revealed ? 10000 : 300000; // unrevealed hearts wait up to 5min to be noticed; revealed text lingers 10s
+        if(Date.now() - msg.shownAt > expiryMs){ state.ui.partnerMessage = null; return ''; }
+        const def = COMPANION_DEFS[msg.partnerId];
         if(!def) return '';
-        return `
-          <div class="partner-message-bubble" data-dismiss-partner-msg>
+        return msg.revealed ? `
+          <div class="partner-message-bubble" data-open-partner-msg>
             <span class="heart-icon">❤️</span>
-            <span class="msg-text"><span class="msg-name">${escapeHtml(def.name.split(' ')[0])}:</span> "${escapeHtml(state.ui.partnerMessage.text)}"</span>
+            <span class="msg-text"><span class="msg-name">${escapeHtml(def.name.split(' ')[0])}:</span> "${escapeHtml(msg.text)}"${msg.giftKey ? `<br><span style="opacity:0.85; font-size:10px;">💌 Tap to go see ${escapeHtml(def.name.split(' ')[0])} — a gift they asked for is unlocked free</span>` : ''}</span>
+          </div>
+        ` : `
+          <div class="partner-message-bubble" data-reveal-partner-msg style="padding:8px 10px;">
+            <span class="heart-icon" style="font-size:20px;">❤️</span>
           </div>
         `;
       })()}
@@ -3014,6 +3126,14 @@ function renderCareerTab(){
       </div>
     </div>
 
+    <div class="panel-title">Venue</div>
+    <div class="card">
+      <div style="font-family:'Oswald',sans-serif; font-size:15px; font-weight:600;">🏆 ${f.tier} Ring</div>
+      <div style="font-size:12px; color:var(--text-muted); margin-top:4px;">
+        A ${currentVenue()}-sided ring. Your ring gains sides — and gold trim at the top tiers — as you climb the career ladder, all the way to an 11-sided ring at Hall of Fame.
+      </div>
+    </div>
+
     <div class="panel-title">Record</div>
     <div class="card" style="display:flex; justify-content:space-around; text-align:center;">
       <div><div style="font-family:'Oswald',sans-serif; font-size:22px; font-weight:700; color:var(--champ-teal);">${f.wins}</div><div style="font-size:11px; color:var(--text-muted);">Wins</div></div>
@@ -3166,7 +3286,28 @@ const RARITY_TIERS = [
   { tier:8,  name:'Divine',   color:'#FBBF24', statPointsMin:125, statPointsMax:207 },
   { tier:9,  name:'Celestial',color:'#22D3EE', statPointsMin:180, statPointsMax:297 },
   { tier:10, name:'Eternal',  color:'#F472B6', statPointsMin:260, statPointsMax:432 },
+  // Tiers 11-20 — locked behind prestige count (every 50 prestiges unlocks the next one, see
+  // maxUnlockedGearTier() below), continuing the SAME ~1.54x per-tier growth curve implied by
+  // tiers 1-10, rather than an arbitrary new jump.
+  { tier:11, name:'Transcendent', color:'#A78BFA', statPointsMin:412,   statPointsMax:685,   prestigeRequired:50  },
+  { tier:12, name:'Ethereal',     color:'#38BDF8', statPointsMin:653,   statPointsMax:1086,  prestigeRequired:100 },
+  { tier:13, name:'Astral',       color:'#FB7185', statPointsMin:1036,  statPointsMax:1722,  prestigeRequired:150 },
+  { tier:14, name:'Cosmic',       color:'#FACC15', statPointsMin:1643,  statPointsMax:2731,  prestigeRequired:200 },
+  { tier:15, name:'Primordial',   color:'#4ADE80', statPointsMin:2606,  statPointsMax:4331,  prestigeRequired:250 },
+  { tier:16, name:'Absolute',     color:'#F97316', statPointsMin:4133,  statPointsMax:6869,  prestigeRequired:300 },
+  { tier:17, name:'Infinite',     color:'#E879F9', statPointsMin:6555,  statPointsMax:10894, prestigeRequired:350 },
+  { tier:18, name:'Sovereign',    color:'#FDE047', statPointsMin:10396, statPointsMax:17278, prestigeRequired:400 },
+  { tier:19, name:'Godlike',      color:'#F43F5E', statPointsMin:16488, statPointsMax:27403, prestigeRequired:450 },
+  { tier:20, name:'Omnipotent',   color:'#FFFFFF', statPointsMin:26150, statPointsMax:43461, prestigeRequired:500 },
 ];
+
+// The 10 base tiers (Common-Eternal) are always available. Tiers 11-20 unlock one at a time every
+// 50 prestiges. Used to cap what chests/loot can actually roll, regardless of a chest's own
+// tierRange reaching higher — see buyChest() and generateLootItem() callers.
+function maxUnlockedGearTier(){
+  const bonusTiers = Math.min(10, Math.floor((state.prestige.count||0) / 50));
+  return 10 + bonusTiers;
+}
 
 const STAT_KEYS_ALL = ['power','speed','defense','stamina','chin','technique','slip','mental'];
 
@@ -3453,15 +3594,22 @@ const GYM_EQUIPMENT = {
   sports_psych: { icon:'🧠', name:'Sports Psychologist', desc:'Boosts mental — small chance to rally and heal mid-fight', statKey:'mental', statLabel:'Mental' },
 };
 
+// Was 1.5x/level — compounded so fast that a single upgrade hit $133,010 by level 20 and $7.67
+// MILLION by level 30, which behaved like a runaway/unbounded curve (similar to a prestige-scale
+// system) even though it was never literally formula-tied to prestige. Cash is a comparatively
+// slow, limited resource, so this needed its own gentler curve — 1.15x/level instead, verified:
+// level 20 -> $655 (was $133,010), level 50 -> $43,346, a genuine long-term goal instead of an
+// effective hard wall.
+const GYM_UPGRADE_GROWTH_RATE = 1.15;
 function gymUpgradeCost(key){
   const g = state.gym[key];
-  return Math.round(g.baseCost * Math.pow(1.5, g.level));
+  return Math.round(g.baseCost * Math.pow(GYM_UPGRADE_GROWTH_RATE, g.level));
 }
 
 function purchaseGymUpgrade(key){
   const g = state.gym[key];
   const qty = state.ui.bulkBuyQty === 'max' ? Infinity : state.ui.bulkBuyQty;
-  const { bought, totalCost } = computeBulkBuy(g.level, g.baseCost, 1.5, qty, state.economy.cash);
+  const { bought, totalCost } = computeBulkBuy(g.level, g.baseCost, GYM_UPGRADE_GROWTH_RATE, qty, state.economy.cash);
   if(bought === 0){ showToast('Not enough cash'); return; }
   state.economy.cash -= totalCost;
   g.level += bought;
@@ -3728,9 +3876,15 @@ const POWER_UPS = {
 let activeShopTab = 'featured';
 
 const SHOP_CHESTS = [
-  { key:'bronze',  icon:'🎁', name:'Bronze Chest', tierRange:[1,4],  pulls:1, costTeeth:5 },
-  { key:'silver',  icon:'🎀', name:'Silver Chest', tierRange:[3,7],  pulls:3, costTeeth:12 },
-  { key:'gold',    icon:'💼', name:'Gold Chest',   tierRange:[5,10], pulls:5, costTeeth:25 },
+  { key:'bronze',   icon:'🎁', name:'Bronze Chest',   tierRange:[1,4],   pulls:1, costTeeth:5,   prestigeRequired:0   },
+  { key:'silver',   icon:'🎀', name:'Silver Chest',   tierRange:[3,7],   pulls:3, costTeeth:12,  prestigeRequired:0   },
+  { key:'gold',     icon:'💼', name:'Gold Chest',     tierRange:[5,10],  pulls:5, costTeeth:25,  prestigeRequired:0   },
+  // New tiers, gated every 100 prestiges — by the time each unlocks, the separate 50-prestige
+  // gear-tier gate (maxUnlockedGearTier) has already opened up roughly half of that chest's own
+  // tierRange, with the top end reached as an aspirational target for continued prestiging.
+  { key:'platinum', icon:'🏆', name:'Platinum Chest', tierRange:[10,15], pulls:6, costTeeth:45,  prestigeRequired:100 },
+  { key:'diamond',  icon:'💠', name:'Diamond Chest',  tierRange:[13,18], pulls:7, costTeeth:70,  prestigeRequired:200 },
+  { key:'obsidian', icon:'⬛', name:'Obsidian Chest',  tierRange:[16,20], pulls:8, costTeeth:100, prestigeRequired:300 },
 ];
 
 const SHOP_COSMETICS = [
@@ -3756,6 +3910,16 @@ const ROULETTE_REFRESH_MS = 3*24*60*60*1000; // prize set refreshes every 3 days
 function rouletteSpinCost(){
   ensureDailyReset();
   return Math.min(ROULETTE_SPIN_COST_MAX, ROULETTE_SPIN_COST + (state.daily.rouletteSpinsToday||0) * ROULETTE_SPIN_COST_STEP);
+}
+
+// Pity mechanic — every spin taken AT the 50-Teeth max cost adds +0.1% flat chance of landing
+// Jackpot specifically (not a reweight of the whole table, an ADDITIVE bonus roll checked before
+// the normal weighted pick), stacking for the rest of the day, resetting with everything else at
+// the daily boundary. Capped at 50% as a sanity ceiling — 500 max-cost spins in a day is already
+// an extreme edge case, no need to let it approach certainty.
+function rouletteJackpotPityBonus(){
+  ensureDailyReset();
+  return Math.min(0.5, (state.daily.roulettePityCounter||0) * 0.001);
 }
 
 // Scales roulette rewards with actual progression (level, power, career tier, prestige count) so
@@ -3793,7 +3957,7 @@ function findWeakestStats(count){
 const ROULETTE_PRIZE_POOL = [
   { type:'cash',      icon:'💰', weight:24, label:()=>{ const mult = rouletteScalingMultiplier(); const amt = Math.round((150+Math.floor(Math.random()*350))*mult); return `$${amt} Cash`; } },
   { type:'teeth',     icon:'🦷', weight:20, label:()=>{ const mult = rouletteScalingMultiplier(); const amt = Math.round((5+Math.floor(Math.random()*11))*mult); return `${amt} Teeth`; } },
-  { type:'timeSkip',  icon:'⏩', weight:18, label:()=>{ const mins = [10,20,30][Math.floor(Math.random()*3)]; return `${mins}m Time Skip`; } },
+  { type:'timeSkip',  icon:'⏩', weight:18, label:()=>{ const mins = [1,2][Math.floor(Math.random()*2)]; return `${mins}m Time Skip`; } }, // capped at 2x the base 1-min Teeth-package rate — see TEETH_SKIP_PACKAGES
   { type:'statBoost', icon:'📈', weight:14, label:()=>{ const n = 3+Math.floor(Math.random()*2); return `Targeted Training (${n} stats)`; } },
   { type:'freeWins',  icon:'🏆', weight:12, label:()=>'10 Free Wins' },
   { type:'gear',      icon:'🎁', weight:12, label:()=>'Specialty Gear' },
@@ -3910,6 +4074,9 @@ function spinRoulette(){
   const cost = rouletteSpinCost();
   if(state.economy.teeth < cost){ showToast('Not enough Teeth'); return; }
   spendTeeth(cost);
+  if(cost >= ROULETTE_SPIN_COST_MAX){
+    state.daily.roulettePityCounter = (state.daily.roulettePityCounter||0) + 1;
+  }
   runRouletteSpin();
 }
 
@@ -3931,8 +4098,11 @@ function watchAdForFreeSpin(){
 function runRouletteSpin(){
   ensureDailyReset();
   state.daily.rouletteSpinsToday = (state.daily.rouletteSpinsToday||0) + 1; // counts EVERY spin (paid/ad/bonus) toward the next paid spin's escalating cost
+  updateShopBalanceBar(); // reflect the spent Teeth immediately, not just when the tab next re-renders
   const segments = getRouletteSegments();
-  const winIndex = pickRouletteSegmentIndex(segments);
+  const pityBonus = rouletteJackpotPityBonus();
+  const jackpotIndex = segments.findIndex(s => s.type === 'jackpot');
+  const winIndex = (jackpotIndex !== -1 && Math.random() < pityBonus) ? jackpotIndex : pickRouletteSegmentIndex(segments);
   const segment = segments[winIndex];
 
   // Spin the wheel visually, then reveal the prize once the CSS transition finishes.
@@ -3952,12 +4122,14 @@ function runRouletteSpin(){
       const resultText = applyRoulettePrize(segment);
       pushLog(`🎡 Roulette: ${segment.label} — ${resultText}`, 'level');
       render();
+      updateShopBalanceBar();
       showRouletteResult(segment, resultText);
     }, 3300);
   } else {
     const resultText = applyRoulettePrize(segment);
     pushLog(`🎡 Roulette: ${segment.label} — ${resultText}`, 'level');
     render();
+    updateShopBalanceBar();
     showRouletteResult(segment, resultText);
   }
   render();
@@ -3994,6 +4166,10 @@ function renderShopRoulette(){
     <div style="font-size:11px; color:var(--text-muted); margin-bottom:10px;">
       ${ROULETTE_SPIN_COST} 🦷 base cost, +${ROULETTE_SPIN_COST_STEP} per spin already taken today (caps at ${ROULETTE_SPIN_COST_MAX} 🦷, resets daily). New prize set in ${refreshHrs}h.
       ${bonusSpins > 0 ? `<br><span style="color:var(--champ-teal);">🔁 ${bonusSpins} bonus free spin${bonusSpins===1?'':'s'} banked — used automatically before Teeth.</span>` : ''}
+      ${(() => {
+        const pity = rouletteJackpotPityBonus();
+        return pity > 0 ? `<br><span style="color:var(--belt-gold);">💎 +${(pity*100).toFixed(1)}% bonus Jackpot chance today (from ${state.daily.roulettePityCounter} max-cost spin${state.daily.roulettePityCounter===1?'':'s'}) — resets tomorrow.</span>` : '';
+      })()}
     </div>
     <div class="roulette-wrap">
       <div class="roulette-pointer">▼</div>
@@ -4257,18 +4433,20 @@ function buyCashBundle(key){
 
 function buyChest(chestKey){
   const chest = SHOP_CHESTS.find(c => c.key === chestKey);
+  if((chest.prestigeRequired||0) > (state.prestige.count||0)){ showToast(`Requires ${chest.prestigeRequired} prestiges`); return; }
   if(state.economy.teeth < chest.costTeeth){ showToast('Not enough Teeth'); return; }
   spendTeeth(chest.costTeeth);
   const results = [];
+  const maxTier = maxUnlockedGearTier();
   for(let i=0; i<chest.pulls; i++){
-    const tier = Math.floor(chest.tierRange[0] + Math.random()*(chest.tierRange[1]-chest.tierRange[0]+1));
+    const tier = Math.min(maxTier, Math.floor(chest.tierRange[0] + Math.random()*(chest.tierRange[1]-chest.tierRange[0]+1)));
     const isVehiclePull = Math.random() < 0.08;
     if(isVehiclePull){
       const category = getActiveVehicleSlotKeys()[Math.floor(Math.random()*getActiveVehicleSlotKeys().length)];
-      const vehicle = generateVehicleItem(category, Math.min(10,tier), 'shop');
+      const vehicle = generateVehicleItem(category, Math.min(maxTier,tier), 'shop');
       results.push({ type:'vehicle', item:vehicle, result:autoResolveVehicle(vehicle, false) });
     } else {
-      const item = generateLootItem(Math.min(10,tier), null, 'shop');
+      const item = generateLootItem(Math.min(maxTier,tier), null, 'shop');
       results.push({ type:'gear', item, result:autoResolveItem(item, false) });
     }
   }
@@ -4384,11 +4562,33 @@ function buyDiamondInTheRough(){
   });
 }
 
+// New base rate: 10 Teeth = 1 minute (was a flat 5 Teeth for 10 minutes — 0.5 Teeth/min, far too
+// cheap once roulette/gift rewards were rescaled for late-game). Larger packages get a real
+// efficiency discount off that linear base rate, rewarding buying bigger chunks directly instead
+// of repeating the smallest package — verified this lands cleanly at 10/9/8/7/6 Teeth-per-minute
+// across the five tiers.
+const TEETH_SKIP_PACKAGES = [
+  { mins:1,  cost:10  },
+  { mins:5,  cost:45  },
+  { mins:15, cost:120 },
+  { mins:30, cost:210 },
+  { mins:60, cost:360 },
+];
+
+function executeTeethSkip(mins, cost){
+  if(state.economy.teeth < cost){ showToast('Not enough Teeth'); return; }
+  spendTeeth(cost);
+  const result = runInstantTimeSkip(mins, `spent 🦷${cost} for ${mins}min`);
+  showTimeSkipRewardModal({ minutes:mins, method:'teeth', pkgMins:mins, pkgCost:cost, ...result });
+  render();
+  renderShopBody();
+  scheduleSave();
+}
+
 function useAdSkip(method){
   const now = Date.now();
   const onCooldown = (now - state.adSkip.lastUsedAt) < state.adSkip.cooldownMs;
   if(method === 'ad' && onCooldown){ showToast('Ad skip on cooldown'); return; }
-  if(method === 'teeth' && state.economy.teeth < 5){ showToast('Not enough Teeth'); return; }
   if(method === 'money'){
     if(realPurchasesLocked()){ showToast('🔒 Real-money purchases are locked for testing'); return; }
     if(!canSpendRealMoney(10)){
@@ -4405,9 +4605,8 @@ function useAdSkip(method){
 }
 
 function executeAdSkip(method, now){
-  if(method === 'teeth') spendTeeth(5);
   if(method === 'ad') state.adSkip.lastUsedAt = now;
-  const sourceLabel = method === 'ad' ? 'watched ad' : method === 'teeth' ? 'spent 5 Teeth' : 'real-money skip';
+  const sourceLabel = method === 'ad' ? 'watched ad' : 'real-money skip';
   const result = runInstantTimeSkip(10, sourceLabel);
   showTimeSkipRewardModal({ minutes:10, method, ...result });
   render();
@@ -4415,7 +4614,17 @@ function executeAdSkip(method, now){
   scheduleSave();
 }
 
+function updateShopBalanceBar(){
+  const balanceBar = document.getElementById('shop-balance-bar');
+  if(!balanceBar) return;
+  balanceBar.innerHTML = `
+    <span style="color:var(--belt-gold);">🦷 ${fmtNum(state.economy.teeth)}</span>
+    <span style="color:var(--champ-teal);">$${fmtNum(state.economy.cash)}</span>
+  `;
+}
+
 function renderShopBody(){
+  updateShopBalanceBar();
   const body = document.getElementById('shop-modal-body');
   if(!body) return;
   if(activeShopTab === 'featured') body.innerHTML = renderShopFeatured();
@@ -4470,16 +4679,19 @@ function renderShopFeatured(){
 }
 
 function renderShopChests(){
-  return SHOP_CHESTS.map(chest => `
-    <div class="shop-item-card">
+  return SHOP_CHESTS.map(chest => {
+    const locked = (chest.prestigeRequired||0) > (state.prestige.count||0);
+    return `
+    <div class="shop-item-card" style="${locked?'opacity:0.6;':''}">
       <div class="shop-item-icon">${chest.icon}</div>
       <div class="shop-item-info">
         <div class="shop-item-name">${chest.name}</div>
-        <div class="shop-item-desc">${chest.pulls} pull${chest.pulls>1?'s':''} • Tier ${chest.tierRange[0]}-${chest.tierRange[1]}</div>
+        <div class="shop-item-desc">${locked ? `🔒 Requires ${chest.prestigeRequired} prestiges` : `${chest.pulls} pull${chest.pulls>1?'s':''} • Tier ${chest.tierRange[0]}-${chest.tierRange[1]}`}</div>
       </div>
-      <button class="shop-buy-btn teeth" data-buy-chest="${chest.key}" ${state.economy.teeth<chest.costTeeth?'disabled':''}>🦷 ${chest.costTeeth}</button>
+      <button class="shop-buy-btn teeth" data-buy-chest="${chest.key}" ${(locked||state.economy.teeth<chest.costTeeth)?'disabled':''}>${locked?'🔒':`🦷 ${chest.costTeeth}`}</button>
     </div>
-  `).join('') + `<div id="shop-back-anchor"></div>`;
+  `;
+  }).join('') + `<div id="shop-back-anchor"></div>`;
 }
 
 function renderShopHome(){
@@ -4540,21 +4752,28 @@ function renderShopIdle(){
       </div>
     `}
 
-    <div class="panel-title">Skip Ahead 10 Minutes</div>
-    <div style="font-size:11px; color:var(--text-muted); margin-bottom:10px;">Instantly simulates 10 minutes of training & fighting, just like being away.</div>
+    <div class="panel-title">Skip Ahead</div>
+    <div style="font-size:11px; color:var(--text-muted); margin-bottom:10px;">Instantly simulates training & fighting, just like being away.</div>
     <div class="shop-item-card">
       <div class="shop-item-icon">📺</div>
-      <div class="shop-item-info"><div class="shop-item-name">Watch an Ad</div><div class="shop-item-desc">${onCooldown ? `Cooldown: ${remainMin}m` : 'Free — 30 min cooldown'}</div></div>
+      <div class="shop-item-info"><div class="shop-item-name">Watch an Ad — 10 min</div><div class="shop-item-desc">${onCooldown ? `Cooldown: ${remainMin}m` : 'Free — 30 min cooldown'}</div></div>
       <button class="shop-buy-btn real" data-adskip="ad" ${onCooldown?'disabled':''}>${onCooldown?'⏳':'Watch'}</button>
     </div>
-    <div class="shop-item-card">
-      <div class="shop-item-icon">🦷</div>
-      <div class="shop-item-info"><div class="shop-item-name">Spend Teeth</div><div class="shop-item-desc">No cooldown</div></div>
-      <button class="shop-buy-btn teeth" data-adskip="teeth" ${state.economy.teeth<5?'disabled':''}>🦷 5</button>
-    </div>
+    <div class="panel-title" style="margin-top:14px; font-size:12px;">🦷 Teeth Packages <span style="color:var(--text-muted); font-weight:400;">(10 Teeth/min base — bigger packages cost less per minute)</span></div>
+    ${TEETH_SKIP_PACKAGES.map(pkg => {
+      const rate = (pkg.cost/pkg.mins).toFixed(1);
+      const discount = Math.round((1 - (pkg.cost/pkg.mins)/10) * 100);
+      return `
+        <div class="shop-item-card">
+          <div class="shop-item-icon">⏩</div>
+          <div class="shop-item-info"><div class="shop-item-name">${pkg.mins} min</div><div class="shop-item-desc">${rate} Teeth/min${discount>0?` — ${discount}% off base rate`:''}</div></div>
+          <button class="shop-buy-btn teeth" data-teethskip="${pkg.mins},${pkg.cost}" ${state.economy.teeth<pkg.cost?'disabled':''}>🦷 ${pkg.cost}</button>
+        </div>
+      `;
+    }).join('')}
     <div class="shop-item-card">
       <div class="shop-item-icon">💳</div>
-      <div class="shop-item-info"><div class="shop-item-name">Instant Skip</div><div class="shop-item-desc">Real money, no cooldown</div></div>
+      <div class="shop-item-info"><div class="shop-item-name">Instant Skip — 10 min</div><div class="shop-item-desc">Real money, no cooldown</div></div>
       <button class="shop-buy-btn real" data-adskip="money" ${(realPurchasesLocked()||!canSpendRealMoney(10))?'disabled':''}>${realPurchasesLocked() ? '🔒 Locked' : (canSpendRealMoney(10)?'$10':'Cap reached')}</button>
     </div>
   `;
@@ -4578,6 +4797,12 @@ function attachShopHandlers(){
   });
   document.querySelectorAll('[data-adskip]').forEach(btn => {
     btn.addEventListener('click', () => useAdSkip(btn.dataset.adskip));
+  });
+  document.querySelectorAll('[data-teethskip]').forEach(btn => {
+    btn.addEventListener('click', () => {
+      const [mins, cost] = btn.dataset.teethskip.split(',').map(Number);
+      executeTeethSkip(mins, cost);
+    });
   });
   const watchSpeedAdBtn = document.querySelector('[data-watch-speed-ad]');
   if(watchSpeedAdBtn) watchSpeedAdBtn.addEventListener('click', watchAdForSpeedBoost);
@@ -4682,7 +4907,7 @@ function renameFighter(rawName){
    safe from that limitation; only the shared roster/member-count is "social".
    ======================================================================== */
 const LEAGUES = [
-  { id:'redcorner',  name:'Grim Corner Athletics', icon:'🥋', abbr:'GCA' },
+  { id:'redcorner',  name:'Grim Corner Athletics', icon:'💀', abbr:'GCA' },
   { id:'ironfist',   name:'Iron Fist Gym',        icon:'👊', abbr:'IFG' },
   { id:'goldenbelt', name:'Golden Belt Academy',  icon:'🏅', abbr:'GBA' },
   { id:'blackout',   name:'Blackout Boxing Club', icon:'🥊', abbr:'BBC' },
@@ -5053,6 +5278,21 @@ function addWeeklyWins(n){
 const QUEST_SCHEME_VERSION = 2;
 
 const AFFECTION_DAILY_DECAY = 24;
+
+// Proportional decay specifically for Partner-status companions — 5% of their CURRENT stage's
+// width per day, landing at roughly 20 days of total neglect to drop a full stage. Falls back to
+// the flat AFFECTION_DAILY_DECAY as a floor (never less than that), though in practice partner-
+// tier stage widths are always large enough that this floor is never actually the binding one.
+function partnerDecayAmount(id, progress){
+  const def = COMPANION_DEFS[id];
+  if(!def) return AFFECTION_DAILY_DECAY;
+  const stageIdx = companionCurrentStageIndex(def, progress);
+  const prevThreshold = stageIdx > 0 ? def.stages[stageIdx-1].threshold : 0;
+  const currentThreshold = def.stages[stageIdx].threshold;
+  const stageWidth = currentThreshold - prevThreshold;
+  return Math.max(AFFECTION_DAILY_DECAY, Math.round(stageWidth * 0.05));
+}
+
 function ensureDailyReset(){
   const today = getDateKey();
   if(state.daily.dateKey === today && state.daily.questSchemeVersion === QUEST_SCHEME_VERSION) return;
@@ -5073,23 +5313,31 @@ function ensureDailyReset(){
     state.daily.spendUSD = 0;
     state.daily.freeSpinsUsedToday = 0;
     state.daily.rouletteSpinsToday = 0;
+    state.daily.roulettePityCounter = 0;
     state.daily.questResetUsedToday = false;
-    // Daily affection decay — relationships need occasional upkeep, or they quietly drift. 24/day
-    // is easily offset by ~6 chats or ~3 spars (roughly 2-3 minutes of actual engagement spread
-    // across the day), so this is a "check in occasionally" nudge, not a punishing treadmill.
-    // Deliberately does NOT revoke Partner status once earned, even if affection decays below the
-    // original Dating threshold — it lowers message frequency and Corner Bonus % (both scale off
-    // current affection), which is real stakes without a nasty "they broke up with you" surprise.
+    // Daily affection decay — relationships need occasional upkeep, or they quietly drift.
+    // Non-partner companions: flat 24/day, easily offset by ~6 chats or ~3 spars (a "check in
+    // occasionally" nudge, not a punishing treadmill). PARTNER-status companions decay
+    // proportionally instead — 5% of their current stage's width per day, which lands at roughly
+    // 20 days of total neglect to drop a full stage. This is deliberately a real, felt downside
+    // specifically for staying actively engaged with the GAME while ignoring your actual
+    // partner(s) — flat 24/day would be meaningless at partner-tier stage widths (tens of
+    // thousands+), so it wouldn't function as the intended "you can lose a level" stakes at all.
+    // Still doesn't revoke Partner status itself even if this pushes affection below the original
+    // Dating threshold — see the note on that further down.
     if(!isFirstEver && state.companions){
       let decayedCount = 0;
-      Object.values(state.companions).forEach(c => {
+      let partnerDecayedCount = 0;
+      Object.entries(state.companions).forEach(([id, c]) => {
         if(c.affection > 0){
-          c.affection = Math.max(0, c.affection - AFFECTION_DAILY_DECAY);
+          const decayAmt = c.isPartner ? partnerDecayAmount(id, c) : AFFECTION_DAILY_DECAY;
+          c.affection = Math.max(0, c.affection - decayAmt);
           decayedCount++;
+          if(c.isPartner) partnerDecayedCount++;
         }
       });
       if(decayedCount > 0){
-        pushLog(`💔 ${decayedCount} companion relationship${decayedCount===1?'':'s'} decayed -${AFFECTION_DAILY_DECAY} affection from a day away — check in to keep things warm.`, 'level');
+        pushLog(`💔 ${decayedCount} companion relationship${decayedCount===1?'':'s'} decayed from a day away${partnerDecayedCount>0?` — ${partnerDecayedCount} at a steeper rate since they're your partner`:''} — check in to keep things warm.`, 'level');
       }
     }
   }
@@ -5759,16 +6007,17 @@ async function checkGymWarsPayout(){
 // summary string for the log/toast.
 function grantBonusChestPulls(count, tierRange, label){
   const summaries = [];
+  const maxTier = maxUnlockedGearTier();
   for(let i=0; i<count; i++){
-    const tier = Math.floor(tierRange[0] + Math.random()*(tierRange[1]-tierRange[0]+1));
+    const tier = Math.min(maxTier, Math.floor(tierRange[0] + Math.random()*(tierRange[1]-tierRange[0]+1)));
     const isVehiclePull = Math.random() < 0.08;
     if(isVehiclePull){
       const category = getActiveVehicleSlotKeys()[Math.floor(Math.random()*getActiveVehicleSlotKeys().length)];
-      const vehicle = generateVehicleItem(category, Math.min(10,tier), 'reward');
+      const vehicle = generateVehicleItem(category, Math.min(maxTier,tier), 'reward');
       autoResolveVehicle(vehicle, false);
       summaries.push(`${vehicle.rarityName} ${vehicle.name}`);
     } else {
-      const item = generateLootItem(Math.min(10,tier), null, 'reward');
+      const item = generateLootItem(Math.min(maxTier,tier), null, 'reward');
       autoResolveItem(item, false);
       summaries.push(itemDisplayName(item));
     }
@@ -6018,19 +6267,52 @@ async function setMemberRole(targetPlayerId, newRole){
 // uses, so this can never drift out of sync with the real number).
 // Shared by both Gear and Garage — they use the exact same RARITY_TIERS system, so one
 // reference legend covers both rather than needing two near-identical modals.
+// Reconstructs the FULL chronological conversation history up to the player's current stage.
+// No new state tracking needed — dialogue is deterministic (pickDialogueVariant always returns
+// the same line for a given companion+stage), so every past stage's text can be recomputed
+// on-demand rather than needing to log it as it happens.
+function openStoryHistoryModal(id){
+  const def = COMPANION_DEFS[id];
+  const progress = getCompanionProgress(id);
+  const currentIndex = companionCurrentStageIndex(def, progress);
+  const seenStages = def.stages.slice(0, currentIndex + 1);
+
+  document.getElementById('stat-detail-modal-title').textContent = `Story History — ${def.name}`;
+  document.getElementById('stat-detail-modal-body').innerHTML = `
+    <div style="font-size:11px; color:var(--text-muted); margin-bottom:10px;">
+      Your full conversation history with ${def.name.split(' ')[0]}, in order — ${seenStages.length} of ${def.stages.length} stages reached.
+    </div>
+    ${seenStages.map((s,i) => `
+      <div style="padding:10px 0; ${i<seenStages.length-1?'border-bottom:1px solid var(--border-soft);':''}">
+        <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:4px;">
+          <span style="font-family:'Oswald',sans-serif; font-weight:700; font-size:12px; color:var(--belt-gold);">${s.title}</span>
+          <span style="font-size:10px; color:var(--text-muted);">${s.threshold} affection</span>
+        </div>
+        <div style="font-size:12px; color:var(--text-main); line-height:1.5; font-style:italic;">"${escapeHtml(s.text)}"</div>
+      </div>
+    `).join('')}
+  `;
+  document.getElementById('stat-detail-modal').style.display = 'flex';
+}
+
 function openTierLegend(){
   document.getElementById('stat-detail-modal-title').textContent = 'Rarity Tier Reference';
   document.getElementById('stat-detail-modal-body').innerHTML = `
     <div style="font-size:11px; color:var(--text-muted); margin-bottom:10px;">
-      Applies to both Gear and Vehicles — same 10 tiers, same power ranges either way. Actual
-      stat points awarded are randomized within each tier's range when an item drops.
+      Applies to both Gear and Vehicles — same 20 tiers, same power ranges either way. Actual
+      stat points awarded are randomized within each tier's range when an item drops. Tiers 11-20
+      are chest-exclusive (Platinum/Diamond/Obsidian) — regular win/loot-box drops stay within
+      tiers 1-10 regardless of prestige.
     </div>
-    ${RARITY_TIERS.map(t => `
-      <div style="display:flex; justify-content:space-between; align-items:center; padding:7px 0; border-bottom:1px solid var(--border-soft);">
-        <span style="font-weight:700; color:${t.color};">${t.name}</span>
-        <span style="font-size:12px; color:var(--text-muted);">${t.statPointsMin}–${t.statPointsMax} power</span>
+    ${RARITY_TIERS.map(t => {
+      const locked = t.prestigeRequired && t.prestigeRequired > (state.prestige.count||0);
+      return `
+      <div style="display:flex; justify-content:space-between; align-items:center; padding:7px 0; border-bottom:1px solid var(--border-soft); ${locked?'opacity:0.5;':''}">
+        <span style="font-weight:700; color:${t.color};">${t.name}${locked?` 🔒`:''}</span>
+        <span style="font-size:12px; color:var(--text-muted);">${locked ? `Requires ${t.prestigeRequired} prestiges` : `${t.statPointsMin}–${t.statPointsMax} power`}</span>
       </div>
-    `).join('')}
+    `;
+    }).join('')}
   `;
   document.getElementById('stat-detail-modal').style.display = 'flex';
 }
@@ -6726,7 +7008,7 @@ function renderLeagueTab(){
 function renderGymTab(){
   const f = state.fighter;
   return `
-    ${renderExpandCollapseAll(['equipmentExpanded'])}
+    ${renderExpandCollapseAll(['equipmentExpanded','garageExpanded','homePerksExpanded'])}
     ${renderPosterDecor(f.appearance.poster, 'train-tab')}
     <div class="panel-title">Tale of the Tape <span style="color:var(--text-muted); font-size:11px;">(tap a stat for the full breakdown)</span></div>
     <div class="tape tape-2x4">
@@ -6744,13 +7026,13 @@ function renderGymTab(){
       const qty = state.ui.bulkBuyQty === 'max' ? Infinity : state.ui.bulkBuyQty;
       const anyAffordable = Object.entries(GYM_EQUIPMENT).some(([key, equip]) => {
         const g = state.gym[key];
-        return computeBulkBuy(g.level, g.baseCost, 1.5, qty, state.economy.cash).bought > 0;
+        return computeBulkBuy(g.level, g.baseCost, GYM_UPGRADE_GROWTH_RATE, qty, state.economy.cash).bought > 0;
       });
       return renderCollapsibleHeader('Equipment Upgrades', 'equipmentExpanded', anyAffordable) + (state.ui.equipmentExpanded ? `
         ${renderBulkBuyToggle()}
         ${Object.entries(GYM_EQUIPMENT).map(([key, equip]) => {
           const g = state.gym[key];
-          const preview = computeBulkBuy(g.level, g.baseCost, 1.5, qty, state.economy.cash);
+          const preview = computeBulkBuy(g.level, g.baseCost, GYM_UPGRADE_GROWTH_RATE, qty, state.economy.cash);
           const canAfford = preview.bought > 0;
           return `
             <div class="card loop-card">
@@ -6760,6 +7042,54 @@ function renderGymTab(){
                 <div class="loop-desc">${equip.desc} (+${g.bonusPerLevel} ${equip.statLabel}/level)</div>
               </div>
               <button class="btn ${canAfford ? 'btn-gold' : 'btn-ghost'}" style="flex-shrink:0; padding:9px 12px; font-size:12px; text-align:center;" data-gym-buy="${key}" ${canAfford?'':'disabled'}>
+                $${fmtNum(preview.totalCost)}${preview.bought>1?`<br><span style="font-size:9px;">×${preview.bought}</span>`:''}
+              </button>
+            </div>
+          `;
+        }).join('')}
+      ` : '');
+    })()}
+
+    <div class="panel-title" data-toggle-section="garageExpanded" style="cursor:pointer; display:flex; justify-content:space-between; align-items:center;">
+      <span>Garage <span data-open-tier-legend style="cursor:pointer; opacity:0.7; font-size:12px;" title="Rarity tier reference">ℹ️</span> ${state.prestige.vehicleSlots > 1 ? `<span style="color:var(--belt-gold); font-size:11px;">(${getActiveVehicleSlotKeys().length} slots)</span>` : ''}</span><span style="font-size:12px;">${state.ui.garageExpanded ? '▾' : '▸'}</span>
+    </div>
+    ${state.ui.garageExpanded ? `
+    <div class="gear-grid">
+      ${getActiveVehicleSlotKeys().map(key => {
+        const cat = VEHICLE_CATEGORIES[baseCategoryForSlotKey(key)];
+        const vehicle = state.garage[key];
+        const rarity = vehicle ? RARITY_TIERS[vehicle.tier-1] : null;
+        return `
+          <div class="gear-slot ${vehicle ? 'filled' : 'empty'}" style="${vehicle ? `border-color:${rarity.color};` : ''}" data-view-vehicle="${key}">
+            <div class="gear-slot-icon">${cat.icon}</div>
+            <div class="gear-slot-label">${vehicle ? `${vehicle.rarityName} ${vehicle.name}` : vehicleSlotLabel(key)}</div>
+            ${vehicle ? `<div class="gear-slot-power" style="color:${rarity.color};">${vehicle.itemPower}</div>` : ''}
+          </div>
+        `;
+      }).join('')}
+    </div>
+    ` : ''}
+
+    ${(() => {
+      const qty2 = state.ui.bulkBuyQty === 'max' ? Infinity : state.ui.bulkBuyQty;
+      const anyAffordable2 = Object.entries(HOME_PERKS).some(([key, perk]) => {
+        const p = state.homePerks[key];
+        return computeBulkBuy(p.level, p.baseCost, 1.6, qty2, state.economy.cash).bought > 0;
+      });
+      return renderCollapsibleHeader('Home Perks', 'homePerksExpanded', anyAffordable2) + (state.ui.homePerksExpanded ? `
+        ${renderBulkBuyToggle()}
+        ${Object.entries(HOME_PERKS).map(([key, perk]) => {
+          const p = state.homePerks[key];
+          const preview = computeBulkBuy(p.level, p.baseCost, 1.6, qty2, state.economy.cash);
+          const canAfford = preview.bought > 0;
+          return `
+            <div class="card loop-card">
+              <div class="loop-icon">${perk.icon}</div>
+              <div class="loop-info">
+                <div class="loop-title">${perk.name} <span style="color:var(--belt-gold); font-size:11px;">Lv.${p.level}</span></div>
+                <div class="loop-desc">${perk.desc} (+${p.bonusPerLevel}% ${perk.effectLabel}/level)</div>
+              </div>
+              <button class="btn ${canAfford ? 'btn-gold' : 'btn-ghost'}" style="flex-shrink:0; padding:9px 12px; font-size:12px; text-align:center;" data-home-buy="${key}" ${canAfford?'':'disabled'}>
                 $${fmtNum(preview.totalCost)}${preview.bought>1?`<br><span style="font-size:9px;">×${preview.bought}</span>`:''}
               </button>
             </div>
@@ -6850,9 +7180,126 @@ function cycleAppearanceOption(key, options){
 
 function renderHomeTab(){
   const f = state.fighter;
-  const venue = currentVenue();
   return `
-    ${renderExpandCollapseAll(['garageExpanded','homePerksExpanded','cosmeticsExpanded'])}
+    ${renderExpandCollapseAll(['cosmeticsExpanded'])}
+    ${renderCollapsibleHeader('🎨 Cosmetics & Appearance', 'homeCosmeticsExpanded', false)}
+    ${state.ui.homeCosmeticsExpanded ? `
+      <div class="card" style="text-align:center; padding:10px; position:sticky; top:0; z-index:5; background:var(--bg-panel);">
+        <svg viewBox="0 0 140 190" style="width:110px; height:auto;">${renderFighterRig('idle', f.appearance)}</svg>
+        <div style="font-size:10px; color:var(--text-muted); margin-top:2px;">Live preview — updates as you edit below</div>
+      </div>
+      <div class="panel-title">Body & Face</div>
+      <div class="card">
+        <div style="display:flex; justify-content:space-between; align-items:center; padding:6px 0; border-bottom:1px solid var(--border-soft);">
+          <span style="font-size:13px;">🏋️ Build</span>
+          <div style="display:flex; gap:5px; flex-wrap:wrap; justify-content:flex-end;">
+            ${BUILD_KEYS.map(b => `<button class="btn ${f.appearance.build===b?'btn-teal':'btn-ghost'}" style="padding:6px 10px; font-size:10px; text-transform:capitalize;" data-set-build="${b}">${b}</button>`).join('')}
+          </div>
+        </div>
+        <div style="display:flex; justify-content:space-between; align-items:center; padding:6px 0; border-bottom:1px solid var(--border-soft);">
+          <span style="font-size:13px;">👤 Body Shape</span>
+          <button class="btn btn-ghost" style="padding:6px 14px; font-size:11px; text-transform:capitalize;" data-cycle-appearance="bodyShape">${BODY_SHAPES[f.appearance.bodyShape]?.label || f.appearance.bodyShape}</button>
+        </div>
+        <div style="display:flex; justify-content:space-between; align-items:center; padding:6px 0; border-bottom:1px solid var(--border-soft);">
+          <span style="font-size:13px;">🎨 Skin Tone</span>
+          <div style="display:flex; gap:5px; flex-wrap:wrap; justify-content:flex-end; align-items:center;">
+            ${SKIN_TONES.map(c => `<button class="color-swatch ${f.appearance.skin===c?'selected':''}" style="background:${c};" data-set-skin-tone="${c}"></button>`).join('')}
+            ${renderHexInput('skin', f.appearance.skin)}
+          </div>
+        </div>
+        <div style="display:flex; justify-content:space-between; align-items:center; padding:6px 0; border-bottom:1px solid var(--border-soft);">
+          <span style="font-size:13px;">😠 Expression</span>
+          <button class="btn btn-ghost" style="padding:6px 14px; font-size:11px; text-transform:capitalize;" data-cycle-appearance="eyeStyle">${f.appearance.eyeStyle}</button>
+        </div>
+        <div style="display:flex; justify-content:space-between; align-items:center; padding:6px 0;">
+          <span style="font-size:13px;">👁️ Eye Color</span>
+          <div style="display:flex; gap:5px; flex-wrap:wrap; justify-content:flex-end; align-items:center;">
+            ${HAIR_COLORS.map(c => `<button class="color-swatch ${f.appearance.eyeColor===c?'selected':''}" style="background:${c};" data-set-eye-color="${c}"></button>`).join('')}
+            ${renderHexInput('eyeColor', f.appearance.eyeColor)}
+          </div>
+        </div>
+      </div>
+
+      <div class="panel-title">Cosmetic Gear</div>
+      <div class="card">
+        <div style="display:flex; justify-content:space-between; align-items:center; padding:6px 0; border-bottom:1px solid var(--border-soft);">
+          <span style="font-size:13px;">🥊 Gloves</span>
+          <button class="btn ${f.appearance.gloves?'btn-teal':'btn-ghost'}" style="padding:6px 14px; font-size:11px;" data-gear-toggle="gloves">${f.appearance.gloves?'Equipped':'Off'}</button>
+        </div>
+        <div style="display:flex; justify-content:space-between; align-items:center; padding:6px 0; border-bottom:1px solid var(--border-soft);">
+          <span style="font-size:13px;">👟 Shoes</span>
+          <button class="btn ${f.appearance.shoes?'btn-teal':'btn-ghost'}" style="padding:6px 14px; font-size:11px;" data-gear-toggle="shoes">${f.appearance.shoes?'Equipped':'Off'}</button>
+        </div>
+        <div style="display:flex; justify-content:space-between; align-items:center; padding:6px 0;">
+          <span style="font-size:13px;">🎨 Tattoo</span>
+          <button class="btn ${f.appearance.tattoo?'btn-teal':'btn-ghost'}" style="padding:6px 14px; font-size:11px;" data-gear-toggle="tattoo">${f.appearance.tattoo?'Equipped':'Off'}</button>
+        </div>
+      </div>
+
+      <div class="panel-title">Hair & Jewelry</div>
+      <div class="card">
+        <div style="display:flex; justify-content:space-between; align-items:center; padding:6px 0; border-bottom:1px solid var(--border-soft);">
+          <span style="font-size:13px;">💇 Hair Style</span>
+          <button class="btn btn-ghost" style="padding:6px 14px; font-size:11px; text-transform:capitalize;" data-cycle-appearance="hairStyle">${f.appearance.hairStyle}</button>
+        </div>
+        <div style="display:flex; justify-content:space-between; align-items:center; padding:6px 0; border-bottom:1px solid var(--border-soft);">
+          <span style="font-size:13px;">🎨 Hair Color</span>
+          <div style="display:flex; gap:5px; align-items:center; flex-wrap:wrap; justify-content:flex-end;">
+            ${HAIR_COLORS.map(c => `<button class="color-swatch ${f.appearance.hairColor===c?'selected':''}" style="background:${c};" data-set-hair-color="${c}"></button>`).join('')}
+            ${renderHexInput('hairColor', f.appearance.hairColor)}
+          </div>
+        </div>
+        <div style="display:flex; justify-content:space-between; align-items:center; padding:6px 0;">
+          <span style="font-size:13px;">💎 Jewelry</span>
+          <button class="btn ${f.appearance.jewelry?'btn-teal':'btn-ghost'}" style="padding:6px 14px; font-size:11px;" data-gear-toggle="jewelry">${f.appearance.jewelry?'Equipped':'Off'}</button>
+        </div>
+      </div>
+
+      <div class="panel-title">Outfit Color</div>
+      <div class="card">
+        <div style="display:flex; gap:6px; flex-wrap:wrap; align-items:center;">
+          ${GEAR_COLORS.map(c => `<button class="color-swatch large ${f.appearance.gear===c?'selected':''}" style="background:${c};" data-set-outfit-color="${c}"></button>`).join('')}
+          ${renderHexInput('gear', f.appearance.gear)}
+        </div>
+      </div>
+
+      <div class="panel-title">Gym Poster <span style="color:var(--text-muted); font-size:11px;">(shows in the fight scene and Train tab)</span></div>
+      <div class="card">
+        <div class="poster-preview" style="background:${(POSTER_OPTIONS.find(p=>p.key===f.appearance.poster)||POSTER_OPTIONS[0]).bg};">
+          <div class="poster-preview-icon">${(POSTER_OPTIONS.find(p=>p.key===f.appearance.poster)||POSTER_OPTIONS[0]).icon}</div>
+          <div class="poster-preview-label">${(POSTER_OPTIONS.find(p=>p.key===f.appearance.poster)||POSTER_OPTIONS[0]).label}</div>
+        </div>
+        <div class="btn-row" style="flex-wrap:wrap; margin-top:10px;">
+          ${POSTER_OPTIONS.map(p => {
+            const ownedPosters = state.purchasedPosters || [];
+            const isPremium = p.costTeeth > 0;
+            const isOwned = !isPremium || ownedPosters.includes(p.key);
+            if(isOwned){
+              return `<button class="btn ${f.appearance.poster===p.key?'btn-teal':'btn-ghost'}" style="flex:1 1 45%; font-size:11px; padding:8px 6px;" data-set-poster="${p.key}">${p.icon} ${p.label}</button>`;
+            }
+            return `<button class="btn btn-ghost" style="flex:1 1 45%; font-size:11px; padding:8px 6px; border-color:var(--belt-gold);" data-buy-poster="${p.key}" ${state.economy.teeth<p.costTeeth?'disabled':''}>${p.icon} ${p.label} — 🦷${p.costTeeth}</button>`;
+          }).join('')}
+        </div>
+      </div>
+
+      ${(() => {
+        const owned = state.purchasedCosmetics || [];
+        const cos = f.appearance.cosmetics || {};
+        const anyUnequipped = owned.some(key => !cos[key]);
+        return renderCollapsibleHeader('Premium Cosmetics', 'cosmeticsExpanded', anyUnequipped) + (state.ui.cosmeticsExpanded ? `
+          <div class="card">
+            ${owned.length === 0
+              ? `<div style="font-size:12px; color:var(--text-muted); text-align:center; padding:8px 0;">No premium cosmetics owned yet — check the Shop's Cosmetics tab.</div>`
+              : SHOP_COSMETICS.filter(c => owned.includes(c.key)).map((c,i,arr) => `
+                <div style="display:flex; justify-content:space-between; align-items:center; padding:6px 0; ${i<arr.length-1?'border-bottom:1px solid var(--border-soft);':''}">
+                  <span style="font-size:13px;">${c.icon} ${c.name}</span>
+                  <button class="btn ${cos[c.key]?'btn-teal':'btn-ghost'}" style="padding:6px 14px; font-size:11px;" data-toggle-cosmetic="${c.key}">${cos[c.key]?'Equipped':'Equip'}</button>
+                </div>
+              `).join('')}
+          </div>
+        ` : '');
+      })()}
+    ` : ''}
     <div class="panel-title">Fighter Name</div>
     <div class="card">
       ${state.ui.editingFighterName ? `
@@ -6868,170 +7315,6 @@ function renderHomeTab(){
         </div>
       `}
     </div>
-
-    <div class="panel-title" data-toggle-section="garageExpanded" style="cursor:pointer; display:flex; justify-content:space-between; align-items:center;">
-      <span>Garage <span data-open-tier-legend style="cursor:pointer; opacity:0.7; font-size:12px;" title="Rarity tier reference">ℹ️</span> ${state.prestige.vehicleSlots > 1 ? `<span style="color:var(--belt-gold); font-size:11px;">(${getActiveVehicleSlotKeys().length} slots)</span>` : ''}</span><span style="font-size:12px;">${state.ui.garageExpanded ? '▾' : '▸'}</span>
-    </div>
-    ${state.ui.garageExpanded ? `
-    <div class="gear-grid">
-      ${getActiveVehicleSlotKeys().map(key => {
-        const cat = VEHICLE_CATEGORIES[baseCategoryForSlotKey(key)];
-        const vehicle = state.garage[key];
-        const rarity = vehicle ? RARITY_TIERS[vehicle.tier-1] : null;
-        return `
-          <div class="gear-slot ${vehicle ? 'filled' : 'empty'}" style="${vehicle ? `border-color:${rarity.color};` : ''}" data-view-vehicle="${key}">
-            <div class="gear-slot-icon">${cat.icon}</div>
-            <div class="gear-slot-label">${vehicle ? `${vehicle.rarityName} ${vehicle.name}` : vehicleSlotLabel(key)}</div>
-            ${vehicle ? `<div class="gear-slot-power" style="color:${rarity.color};">${vehicle.itemPower}</div>` : ''}
-          </div>
-        `;
-      }).join('')}
-    </div>
-    ` : ''}
-
-    ${(() => {
-      const qty = state.ui.bulkBuyQty === 'max' ? Infinity : state.ui.bulkBuyQty;
-      const anyAffordable = Object.entries(HOME_PERKS).some(([key, perk]) => {
-        const p = state.homePerks[key];
-        return computeBulkBuy(p.level, p.baseCost, 1.6, qty, state.economy.cash).bought > 0;
-      });
-      return renderCollapsibleHeader('Home Perks', 'homePerksExpanded', anyAffordable) + (state.ui.homePerksExpanded ? `
-        ${renderBulkBuyToggle()}
-        ${Object.entries(HOME_PERKS).map(([key, perk]) => {
-          const p = state.homePerks[key];
-          const preview = computeBulkBuy(p.level, p.baseCost, 1.6, qty, state.economy.cash);
-          const canAfford = preview.bought > 0;
-          return `
-            <div class="card loop-card">
-              <div class="loop-icon">${perk.icon}</div>
-              <div class="loop-info">
-                <div class="loop-title">${perk.name} <span style="color:var(--belt-gold); font-size:11px;">Lv.${p.level}</span></div>
-                <div class="loop-desc">${perk.desc} (+${p.bonusPerLevel}% ${perk.effectLabel}/level)</div>
-              </div>
-              <button class="btn ${canAfford ? 'btn-gold' : 'btn-ghost'}" style="flex-shrink:0; padding:9px 12px; font-size:12px; text-align:center;" data-home-buy="${key}" ${canAfford?'':'disabled'}>
-                $${fmtNum(preview.totalCost)}${preview.bought>1?`<br><span style="font-size:9px;">×${preview.bought}</span>`:''}
-              </button>
-            </div>
-          `;
-        }).join('')}
-      ` : '');
-    })()}
-
-    <div class="panel-title">Venue</div>
-    <div class="card">
-      <div style="font-family:'Oswald',sans-serif; font-size:15px; font-weight:600;">🏆 ${f.tier} Ring</div>
-      <div style="font-size:12px; color:var(--text-muted); margin-top:4px;">
-        A ${venue}-sided ring. Your ring gains sides — and gold trim at the top tiers — as you climb the career ladder, all the way to an 11-sided ring at Hall of Fame.
-      </div>
-    </div>
-
-    <div class="panel-title">Body & Face</div>
-    <div class="card">
-      <div style="display:flex; justify-content:space-between; align-items:center; padding:6px 0; border-bottom:1px solid var(--border-soft);">
-        <span style="font-size:13px;">🏋️ Build</span>
-        <div style="display:flex; gap:5px; flex-wrap:wrap; justify-content:flex-end;">
-          ${BUILD_KEYS.map(b => `<button class="btn ${f.appearance.build===b?'btn-teal':'btn-ghost'}" style="padding:6px 10px; font-size:10px; text-transform:capitalize;" data-set-build="${b}">${b}</button>`).join('')}
-        </div>
-      </div>
-      <div style="display:flex; justify-content:space-between; align-items:center; padding:6px 0; border-bottom:1px solid var(--border-soft);">
-        <span style="font-size:13px;">👤 Body Shape</span>
-        <button class="btn btn-ghost" style="padding:6px 14px; font-size:11px; text-transform:capitalize;" data-cycle-appearance="bodyShape">${BODY_SHAPES[f.appearance.bodyShape]?.label || f.appearance.bodyShape}</button>
-      </div>
-      <div style="display:flex; justify-content:space-between; align-items:center; padding:6px 0; border-bottom:1px solid var(--border-soft);">
-        <span style="font-size:13px;">🎨 Skin Tone</span>
-        <div style="display:flex; gap:5px; flex-wrap:wrap; justify-content:flex-end;">
-          ${SKIN_TONES.map(c => `<button class="color-swatch ${f.appearance.skin===c?'selected':''}" style="background:${c};" data-set-skin-tone="${c}"></button>`).join('')}
-        </div>
-      </div>
-      <div style="display:flex; justify-content:space-between; align-items:center; padding:6px 0; border-bottom:1px solid var(--border-soft);">
-        <span style="font-size:13px;">😠 Expression</span>
-        <button class="btn btn-ghost" style="padding:6px 14px; font-size:11px; text-transform:capitalize;" data-cycle-appearance="eyeStyle">${f.appearance.eyeStyle}</button>
-      </div>
-      <div style="display:flex; justify-content:space-between; align-items:center; padding:6px 0;">
-        <span style="font-size:13px;">👁️ Eye Color</span>
-        <div style="display:flex; gap:5px; flex-wrap:wrap; justify-content:flex-end;">
-          ${HAIR_COLORS.map(c => `<button class="color-swatch ${f.appearance.eyeColor===c?'selected':''}" style="background:${c};" data-set-eye-color="${c}"></button>`).join('')}
-        </div>
-      </div>
-    </div>
-
-    <div class="panel-title">Cosmetic Gear</div>
-    <div class="card">
-      <div style="display:flex; justify-content:space-between; align-items:center; padding:6px 0; border-bottom:1px solid var(--border-soft);">
-        <span style="font-size:13px;">🥊 Gloves</span>
-        <button class="btn ${f.appearance.gloves?'btn-teal':'btn-ghost'}" style="padding:6px 14px; font-size:11px;" data-gear-toggle="gloves">${f.appearance.gloves?'Equipped':'Off'}</button>
-      </div>
-      <div style="display:flex; justify-content:space-between; align-items:center; padding:6px 0; border-bottom:1px solid var(--border-soft);">
-        <span style="font-size:13px;">👟 Shoes</span>
-        <button class="btn ${f.appearance.shoes?'btn-teal':'btn-ghost'}" style="padding:6px 14px; font-size:11px;" data-gear-toggle="shoes">${f.appearance.shoes?'Equipped':'Off'}</button>
-      </div>
-      <div style="display:flex; justify-content:space-between; align-items:center; padding:6px 0;">
-        <span style="font-size:13px;">🎨 Tattoo</span>
-        <button class="btn ${f.appearance.tattoo?'btn-teal':'btn-ghost'}" style="padding:6px 14px; font-size:11px;" data-gear-toggle="tattoo">${f.appearance.tattoo?'Equipped':'Off'}</button>
-      </div>
-    </div>
-
-    <div class="panel-title">Hair & Jewelry</div>
-    <div class="card">
-      <div style="display:flex; justify-content:space-between; align-items:center; padding:6px 0; border-bottom:1px solid var(--border-soft);">
-        <span style="font-size:13px;">💇 Hair Style</span>
-        <button class="btn btn-ghost" style="padding:6px 14px; font-size:11px; text-transform:capitalize;" data-cycle-appearance="hairStyle">${f.appearance.hairStyle}</button>
-      </div>
-      <div style="display:flex; justify-content:space-between; align-items:center; padding:6px 0; border-bottom:1px solid var(--border-soft);">
-        <span style="font-size:13px;">🎨 Hair Color</span>
-        <div style="display:flex; gap:5px;">
-          ${HAIR_COLORS.map(c => `<button class="color-swatch ${f.appearance.hairColor===c?'selected':''}" style="background:${c};" data-set-hair-color="${c}"></button>`).join('')}
-        </div>
-      </div>
-      <div style="display:flex; justify-content:space-between; align-items:center; padding:6px 0;">
-        <span style="font-size:13px;">💎 Jewelry</span>
-        <button class="btn ${f.appearance.jewelry?'btn-teal':'btn-ghost'}" style="padding:6px 14px; font-size:11px;" data-gear-toggle="jewelry">${f.appearance.jewelry?'Equipped':'Off'}</button>
-      </div>
-    </div>
-
-    <div class="panel-title">Outfit Color</div>
-    <div class="card">
-      <div style="display:flex; gap:6px; flex-wrap:wrap;">
-        ${GEAR_COLORS.map(c => `<button class="color-swatch large ${f.appearance.gear===c?'selected':''}" style="background:${c};" data-set-outfit-color="${c}"></button>`).join('')}
-      </div>
-    </div>
-
-    <div class="panel-title">Gym Poster <span style="color:var(--text-muted); font-size:11px;">(shows in the fight scene and Train tab)</span></div>
-    <div class="card">
-      <div class="poster-preview" style="background:${(POSTER_OPTIONS.find(p=>p.key===f.appearance.poster)||POSTER_OPTIONS[0]).bg};">
-        <div class="poster-preview-icon">${(POSTER_OPTIONS.find(p=>p.key===f.appearance.poster)||POSTER_OPTIONS[0]).icon}</div>
-        <div class="poster-preview-label">${(POSTER_OPTIONS.find(p=>p.key===f.appearance.poster)||POSTER_OPTIONS[0]).label}</div>
-      </div>
-      <div class="btn-row" style="flex-wrap:wrap; margin-top:10px;">
-        ${POSTER_OPTIONS.map(p => {
-          const ownedPosters = state.purchasedPosters || [];
-          const isPremium = p.costTeeth > 0;
-          const isOwned = !isPremium || ownedPosters.includes(p.key);
-          if(isOwned){
-            return `<button class="btn ${f.appearance.poster===p.key?'btn-teal':'btn-ghost'}" style="flex:1 1 45%; font-size:11px; padding:8px 6px;" data-set-poster="${p.key}">${p.icon} ${p.label}</button>`;
-          }
-          return `<button class="btn btn-ghost" style="flex:1 1 45%; font-size:11px; padding:8px 6px; border-color:var(--belt-gold);" data-buy-poster="${p.key}" ${state.economy.teeth<p.costTeeth?'disabled':''}>${p.icon} ${p.label} — 🦷${p.costTeeth}</button>`;
-        }).join('')}
-      </div>
-    </div>
-
-    ${(() => {
-      const owned = state.purchasedCosmetics || [];
-      const cos = f.appearance.cosmetics || {};
-      const anyUnequipped = owned.some(key => !cos[key]);
-      return renderCollapsibleHeader('Premium Cosmetics', 'cosmeticsExpanded', anyUnequipped) + (state.ui.cosmeticsExpanded ? `
-        <div class="card">
-          ${owned.length === 0
-            ? `<div style="font-size:12px; color:var(--text-muted); text-align:center; padding:8px 0;">No premium cosmetics owned yet — check the Shop's Cosmetics tab.</div>`
-            : SHOP_COSMETICS.filter(c => owned.includes(c.key)).map((c,i,arr) => `
-              <div style="display:flex; justify-content:space-between; align-items:center; padding:6px 0; ${i<arr.length-1?'border-bottom:1px solid var(--border-soft);':''}">
-                <span style="font-size:13px;">${c.icon} ${c.name}</span>
-                <button class="btn ${cos[c.key]?'btn-teal':'btn-ghost'}" style="padding:6px 14px; font-size:11px;" data-toggle-cosmetic="${c.key}">${cos[c.key]?'Equipped':'Equip'}</button>
-              </div>
-            `).join('')}
-        </div>
-      ` : '');
-    })()}
 
     <div class="panel-title">Settings</div>
     <div class="card" style="display:flex; justify-content:space-between; align-items:center; margin-bottom:8px;">
@@ -7099,6 +7382,7 @@ function renderHomeTab(){
         `;
       })()}
     </div>
+
   `;
 }
 
@@ -7124,6 +7408,74 @@ function pickDialogueVariant(seed, options){
 // variants per stage so companions sharing a role+gender don't all recite the identical line.
 // Starting with Coach; other roles still use the single shared TEMPLATES arc below until they
 // get the same treatment in a follow-up pass.
+// Shared across all roles for Other-gender (they/them) companions — one pool rather than
+// per-role, since this currently only needs to serve 6 companions total. Still a genuinely
+// distinct voice (warm, observant, unhurried) rather than a reskin of the masculine/feminine
+// pools, just not further split by role the way those are.
+const NEUTRAL_DIALOGUE_POOL = (firstName) => [
+  [
+    `${firstName} watches from across the room, unreadable, taking their time before saying anything at all.`,
+    `${firstName} clocks your work with a quiet, appraising look and goes back to what they were doing.`,
+    `${firstName} doesn't acknowledge you yet — just a brief glance, filed away for later.`,
+    `${firstName} is polite but distant, the way you'd be with anyone new.`,
+  ],
+  [
+    `"You're better than you think," ${firstName} says, like it costs them something to admit it this early.`,
+    `${firstName} actually remembers your name today instead of just gesturing at you.`,
+    `${firstName} corrects something about your approach, brief and matter-of-fact.`,
+    `${firstName} nods once, like they've decided you're worth watching.`,
+  ],
+  [
+    `${firstName} starts greeting you by name now — a real acknowledgment, not just a glance.`,
+    `"Not bad," ${firstName} says, which from them is close to a compliment.`,
+    `${firstName} starts remembering small details about you without being told twice.`,
+    `${firstName} lets a dry joke slip, testing whether you'll catch it.`,
+  ],
+  [
+    `${firstName} starts staying a little longer than they need to, and neither of you mentions it.`,
+    `${firstName} texts you something with zero context, just "thought you'd like this."`,
+    `${firstName} starts introducing you to others like you're someone worth knowing.`,
+    `${firstName} shows up early, like they were hoping to catch you before anyone else did.`,
+  ],
+  [
+    `"You've actually grown on me," ${firstName} admits — the closest thing to warmth they've shown yet.`,
+    `${firstName} asks about your life outside of this, genuinely, and waits for the real answer.`,
+    `${firstName} defends you to someone else without you ever asking them to.`,
+    `${firstName} lets you see something unguarded, just for a moment.`,
+  ],
+  [
+    `${firstName} shows up somewhere you didn't expect them, "just passing by," conveniently often.`,
+    `${firstName} starts remembering exactly how you like things without needing reminders.`,
+    `${firstName} lingers after you'd normally part ways, like they're not ready to yet.`,
+    `${firstName} catches themself watching you and covers it smoothly, almost too smoothly.`,
+  ],
+  [
+    `"I don't usually let people in like this," ${firstName} says, sitting closer than they need to.`,
+    `${firstName} starts finding reasons to be near you that don't quite hold up under scrutiny.`,
+    `${firstName} goes quiet mid-sentence, like they almost said something they weren't ready to.`,
+    `${firstName} starts showing up for things that have nothing to do with why you first met.`,
+  ],
+  [
+    `${firstName} catches your eye and doesn't look away first, for once.`,
+    `${firstName} walks with you longer than the path actually requires.`,
+    `${firstName} gets quietly protective when someone else tries to take up your time.`,
+    `${firstName} starts every check-in asking how you're doing before anything else.`,
+  ],
+  [
+    `${firstName} finally says it plainly: "I've been into you for a while now." "Took you long enough," you tell them.`,
+    `${firstName} shows up somewhere important to you, unprompted, just to be there.`,
+    `${firstName} stops pretending the extra time together was ever about anything else.`,
+    `${firstName} reaches for your hand like it's the most natural thing in the world now.`,
+  ],
+  [
+    `${firstName} shows up for everything now, and doesn't pretend it's casual anymore.`,
+    `${firstName} talks about your future like it's automatically shared.`,
+    `${firstName} introduces you simply as "mine," and doesn't take it back.`,
+    `${firstName} still teases you mid-argument, mid-everything. Some things don't change.`,
+  ],
+];
+
+
 const ROLE_DIALOGUE_POOLS = {
   coach: {
     masculine: (firstName) => [
@@ -7824,18 +8176,38 @@ function buildCompanionStages(name, role, pronoun){
       `${firstName} starts treating your health like it's personally ${she==='she'?'her':'his'} responsibility — because now it is.`,
     ],
   };
-  const titles = ['Stranger','Acquaintance','Friendly','Close Friend','Trusted Friend','Warming Up','Mutual Spark','Close','Dating','Devoted'];
-  const thresholds = [0, 30, 70, 120, 180, 250, 330, 420, 520, 650];
+  // 20 stages now (was 10) — doubled tier count AND doubled max threshold (650->1300), so gift-
+  // spamming (e.g. repeated Trip purchases) takes meaningfully longer to max a relationship.
+  // Dialogue TEXT still draws from the existing 10 written beats (2 stages share each beat) —
+  // deliberately not doubling the 400 lines of dialogue investment in the same pass as the number
+  // rework; the beats stay the same story, just each one now spans two numeric thresholds instead
+  // of one.
+  const titles = ['Stranger','Noticed','Acquaintance','Familiar','Friendly','Comfortable','Close Friend','Confidant','Trusted Friend','Invested','Warming Up','Flirtatious','Mutual Spark','Drawn Together','Close','Inseparable','Smitten','Dating','Deeply Committed','Devoted'];
+  // Full curve rewrite (halved again from the original correction — see decayAmountFor() below
+  // for why): honors the requested 500 base at the earlier stage, tuned growth instead of literal
+  // 3x compounding (which would've produced a ~193.7 BILLION unreachable max). Halved down to a
+  // max of 666,670 so decay could be made genuinely proportional near Partner status — at the
+  // pre-halving scale, even -24/day decay took 6,360+ days to cost a stage near Dating, nowhere
+  // close to a real threat.
+  const thresholds = [0, 250, 388, 601, 931, 1443, 2237, 3467, 5374, 8329, 12910, 20011, 31016, 48075, 74517, 115501, 179026, 277490, 430110, 666670];
+
+  if(p === 'them'){
+    const stagesNeutral = NEUTRAL_DIALOGUE_POOL(firstName);
+    return thresholds.map((threshold,i) => ({
+      threshold, title:titles[i],
+      text: pickDialogueVariant(`${name}_stage${Math.floor(i/2)}`, stagesNeutral[Math.floor(i/2)]),
+    }));
+  }
 
   const genderedPool = ROLE_DIALOGUE_POOLS[role];
   if(genderedPool){
     const stagesForGender = (p === 'her' ? genderedPool.feminine : genderedPool.masculine)(firstName);
     return thresholds.map((threshold,i) => ({
       threshold, title:titles[i],
-      text: pickDialogueVariant(`${name}_stage${i}`, stagesForGender[i]),
+      text: pickDialogueVariant(`${name}_stage${Math.floor(i/2)}`, stagesForGender[Math.floor(i/2)]),
     }));
   }
-  return thresholds.map((threshold,i) => ({ threshold, title:titles[i], text:TEMPLATES[role][i] }));
+  return thresholds.map((threshold,i) => ({ threshold, title:titles[i], text:TEMPLATES[role][Math.floor(i/2)] }));
 }
 
 // Roster generator: each entry is { name, role, genderTag, pronoun, bodyShape, skin, gear, hairStyle, hairColor, statTrait, tattoo, jewelry }
@@ -7906,6 +8278,13 @@ const ROSTER_SEED = [
   { name:'Bruno Ferreira',    role:'physio',       pronoun:'him', bodyShape:'broad',    skin:'#8D5524', gear:'#EC4899', hairStyle:'buzz',     hairColor:'#1A1A1A', statTrait:{stamina:3,chin:1} },
   { name:'Gabriel Duarte',    role:'physio',       pronoun:'him', bodyShape:'athletic', skin:'#F5D0A9', gear:'#F97316', hairStyle:'short',    hairColor:'#7A4A1F', statTrait:{defense:4} },
   { name:'Tariq Hassan',      role:'physio',       pronoun:'him', bodyShape:'lean',     skin:'#5C3A21', gear:'#5B6EE1', hairStyle:'buzz',     hairColor:'#0D0D0D', statTrait:{stamina:2,defense:2} },
+  // --- Other/they-them companions, added for variety and inclusion ---
+  { name:'Robin Ashford',     role:'coach',        pronoun:'them', bodyShape:'athletic', skin:'#D4A276', gear:'#7C3AED', hairStyle:'mohawk',   hairColor:'#8B5CF6', statTrait:{power:2,mental:2}, tattoo:true },
+  { name:'Kai Sundberg',      role:'coach',        pronoun:'them', bodyShape:'lean',     skin:'#F5D0A9', gear:'#22C55E', hairStyle:'buzz',     hairColor:'#0D0D0D', statTrait:{speed:3,slip:1} },
+  { name:'Sage Whitlock',     role:'trainer',      pronoun:'them', bodyShape:'straight', skin:'#C68642', gear:'#F2C744', hairStyle:'long',     hairColor:'#E63946', statTrait:{technique:2,stamina:2} },
+  { name:'Quinn Delacroix',   role:'nutritionist', pronoun:'them', bodyShape:'curvy',    skin:'#8D5524', gear:'#2DD4BF', hairStyle:'afro',     hairColor:'#1A1A1A', statTrait:{mental:3,chin:1}, jewelry:true },
+  { name:'Ellis Faraday',     role:'manager',      pronoun:'them', bodyShape:'broad',    skin:'#E8B894', gear:'#F97316', hairStyle:'short',    hairColor:'#7A4A1F', statTrait:{mental:2,technique:2} },
+  { name:'Rowan Voss',        role:'physio',       pronoun:'them', bodyShape:'athletic', skin:'#5C3A21', gear:'#EC4899', hairStyle:'ponytail', hairColor:'#0D0D0D', statTrait:{defense:2,stamina:2} },
 ];
 
 const ROLE_TAGLINES = {
@@ -7931,7 +8310,7 @@ ROSTER_SEED.forEach(seed => {
   COMPANION_DEFS[id] = {
     id,
     name: seed.name,
-    genderTag: seed.pronoun === 'her' ? 'women' : 'men',
+    genderTag: seed.pronoun === 'her' ? 'women' : (seed.pronoun === 'them' ? 'other' : 'men'),
     tagline: ROLE_TAGLINES[seed.role]({ role: seed.role }),
     role: seed.role,
     appearance: {
@@ -7962,7 +8341,7 @@ function visibleCompanions(){
 
 function getCompanionProgress(id){
   if(!state.companions[id]){
-    state.companions[id] = { affection:0, stage:0, lastChatAt:0, lastSparAt:0, lastHangoutAt:0, isPartner:false };
+    state.companions[id] = { affection:0, stage:0, lastChatAt:0, lastSparAt:0, lastHangoutAt:0, isPartner:false, freeGiftUnlock:null };
   }
   return state.companions[id];
 }
@@ -7986,8 +8365,8 @@ function companionCurrentStageIndex(def, progress){
 // the only existing reward was a one-time flat stat bump on reaching Dating/partner status, with
 // nothing at all for the earlier stages. This adds real, ongoing incentive to invest in every
 // relationship, not just whichever one you pick as a partner.
-const CORNER_STAGE_BONUS_PCT = [0, 0.002, 0.004, 0.006, 0.01, 0.014, 0.018, 0.024, 0.03, 0.05]; // Stranger..Devoted (10 tiers)
-const CORNER_BONUS_CAP_PCT = 0.25;
+const CORNER_STAGE_BONUS_PCT = [0,0.0007,0.0022,0.0043,0.0071,0.0103,0.0141,0.0183,0.023,0.0281,0.0336,0.0395,0.0458,0.0525,0.0595,0.0669,0.0747,0.0828,0.0912,0.1]; // Stranger..Devoted (20 tiers) — doubled from 5%/25% max to match the much harder curve above
+const CORNER_BONUS_CAP_PCT = 0.5;
 
 function cornerBonusPct(){
   let total = 0;
@@ -8101,12 +8480,14 @@ function giveGiftToCompanion(id, giftKey){
   if(!companionNextStage(def, progress)){ showToast('Already at max stage — gift locked'); return; }
   const gift = GIFT_OPTIONS.find(g => g.key === giftKey);
   const stageIndex = companionCurrentStageIndex(def, progress);
-  const actualCost = giftCostForStage(gift.cost, stageIndex);
+  const isFreeUnlock = progress.freeGiftUnlock === giftKey;
+  const actualCost = isFreeUnlock ? 0 : giftCostForStage(gift.cost, stageIndex);
   if(state.economy.cash < actualCost){ showToast('Not enough cash'); return; }
   state.economy.cash -= actualCost;
+  if(isFreeUnlock) progress.freeGiftUnlock = null; // one-time use, consumed
   const gain = gift.baseGain;
   applyAffectionGain(id, gain);
-  pushLog(`Gave ${def.name.split(' ')[0]} ${gift.label} (+${gain} affection)`, 'level');
+  pushLog(`Gave ${def.name.split(' ')[0]} ${gift.label}${isFreeUnlock?' (free — exactly what they asked for!)':''} (+${gain} affection)`, 'level');
   render();
   scheduleSave();
 }
@@ -8115,16 +8496,18 @@ function giveGiftToCompanion(id, giftKey){
 // non-blocking touch during fights. Deliberately NOT a modal that interrupts anything — just a
 // dismissible bubble that fades on its own.
 const PARTNER_MESSAGES = [
-  "I miss you 💕",
-  "When are we going out again?",
-  "I want a vacation... just the two of us.",
-  "Thinking about you between rounds 😊",
-  "Don't forget dinner tonight!",
-  "You've been in the gym ALL day...",
-  "Bring me something nice when you win 😉",
-  "I saved you a seat at ringside.",
-  "Can we talk when you're done training?",
-  "Missing your face today.",
+  { text: "I miss you 💕" },
+  { text: "When are we going out again?" },
+  { text: "I want a vacation... just the two of us.", giftKey: 'trip' },
+  { text: "Thinking about you between rounds 😊" },
+  { text: "Don't forget dinner tonight!", giftKey: 'dinner' },
+  { text: "You've been in the gym ALL day..." },
+  { text: "Bring me something nice when you win 😉" },
+  { text: "I saved you a seat at ringside.", giftKey: 'tickets' },
+  { text: "Can we talk when you're done training?" },
+  { text: "Missing your face today." },
+  { text: "I'd love some flowers today 🌹", giftKey: 'flowers' },
+  { text: "A little jewelry would make my day 💎", giftKey: 'jewelry' },
 ];
 
 // Passive partner messages roll on a scheduled 7-10 minute window (random each time), not a
@@ -8148,9 +8531,12 @@ function maybeTriggerPartnerMessage(){
   if(!state.ui.nextPartnerMsgAt){ scheduleNextPartnerMessage(); return; } // first time ever — wait out one full window before the very first message too
   if(Date.now() < state.ui.nextPartnerMsgAt) return; // not yet time
 
-  const [partnerId] = partners[Math.floor(Math.random()*partners.length)];
-  const text = PARTNER_MESSAGES[Math.floor(Math.random()*PARTNER_MESSAGES.length)];
-  state.ui.partnerMessage = { partnerId, text, shownAt: Date.now() };
+  const [partnerId, progress] = partners[Math.floor(Math.random()*partners.length)];
+  const msg = PARTNER_MESSAGES[Math.floor(Math.random()*PARTNER_MESSAGES.length)];
+  state.ui.partnerMessage = { partnerId, text:msg.text, giftKey:msg.giftKey||null, shownAt:Date.now(), revealed:false };
+  // A gift-request message unlocks that exact gift for ONE free use — a real reward for reading
+  // and acting on what they actually asked for, not just any gift.
+  if(msg.giftKey) progress.freeGiftUnlock = msg.giftKey;
   scheduleNextPartnerMessage(); // immediately reschedule for the NEXT one — this is what makes stacking impossible
   render();
 }
@@ -8216,7 +8602,7 @@ function renderCompanionsTab(){
         everyone in your corner (not just your partner) — capped at +${(CORNER_BONUS_CAP_PCT*100).toFixed(0)}%.
       </div>
       <div style="display:grid; grid-template-columns:1fr 1fr; gap:4px 12px; margin-top:8px; font-size:10px; color:var(--text-muted);">
-        ${['Stranger','Acquaintance','Friendly','Close Friend','Trusted Friend','Warming Up','Mutual Spark','Close','Dating','Devoted'].map((label,i) => `
+        ${['Stranger','Noticed','Acquaintance','Familiar','Friendly','Comfortable','Close Friend','Confidant','Trusted Friend','Invested','Warming Up','Flirtatious','Mutual Spark','Drawn Together','Close','Inseparable','Smitten','Dating','Deeply Committed','Devoted'].map((label,i) => `
           <div style="display:flex; justify-content:space-between;">
             <span>${label}</span>
             <span style="color:var(--champ-teal); font-weight:600;">+${(CORNER_STAGE_BONUS_PCT[i]*100).toFixed(1)}%</span>
@@ -8290,7 +8676,8 @@ function renderCompanionProfile(id){
     </div>
 
     <div class="panel-title">Story</div>
-    <div class="card companion-story">"${escapeHtml(stage.text)}"</div>
+    <div class="card companion-story" data-open-story-history="${id}" style="cursor:pointer;" title="Tap to see full conversation history">"${escapeHtml(stage.text)}"</div>
+    <div style="font-size:10px; color:var(--text-muted); margin-top:-6px; margin-bottom:10px;">Tap to see your full story history with ${def.name.split(' ')[0]}</div>
 
     <div class="panel-title">Spend Time</div>
     <button class="btn ${onCooldown ? 'btn-ghost' : 'btn-teal'} btn-block" data-companion-chat="${id}" ${onCooldown?'disabled':''}>
@@ -8305,14 +8692,16 @@ function renderCompanionProfile(id){
 
     <div class="panel-title">Gifts</div>
     ${!nextStage ? `<div style="font-size:11px; color:var(--text-muted); margin-bottom:8px;">Max stage reached — gifts locked so cash doesn't go to waste. (One tradeoff worth knowing: daily decay can still erode affection if this companion goes unattended, and there's currently no way to gift a "buffer" above max to protect against that.)</div>` : ''}
+    ${progress.freeGiftUnlock ? `<div style="font-size:11px; color:var(--champ-teal); margin-bottom:8px;">💌 ${GIFT_OPTIONS.find(g=>g.key===progress.freeGiftUnlock)?.label||'That gift'} is free — exactly what they asked for!</div>` : ''}
     <div class="btn-row" style="flex-wrap:wrap;">
       ${GIFT_OPTIONS.map(g => {
         const maxed = !nextStage;
         const stageIndex = companionCurrentStageIndex(def, progress);
-        const actualCost = giftCostForStage(g.cost, stageIndex);
+        const isFree = progress.freeGiftUnlock === g.key;
+        const actualCost = isFree ? 0 : giftCostForStage(g.cost, stageIndex);
         return `
-        <button class="btn btn-gold" style="flex:1 1 30%; font-size:11px; padding:10px 6px;" data-companion-gift="${id}" data-gift-key="${g.key}" ${(maxed || state.economy.cash<actualCost)?'disabled':''}>
-          ${maxed ? `${g.label}<br>MAXED` : `${g.label}<br>$${fmtNum(actualCost)} <span style="opacity:0.85;">(+${g.baseGain})</span>`}
+        <button class="btn ${isFree?'btn-teal':'btn-gold'}" style="flex:1 1 30%; font-size:11px; padding:10px 6px;" data-companion-gift="${id}" data-gift-key="${g.key}" ${(maxed || state.economy.cash<actualCost)?'disabled':''}>
+          ${maxed ? `${g.label}<br>MAXED` : `${g.label}<br>${isFree?'FREE 💌':`$${fmtNum(actualCost)}`} <span style="opacity:0.85;">(+${g.baseGain})</span>`}
         </button>
       `;
       }).join('')}
@@ -8391,11 +8780,26 @@ function attachContentHandlers(){
       }
     });
   }
-  const partnerMsgBubble = document.querySelector('[data-dismiss-partner-msg]');
-  if(partnerMsgBubble){
-    partnerMsgBubble.addEventListener('click', (e) => {
+  const revealBubble = document.querySelector('[data-reveal-partner-msg]');
+  if(revealBubble){
+    revealBubble.addEventListener('click', (e) => {
       e.stopPropagation(); // don't also register as a hype-tap on the fight scene underneath
-      state.ui.partnerMessage = null;
+      if(state.ui.partnerMessage){
+        state.ui.partnerMessage.revealed = true;
+        state.ui.partnerMessage.shownAt = Date.now(); // restart the visible countdown now that it's actually readable
+      }
+      render();
+    });
+  }
+  const openBubble = document.querySelector('[data-open-partner-msg]');
+  if(openBubble){
+    openBubble.addEventListener('click', (e) => {
+      e.stopPropagation(); // don't also register as a hype-tap on the fight scene underneath
+      if(state.ui.partnerMessage){
+        activeTab = 'companions';
+        state.companionView = state.ui.partnerMessage.partnerId;
+        state.ui.partnerMessage = null;
+      }
       render();
     });
   }
@@ -8428,6 +8832,9 @@ function attachContentHandlers(){
       e.stopPropagation(); // parent header has its own click handler that toggles collapse — don't also trigger that
       openTierLegend();
     });
+  });
+  document.querySelectorAll('[data-open-story-history]').forEach(el => {
+    el.addEventListener('click', () => openStoryHistoryModal(el.dataset.openStoryHistory));
   });
   const autoOpenBtn = document.querySelector('[data-toggle-autoopen]');
   if(autoOpenBtn){
@@ -8498,6 +8905,14 @@ function attachContentHandlers(){
   document.querySelectorAll('[data-set-outfit-color]').forEach(btn => {
     btn.addEventListener('click', () => {
       state.fighter.appearance.gear = btn.dataset.setOutfitColor;
+      render(); scheduleSave();
+    });
+  });
+  document.querySelectorAll('[data-set-hex]').forEach(input => {
+    input.addEventListener('change', () => {
+      const val = input.value.trim();
+      if(!/^#[0-9A-Fa-f]{6}$/.test(val)){ showToast('Enter a valid hex color, e.g. #7C3AED'); render(); return; }
+      state.fighter.appearance[input.dataset.setHex] = val;
       render(); scheduleSave();
     });
   });
@@ -8964,6 +9379,25 @@ document.getElementById('timeskip-modal').addEventListener('click', (e) => {
     // dialog all still apply on every repeat, not just the first purchase.
     useAdSkip(e.target.dataset.timeskipAgain);
   }
+  if(e.target.dataset.timeskipAgainTeeth){
+    const [mins, cost] = e.target.dataset.timeskipAgainTeeth.split(',').map(Number);
+    executeTeethSkip(mins, cost);
+  }
+});
+
+/* ---------------------------- VERSION UPDATE MODAL ---------------------------- */
+function closeVersionUpdateModal(){
+  document.getElementById('version-update-modal').style.display = 'none';
+}
+document.getElementById('version-update-modal-close').addEventListener('click', closeVersionUpdateModal);
+document.getElementById('version-update-modal').addEventListener('click', (e) => {
+  if(e.target.id === 'version-update-modal') closeVersionUpdateModal();
+});
+document.getElementById('version-update-changelog-link').addEventListener('click', () => {
+  closeVersionUpdateModal();
+  state.ui.logModalView = 'changelog'; // opens straight to the Change Log tab, not Activity
+  refreshLogModal();
+  document.getElementById('log-modal').style.display = 'flex';
 });
 
 /* ---------------------------- LEVEL-UP NOTICES MODAL ---------------------------- */
@@ -9159,6 +9593,7 @@ document.getElementById('ob-confirm').addEventListener('click', () => {
   });
   state.meta.createdAt = Date.now();
   state.meta.lastTick = Date.now();
+  state.meta.lastSeenVersion = GAME_VERSION; // new players start "caught up" — no popup for a version they never played without
 
   document.getElementById('onboard').style.display = 'none';
   pushLog(`${name} steps into the gym for the first time.`, 'level');
@@ -9451,6 +9886,7 @@ async function bootGame(){
     // Resume offline-progress calculation now that we have real fighter data.
     processOfflineProgress();
     render();
+    checkVersionUpdate();
   }
   // If no save (or save had no fighter yet), onboarding stays visible as normal —
   // its existing confirm handler will create state.fighter and call render().
