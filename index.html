@@ -502,6 +502,8 @@
     box-shadow:0 0 0 2px var(--bg-panel); align-items:center; justify-content:center;
   }
   .nav-btn.active{color:var(--corner-red); background:rgba(232,72,60,0.1);}
+  .nav-btn.locked{opacity:0.4; cursor:default;}
+  .nav-btn.locked:active{background:none;}
 
   /* ---------- ONBOARDING MODAL ---------- */
   #onboard{
@@ -1035,12 +1037,27 @@ window.storage = {
 // Semantic version label (MAJOR.MINOR.PATCH), tracking development stages through beta.
 // Displayed in Home -> Settings so testers can confirm which build they're actually running.
 // >>> BUMP THE PATCH NUMBER HERE ON EVERY SHIP, matching the sw.js CACHE_NAME version <<<
-const GAME_VERSION = 'v0.0.65';
+const GAME_VERSION = 'v0.0.69';
 
 // Player-facing changelog, shown in the clipboard/log modal's "Change Log" tab. Most recent
 // entry FIRST. >>> ADD A NEW ENTRY HERE ON EVERY SHIP GOING FORWARD, same routine as bumping
 // GAME_VERSION and sw.js's CACHE_NAME above — this is now a required 3rd step, not optional. <<<
 const GAME_CHANGELOG = [
+  { version:'v0.0.69', date:'2026-07-09', changes:[
+    'Gym Roster member names are now clickable too, same stat/status view as leaderboards — power, tier, and status message refresh automatically each time you visit the League tab',
+  ]},
+  { version:'v0.0.68', date:'2026-07-09', changes:[
+    'Added progressive tab unlocking based on playtester feedback — Style unlocks at Level 5, Corner at Level 8, Gym at Level 10. Locked tabs show greyed-out with their unlock level instead of disappearing. Fighter, Career, and Train stay available from the start',
+  ]},
+  { version:'v0.0.67', date:'2026-07-09', changes:[
+    'Removed the Gym Message Board (pulling back for now, not expanding communication features too fast) — Status Message and clickable leaderboard names/stats stay',
+  ]},
+  { version:'v0.0.66', date:'2026-07-09', changes:[
+    'Added a Gym Message Board — 3 posts/day per player, gym-scoped. Reports auto-hide a message after 2 flags; Head Coaches get a review queue to approve or delete',
+    'Added a client-side profanity filter for the board and the new Status Message — a speed bump, not a real barrier (worth knowing: determined bypass is still possible client-side)',
+    'Added a Status Message (80 char max) shown when others click your name on leaderboards',
+    'Leaderboard names are now clickable — shows tier, power, wins, Gym Wars score, peak stat, and their status message',
+  ]},
   { version:'v0.0.65', date:'2026-07-09', changes:[
     'Fixed a separate, real issue: Gym Equipment (gloves/ropes/mats) cost was compounding at 1.5x/level — $133,010 for a single upgrade by level 20, $7.67M by level 30. Never literally tied to prestige, but behaved the same way. Rebalanced to 1.15x/level ($655 at level 20), matching cash\'s slower, more limited income',
   ]},
@@ -1295,6 +1312,7 @@ let state = {
   cornerExpanded: { partners: true }, // which Corner categories are expanded; Partners open by default
   ui: {
     editingFighterName: false, // toggles the inline rename field on the Home tab
+    editingStatusMessage: false, // toggles the inline status-message edit field on the Style tab
     editingLeagueName: false,  // toggles the inline rename field on the League tab
     badgeAcked: { fighter:false, career:false, league:false }, // see updateNavBadges — visiting
                                                                  // a tab acknowledges/hides its
@@ -1354,6 +1372,7 @@ let state = {
     joinedAt: 0,
     bonusTenureDays: 0,   // extra tenure days earned by completing ALL daily quests — see claimQuest()
     bonusTenureAwardedDateKey: '', // prevents double-awarding the bonus day if something re-checks the same day
+    statusMessage: '', // short taunt/blurb shown to others when they click your name — max 80 chars
     weekKey: '',           // local week bucket (see getWeekKey) — resets weeklyXp when it changes
     weeklyXp: 0,           // XP earned toward the CURRENT league this week — basis for the weekly leaderboard
     weeklyWins: 0,         // wins earned THIS WEEK, immune to prestige resets — see addWeeklyWins()
@@ -2692,6 +2711,7 @@ function render(){
   document.getElementById('hud-teeth').textContent = fmtNum(state.economy.teeth);
   document.getElementById('hud-level').textContent = `Lv.${state.fighter.level}`;
   updateNavBadges();
+  updateNavLocks();
 
   // Guard: if the player currently has a text input focused (e.g. typing a dev code, or the
   // fighter-name field during onboarding), skip rebuilding #content this tick. The periodic
@@ -2719,6 +2739,33 @@ const BASE_TITLE = document.title;
 // an available prestige, or a completed-but-unclaimed daily quest. No real push notifications are
 // possible without a server, but this at least surfaces "something's ready" while the tab is open
 // or if the player alt-tabs back to it.
+// Progressive tab unlocking — playtesters flagged that 6 fully-populated tabs on day one is a
+// lot to take in at once. Fighter/Career/Train stay available immediately (the core loop);
+// Style/Corner/Gym unlock at level milestones instead, greyed out with a "Lv.X" label until then
+// rather than being hidden entirely — visible-but-locked signals "there's more coming" without
+// letting players in early or making it look like content was cut.
+const TAB_UNLOCK_LEVELS = { home:5, companions:8, league:10 };
+function isTabUnlocked(tab){
+  const req = TAB_UNLOCK_LEVELS[tab];
+  return !req || state.fighter.level >= req;
+}
+
+const TAB_ICONS = { home:'🎨', companions:'❤️', league:'🌐' };
+const TAB_LABELS = { home:'STYLE', companions:'CORNER', league:'GYM' };
+function updateNavLocks(){
+  if(!state.fighter.name) return;
+  Object.keys(TAB_UNLOCK_LEVELS).forEach(tab => {
+    const btn = document.querySelector(`.nav-btn[data-tab="${tab}"]`);
+    if(!btn) return;
+    const req = TAB_UNLOCK_LEVELS[tab];
+    const unlocked = state.fighter.level >= req;
+    btn.classList.toggle('locked', !unlocked);
+    btn.innerHTML = unlocked
+      ? `<span class="nav-icon">${TAB_ICONS[tab]}${tab==='league'?'<span class="nav-badge" id="badge-league" style="display:none;"></span>':''}</span>${TAB_LABELS[tab]}`
+      : `<span class="nav-icon">🔒</span>Lv.${req}`;
+  });
+}
+
 function updateNavBadges(){
   if(!state.fighter.name) return;
   if(!state.ui.badgeAcked) state.ui.badgeAcked = { fighter:false, career:false, league:false };
@@ -4899,6 +4946,17 @@ function renameFighter(rawName){
   scheduleSave();
 }
 
+function saveStatusMessage(rawText){
+  const text = rawText.trim().slice(0, 80);
+  if(containsProfanity(text)){ showToast('Please keep it clean — try rephrasing'); return; }
+  state.social.statusMessage = text;
+  state.ui.editingStatusMessage = false;
+  showToast(text ? 'Status updated' : 'Status cleared');
+  render();
+  scheduleSave();
+  if(state.social.leagueId) pushWeeklyStats(); // status is carried in the same weekly payload others read
+}
+
 /* ========================================================================
    LEAGUES / MEMBERSHIP / DAILY QUESTS MODULE
    Lightweight social layer built on window.storage's shared key/value store.
@@ -5477,7 +5535,6 @@ async function claimDisplayName(rawName){
 // before anyone notices what actually failed.
 let leagueStorageOk = true;
 
-let leagueRosterCache = {};
 let leagueRosterLoading = false;
 
 async function refreshLeagueRosters(){
@@ -5606,7 +5663,7 @@ async function joinLeague(leagueId){
     }
     const isFounder = arr.length === 0;
     const role = isFounder ? 'head_coach' : 'janitor';
-    arr.push({ playerId: state.social.playerId, name: state.social.displayName, joinedAt: Date.now(), lastActiveAt: Date.now(), power: totalPower(), role, isPrimaryHeadCoach: isFounder });
+    arr.push({ playerId: state.social.playerId, name: state.social.displayName, joinedAt: Date.now(), lastActiveAt: Date.now(), power: totalPower(), tier: state.fighter.tier, statusMessage: state.social.statusMessage || '', role, isPrimaryHeadCoach: isFounder });
     await window.storage.set(key, JSON.stringify(arr), true);
 
     state.social.leagueId = leagueId;
@@ -5704,6 +5761,9 @@ async function pushWeeklyStats(){
       wins: state.social.weeklyWins || 0, // week-scoped, survives prestige — NOT state.fighter.wins
       peakStatValue: state.social.weeklyPeakStatValue || 0,
       peakStatKey: state.social.weeklyPeakStatKey || '',
+      power: totalPower(),
+      tier: state.fighter.tier,
+      statusMessage: state.social.statusMessage || '',
       updatedAt: Date.now(),
     }), true);
     lastWeeklyPushAt = Date.now();
@@ -6142,7 +6202,12 @@ async function refreshLeagueRosterDetail(){
     // Touch our OWN heartbeat before checking anyone's inactivity, so simply opening the League
     // tab after being away never self-kicks the very player who just showed up to look.
     const myIdx = arr.findIndex(m => m.playerId === state.social.playerId);
-    if(myIdx !== -1) arr[myIdx].lastActiveAt = now;
+    if(myIdx !== -1){
+      arr[myIdx].lastActiveAt = now;
+      arr[myIdx].power = totalPower();
+      arr[myIdx].tier = state.fighter.tier;
+      arr[myIdx].statusMessage = state.social.statusMessage || '';
+    }
 
     // Graduate any Janitor past their probation window to regular Member — same lazy,
     // opportunistic pattern as inactivity pruning below (no cron to run this on a real clock,
@@ -6291,6 +6356,29 @@ function openStoryHistoryModal(id){
         <div style="font-size:12px; color:var(--text-main); line-height:1.5; font-style:italic;">"${escapeHtml(s.text)}"</div>
       </div>
     `).join('')}
+  `;
+  document.getElementById('stat-detail-modal').style.display = 'flex';
+}
+
+function openPlayerStatModal(entry){
+  document.getElementById('stat-detail-modal-title').textContent = escapeHtml(entry.name || 'Unnamed');
+  document.getElementById('stat-detail-modal-body').innerHTML = `
+    ${entry.statusMessage ? `<div class="card" style="border-color:var(--belt-gold); margin-bottom:10px; text-align:center; font-style:italic; padding:12px;">"${escapeHtml(entry.statusMessage)}"</div>` : ''}
+    <div style="display:flex; justify-content:space-between; align-items:center; padding:7px 0; border-bottom:1px solid var(--border-soft);">
+      <span style="font-size:13px; color:var(--text-muted);">Career Tier</span><span style="font-weight:700;">${escapeHtml(entry.tier||'—')}</span>
+    </div>
+    <div style="display:flex; justify-content:space-between; align-items:center; padding:7px 0; border-bottom:1px solid var(--border-soft);">
+      <span style="font-size:13px; color:var(--text-muted);">Total Power</span><span style="font-weight:700; color:var(--champ-teal);">${fmtNum(entry.power||0)}</span>
+    </div>
+    <div style="display:flex; justify-content:space-between; align-items:center; padding:7px 0; border-bottom:1px solid var(--border-soft);">
+      <span style="font-size:13px; color:var(--text-muted);">Wins This Week</span><span style="font-weight:700;">${fmtNum(entry.wins||0)}</span>
+    </div>
+    <div style="display:flex; justify-content:space-between; align-items:center; padding:7px 0; border-bottom:1px solid var(--border-soft);">
+      <span style="font-size:13px; color:var(--text-muted);">Gym Wars Score</span><span style="font-weight:700; color:var(--corner-red);">${fmtNum(entry.weeklyXp||0)}</span>
+    </div>
+    ${entry.peakStatKey ? `<div style="display:flex; justify-content:space-between; align-items:center; padding:7px 0;">
+      <span style="font-size:13px; color:var(--text-muted);">Peak Stat</span><span style="font-weight:700;">${capitalize(entry.peakStatKey)} ${fmtNum(entry.peakStatValue||0)}</span>
+    </div>` : ''}
   `;
   document.getElementById('stat-detail-modal').style.display = 'flex';
 }
@@ -6719,9 +6807,9 @@ function renderLeagueTab(){
         ? `<div class="card empty-state" style="padding:16px;">No qualifying activity yet this week.</div>`
         : gymWarsCache.individualRankings.filter(e=>!e.flagged).slice(0,10).map((e,i) => `
           <div class="card" style="display:flex; justify-content:space-between; align-items:center; ${e.playerId===state.social.playerId?'border-color:var(--belt-gold);':''}">
-            <div style="display:flex; align-items:center; gap:8px; min-width:0;">
+            <div style="display:flex; align-items:center; gap:8px; min-width:0; cursor:pointer;" data-view-player-stats="individual,${i}">
               <div style="font-family:'Oswald',sans-serif; font-weight:700; color:var(--text-muted); width:18px; flex-shrink:0;">${i+1}</div>
-              <div style="font-size:13px; font-weight:600; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;">${escapeHtml(e.name||'Unnamed')}${gymTag(e.leagueId)}</div>
+              <div style="font-size:13px; font-weight:600; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; text-decoration:underline; text-decoration-color:var(--border-soft);">${escapeHtml(e.name||'Unnamed')}${gymTag(e.leagueId)}</div>
             </div>
             <div style="text-align:right; flex-shrink:0;">
               <div style="font-family:'Oswald',sans-serif; font-weight:700; color:var(--corner-red);">${fmtNum(e.weeklyXp||0)} pts</div>
@@ -6750,9 +6838,9 @@ function renderLeagueTab(){
         ? `<div class="card empty-state" style="padding:16px;">No qualifying activity yet this week.</div>`
         : gymWarsCache.statRankings.slice(0,10).map((e,i) => `
           <div class="card" style="display:flex; justify-content:space-between; align-items:center; ${e.playerId===state.social.playerId?'border-color:var(--belt-gold);':''}">
-            <div style="display:flex; align-items:center; gap:8px; min-width:0;">
+            <div style="display:flex; align-items:center; gap:8px; min-width:0; cursor:pointer;" data-view-player-stats="stat,${i}">
               <div style="font-family:'Oswald',sans-serif; font-weight:700; color:var(--text-muted); width:18px; flex-shrink:0;">${i+1}</div>
-              <div style="font-size:13px; font-weight:600; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;">${escapeHtml(e.name||'Unnamed')}${gymTag(e.leagueId)}</div>
+              <div style="font-size:13px; font-weight:600; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; text-decoration:underline; text-decoration-color:var(--border-soft);">${escapeHtml(e.name||'Unnamed')}${gymTag(e.leagueId)}</div>
             </div>
             <div style="text-align:right; flex-shrink:0;">
               <div style="font-family:'Oswald',sans-serif; font-weight:700; color:var(--champ-teal);">${e.peakStatKey?capitalize(e.peakStatKey):'—'} ${fmtNum(e.peakStatValue||0)}</div>
@@ -6903,8 +6991,8 @@ function renderLeagueTab(){
       return `
         <div class="card" style="${isMe?'border-color:var(--belt-gold);':''}">
           <div style="display:flex; justify-content:space-between; align-items:center;">
-            <div style="min-width:0;">
-              <div style="font-size:13px; font-weight:600; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;">${ROLE_ICONS[role]||'🤝'} ${escapeHtml(m.name||'Unnamed')}${isMe?' (you)':''}</div>
+            <div style="min-width:0; cursor:pointer;" data-view-roster-stats="${m.playerId}">
+              <div style="font-size:13px; font-weight:600; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; text-decoration:underline; text-decoration-color:var(--border-soft);">${ROLE_ICONS[role]||'🤝'} ${escapeHtml(m.name||'Unnamed')}${isMe?' (you)':''}</div>
               <div style="font-size:11px; color:var(--text-muted); margin-top:1px;">${ROLE_LABELS[role]||'Member'} • ${mTier.name} • ${memberDays}d</div>
             </div>
           </div>
@@ -7312,6 +7400,22 @@ function renderHomeTab(){
         <div style="display:flex; justify-content:space-between; align-items:center;">
           <div style="font-family:'Oswald',sans-serif; font-size:15px; font-weight:600;">${escapeHtml(f.name)}</div>
           <button class="btn btn-ghost" data-edit-fighter-name style="padding:6px 14px; font-size:11px;">✏️ Rename</button>
+        </div>
+      `}
+    </div>
+
+    <div class="panel-title">Status Message <span style="color:var(--text-muted); font-size:11px;">(shown when others click your name — 80 char max)</span></div>
+    <div class="card">
+      ${state.ui.editingStatusMessage ? `
+        <div style="display:flex; gap:8px;">
+          <input type="text" id="status-message-input" class="ob-input" style="flex:1; padding:9px 12px; font-size:13px;" placeholder="Undefeated and staying that way 😤" maxlength="80" value="${escapeAttr(state.social.statusMessage)}">
+          <button class="btn btn-primary" id="status-message-submit" style="flex-shrink:0;">Save</button>
+          <button class="btn btn-ghost" data-cancel-status-message style="flex-shrink:0;">✕</button>
+        </div>
+      ` : `
+        <div style="display:flex; justify-content:space-between; align-items:center;">
+          <div style="font-size:13px; color:${state.social.statusMessage?'var(--text-main)':'var(--text-muted)'}; font-style:${state.social.statusMessage?'italic':'normal'};">${state.social.statusMessage ? `"${escapeHtml(state.social.statusMessage)}"` : 'No status set yet'}</div>
+          <button class="btn btn-ghost" data-edit-status-message style="padding:6px 14px; font-size:11px; flex-shrink:0;">✏️ Edit</button>
         </div>
       `}
     </div>
@@ -8709,6 +8813,16 @@ function renderCompanionProfile(id){
   `;
 }
 
+// Client-side word-list filter — a speed bump against casual profanity, NOT a real barrier (any
+// determined user can bypass a client-side filter in seconds via spacing/leetspeak/etc). A real
+// filter needs to run server-side, same pattern as the Gym Wars Cloud Function. Kept short and
+// clearly commented so it's obvious this is a first pass, not the final word.
+const PROFANITY_WORDLIST = ['fuck','shit','bitch','asshole','cunt','nigger','faggot','retard','whore','slut'];
+function containsProfanity(text){
+  const normalized = text.toLowerCase().replace(/[^a-z]/g, '');
+  return PROFANITY_WORDLIST.some(word => normalized.includes(word));
+}
+
 function escapeHtml(str){
   const div = document.createElement('div');
   div.textContent = str;
@@ -8835,6 +8949,19 @@ function attachContentHandlers(){
   });
   document.querySelectorAll('[data-open-story-history]').forEach(el => {
     el.addEventListener('click', () => openStoryHistoryModal(el.dataset.openStoryHistory));
+  });
+  document.querySelectorAll('[data-view-player-stats]').forEach(el => {
+    el.addEventListener('click', () => {
+      const [type, idx] = el.dataset.viewPlayerStats.split(',');
+      const entry = (type === 'individual' ? gymWarsCache.individualRankings.filter(e=>!e.flagged) : gymWarsCache.statRankings)[parseInt(idx)];
+      if(entry) openPlayerStatModal(entry);
+    });
+  });
+  document.querySelectorAll('[data-view-roster-stats]').forEach(el => {
+    el.addEventListener('click', () => {
+      const member = leagueRosterDetailCache.members.find(m => m.playerId === el.dataset.viewRosterStats);
+      if(member) openPlayerStatModal(member);
+    });
   });
   const autoOpenBtn = document.querySelector('[data-toggle-autoopen]');
   if(autoOpenBtn){
@@ -9090,6 +9217,24 @@ function attachContentHandlers(){
       if(e.key === 'Enter'){ renameFighter(fighterNameInput.value); }
     });
   }
+  const editStatusMsgBtn = document.querySelector('[data-edit-status-message]');
+  if(editStatusMsgBtn){
+    editStatusMsgBtn.addEventListener('click', () => { state.ui.editingStatusMessage = true; render(); });
+  }
+  const cancelStatusMsgBtn = document.querySelector('[data-cancel-status-message]');
+  if(cancelStatusMsgBtn){
+    cancelStatusMsgBtn.addEventListener('click', () => { state.ui.editingStatusMessage = false; render(); });
+  }
+  const statusMsgSubmit = document.getElementById('status-message-submit');
+  if(statusMsgSubmit){
+    statusMsgSubmit.addEventListener('click', () => saveStatusMessage(document.getElementById('status-message-input').value));
+  }
+  const statusMsgInput = document.getElementById('status-message-input');
+  if(statusMsgInput){
+    statusMsgInput.addEventListener('keydown', (e) => {
+      if(e.key === 'Enter'){ saveStatusMessage(statusMsgInput.value); }
+    });
+  }
   const editLeagueNameBtn = document.querySelector('[data-edit-league-name]');
   if(editLeagueNameBtn){
     editLeagueNameBtn.addEventListener('click', () => { nameClaimError = null; state.ui.editingLeagueName = true; render(); });
@@ -9117,6 +9262,10 @@ function attachContentHandlers(){
 // widget's clickable stats), so both paths stay in sync (active-state styling, badge
 // acknowledgment, League data refresh) instead of duplicating this logic in two places.
 function switchToTab(tab){
+  if(!isTabUnlocked(tab)){
+    showToast(`Unlocks at Level ${TAB_UNLOCK_LEVELS[tab]}`);
+    return;
+  }
   document.querySelectorAll('.nav-btn').forEach(b => b.classList.toggle('active', b.dataset.tab === tab));
   activeTab = tab;
   if(['fighter','career','league'].includes(activeTab) && state.ui.badgeAcked){
