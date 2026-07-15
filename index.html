@@ -964,7 +964,12 @@ async function handleGoogleRedirectResult(){
   try {
     const result = await _auth.getRedirectResult();
     if(result && result.user){
-      console.log('[Google Link] Success — linked as', result.user.email);
+      // Force-refresh the cached currentUser profile from the server before checking link status.
+      // linkWithRedirect updates the account on Firebase's backend immediately, but the LOCAL
+      // currentUser object it's cached in doesn't always auto-refresh its providerData right away
+      // on return from a redirect — reload() explicitly re-fetches it, closing that gap.
+      await _auth.currentUser.reload();
+      console.log('[Google Link] Success — linked as', result.user.email, '| isGoogleLinked() now:', isGoogleLinked());
       showToast(`✅ Google account linked! Your progress now backs up to ${result.user.email || 'your Google account'}.`);
       render();
     } else {
@@ -1057,7 +1062,7 @@ window.storage = {
 // Semantic version label (MAJOR.MINOR.PATCH), tracking development stages through beta.
 // Displayed in Home -> Settings so testers can confirm which build they're actually running.
 // >>> BUMP THE PATCH NUMBER HERE ON EVERY SHIP, matching the sw.js CACHE_NAME version <<<
-const GAME_VERSION = 'v0.0.80';
+const GAME_VERSION = 'v0.0.81';
 
 // Player-facing changelog, shown in the clipboard/log modal's "Change Log" tab. Most recent
 // entry FIRST. >>> ADD A NEW ENTRY HERE ON EVERY SHIP GOING FORWARD, same routine as bumping
@@ -1067,6 +1072,10 @@ const GAME_VERSION = 'v0.0.80';
 // defeating any code that's meant to be secret/unique/one-per-person. Describe what a code system
 // DOES ("added founder codes for testers") without ever naming the codes themselves. <<<
 const GAME_CHANGELOG = [
+  { version:'v0.0.81', date:'2026-07-09', changes:[
+    'Google Account linking: added an explicit profile refresh (reload()) right after a successful link, in case the locally cached account info doesn\'t immediately pick up the new link on return from Google\'s sign-in screen',
+    'Added a "Check Status" button to Cloud Backup — lets you manually re-verify link status without repeating the whole sign-in flow, and tells you clearly either way instead of leaving it ambiguous',
+  ]},
   { version:'v0.0.80', date:'2026-07-09', changes:[
     'Fixed a real bug: linking a Google account that already had saved progress elsewhere would silently never complete. The confirm dialog asking "use that account\'s progress instead?" was rendering completely invisible, hidden behind the loading screen (z-index ordering bug) — it could never be seen or clicked, so the account swap could never be confirmed. Also switched that dialog to the app\'s own modal system instead of a native browser confirm(), and added clearer logging so a future failure like this surfaces immediately instead of failing silently',
   ]},
@@ -8004,6 +8013,7 @@ function renderHomeTab(){
           you are, this just adds a safety net.
         </div>
         <button class="btn btn-teal btn-block" style="margin-top:8px;" data-link-google>Link Google Account</button>
+        <button class="btn btn-ghost btn-block" style="margin-top:6px; font-size:11px;" data-check-google-link>🔄 Already linked? Check status</button>
       `}
     </div>
 
@@ -9638,6 +9648,21 @@ function attachContentHandlers(){
   const linkGoogleBtn = document.querySelector('[data-link-google]');
   if(linkGoogleBtn){
     linkGoogleBtn.addEventListener('click', linkGoogleAccount);
+  }
+  const checkGoogleLinkBtn = document.querySelector('[data-check-google-link]');
+  if(checkGoogleLinkBtn){
+    checkGoogleLinkBtn.addEventListener('click', async () => {
+      showToast('Checking…');
+      try {
+        await _auth.currentUser.reload();
+      } catch(e){ /* reload failing just means we fall through to whatever isGoogleLinked() already knows */ }
+      if(isGoogleLinked()){
+        showToast(`✅ Confirmed linked as ${_auth.currentUser.email || 'your Google account'}`);
+      } else {
+        showToast('Not currently linked on this account — try "Link Google Account" above');
+      }
+      render();
+    });
   }
   const devCodeSubmit = document.getElementById('dev-code-submit');
   if(devCodeSubmit){
