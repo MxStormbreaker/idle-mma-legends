@@ -951,82 +951,94 @@ function isGoogleLinked(){
   return !!(_auth.currentUser && _auth.currentUser.providerData.some(p => p.providerId === 'google.com'));
 }
 
+// Shared by both the popup and redirect-result paths — handles the case where this Google
+// account already has a DIFFERENT, older linked identity with its own progress (e.g. they played
+// on another device first, or tested linking earlier). The right move is offering to switch to
+// THAT account — restoring their real progress — rather than just failing silently. Uses the
+// app's own modal, not native confirm() — a native browser dialog is a real risk of rendering
+// behind other UI or being missed depending on exactly when it fires.
+function handleGoogleAlreadyInUse(e){
+  showConfirm(
+    'Google Account Already Linked',
+    'This Google account already has saved progress from another device. Sign in and use THAT progress instead? This device\'s current save will be replaced.',
+    async () => {
+      if(!e.credential){
+        showToast('Could not restore progress: missing credential — try linking again');
+        return;
+      }
+      try {
+        await _auth.signInWithCredential(e.credential);
+        window._uid = _auth.currentUser.uid;
+        await loadGame();
+        render();
+        showToast('✅ Restored progress from your Google account!');
+      } catch(err){
+        console.log('[Google Link] signInWithCredential failed:', err.message);
+        showToast('Could not restore progress: ' + err.message);
+      }
+    }
+  );
+}
+
+// Switched from linkWithRedirect to linkWithPopup — redirect requires a full page navigation out
+// to Google and back, relying on session/storage state surviving that round trip correctly. That
+// was CONFIRMED not completing (Firebase's Users table stayed all-anonymous after multiple
+// attempts) — a known rough edge with redirect flows specifically inside TWAs. Popup avoids the
+// dependency entirely: the result comes back as a direct promise in the SAME page load, no
+// "did we just return from a redirect" detection needed at all.
 function linkGoogleAccount(){
   if(!_auth || !_auth.currentUser){
-    // If this fires, the button click did essentially nothing visible before now — this is
-    // likely why linking looked like it "did nothing": _auth.currentUser.linkWithRedirect(...)
-    // would have thrown a SYNCHRONOUS error (calling a method on null), which a plain .catch()
-    // on the returned promise can never catch, since the error happens before any promise even
-    // exists. Guarding explicitly here, with a visible toast either way, closes that gap.
     showToast('⚠️ Not signed in yet — wait a moment and try again');
     console.log('[Google Link] Aborted: _auth.currentUser was', _auth ? _auth.currentUser : '_auth itself missing');
     return;
   }
   showToast('Opening Google sign-in…');
+  let provider;
   try {
-    const provider = new firebase.auth.GoogleAuthProvider();
-    _auth.currentUser.linkWithRedirect(provider).catch((e) => {
-      console.log('[Google Link] linkWithRedirect promise rejected:', e.code, e.message);
-      showToast('Could not start Google sign-in: ' + e.message);
-    });
+    provider = new firebase.auth.GoogleAuthProvider();
   } catch(e){
-    // Catches synchronous throws — e.g. GoogleAuthProvider constructor failing, or anything else
-    // that errors before the promise chain begins.
-    console.log('[Google Link] Synchronous error starting link:', e.message);
+    console.log('[Google Link] Synchronous error constructing provider:', e.message);
     showToast('Could not start Google sign-in: ' + e.message);
+    return;
   }
-  // Page navigates away to Google's consent screen here — handleGoogleRedirectResult() picks up
-  // the result on the next boot, after the browser returns to this page.
+  _auth.currentUser.linkWithPopup(provider).then(async (result) => {
+    await _auth.currentUser.reload();
+    console.log('[Google Link] Popup success — linked as', result.user.email);
+    showToast(`✅ Google account linked! Your progress now backs up to ${result.user.email || 'your Google account'}.`);
+    render();
+  }).catch((e) => {
+    console.log('[Google Link] linkWithPopup failed:', e.code, e.message);
+    if(e.code === 'auth/credential-already-in-use'){
+      handleGoogleAlreadyInUse(e);
+    } else if(e.code === 'auth/popup-blocked'){
+      showToast('⚠️ Popup was blocked — check your browser/app popup settings and try again');
+    } else if(e.code === 'auth/popup-closed-by-user' || e.code === 'auth/cancelled-popup-request'){
+      showToast('Sign-in cancelled');
+    } else {
+      showToast('Could not link Google account: ' + e.message);
+    }
+  });
 }
 
+// Kept as a harmless fallback check at boot — a no-op unless something in the environment ever
+// actually initiates a REDIRECT-based flow (nothing currently does, now that linking uses
+// linkWithPopup above), in which case this still correctly picks up the result.
 async function handleGoogleRedirectResult(){
   try {
     const result = await _auth.getRedirectResult();
     if(result && result.user){
-      // Force-refresh the cached currentUser profile from the server before checking link status.
-      // linkWithRedirect updates the account on Firebase's backend immediately, but the LOCAL
-      // currentUser object it's cached in doesn't always auto-refresh its providerData right away
-      // on return from a redirect — reload() explicitly re-fetches it, closing that gap.
       await _auth.currentUser.reload();
-      console.log('[Google Link] Success — linked as', result.user.email, '| isGoogleLinked() now:', isGoogleLinked());
+      console.log('[Google Link] Redirect success — linked as', result.user.email, '| isGoogleLinked() now:', isGoogleLinked());
       showToast(`✅ Google account linked! Your progress now backs up to ${result.user.email || 'your Google account'}.`);
       render();
     } else {
-      // Not an error, but also not a link — this boot just wasn't a return from a redirect at all.
-      console.log('[Google Link] No redirect result this boot (normal on a fresh app open).');
+      console.log('[Google Link] No redirect result this boot (normal — linking now uses popup, not redirect).');
     }
   } catch(e){
-    console.log('[Google Link] Error code:', e.code, '| message:', e.message);
+    console.log('[Google Link] Redirect error code:', e.code, '| message:', e.message);
     if(e.code === 'auth/credential-already-in-use'){
-      // This Google account already has a DIFFERENT, older linked identity with its own progress
-      // (e.g. they played on another device first, or tested linking earlier). The right move is
-      // offering to switch to THAT account — restoring their real progress — rather than just
-      // failing silently. Uses the app's own modal, not native confirm() — a native browser
-      // dialog firing THIS early in boot (before the loading overlay is even hidden) is a real
-      // risk of being missed or not properly interactive, which would explain linking silently
-      // never completing even though the user did everything right on their end.
-      showConfirm(
-        'Google Account Already Linked',
-        'This Google account already has saved progress from another device. Sign in and use THAT progress instead? This device\'s current save will be replaced.',
-        async () => {
-          if(!e.credential){
-            showToast('Could not restore progress: missing credential — try linking again');
-            return;
-          }
-          try {
-            await _auth.signInWithCredential(e.credential);
-            window._uid = _auth.currentUser.uid;
-            await loadGame();
-            render();
-            showToast('✅ Restored progress from your Google account!');
-          } catch(err){
-            console.log('[Google Link] signInWithCredential failed:', err.message);
-            showToast('Could not restore progress: ' + err.message);
-          }
-        }
-      );
+      handleGoogleAlreadyInUse(e);
     } else if(e.code && e.code !== 'auth/no-auth-event'){
-      // 'auth/no-auth-event' just means this boot wasn't a return from a redirect — not a real error.
       showToast('Google sign-in failed: ' + e.message);
     }
   }
@@ -1081,7 +1093,7 @@ window.storage = {
 // Semantic version label (MAJOR.MINOR.PATCH), tracking development stages through beta.
 // Displayed in Home -> Settings so testers can confirm which build they're actually running.
 // >>> BUMP THE PATCH NUMBER HERE ON EVERY SHIP, matching the sw.js CACHE_NAME version <<<
-const GAME_VERSION = 'v0.0.82';
+const GAME_VERSION = 'v0.0.83';
 
 // Player-facing changelog, shown in the clipboard/log modal's "Change Log" tab. Most recent
 // entry FIRST. >>> ADD A NEW ENTRY HERE ON EVERY SHIP GOING FORWARD, same routine as bumping
@@ -1091,6 +1103,9 @@ const GAME_VERSION = 'v0.0.82';
 // defeating any code that's meant to be secret/unique/one-per-person. Describe what a code system
 // DOES ("added founder codes for testers") without ever naming the codes themselves. <<<
 const GAME_CHANGELOG = [
+  { version:'v0.0.83', date:'2026-07-09', changes:[
+    'Switched Google Account linking from a redirect-based flow to a popup-based one — confirmed via Firebase\'s own Users table that redirect was never actually completing (a known rough edge with that approach specifically inside TWAs, since it depends on session state surviving a full page navigation out to Google and back). Popup returns the result directly in the same page load, no "did we just return from a redirect" detection needed at all',
+  ]},
   { version:'v0.0.82', date:'2026-07-09', changes:[
     'Fixed a likely cause of "tapping Link Google Account does nothing visible" — if the account session wasn\'t fully ready yet, the old code would throw a silent error that no toast could ever catch (a synchronous error, not a promise rejection). Now shows a clear warning if that happens, plus a "Opening Google sign-in…" confirmation the moment the flow actually starts, so it\'s obvious whether the flow began at all',
   ]},
