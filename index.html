@@ -85,8 +85,13 @@
   }
   /* Confirm dialogs can be triggered from inside another modal (e.g. a purchase confirm opened
      from the Shop) — needs to render above every other modal-overlay, not just whichever one
-     happens to come later in the DOM (same z-index would otherwise stack by document order). */
-  #confirm-modal{ z-index:95; }
+     happens to come later in the DOM (same z-index would otherwise stack by document order).
+     Also needs to beat #boot-loading (z-index:200) — a confirm CAN fire during boot itself (e.g.
+     the Google account credential-swap prompt from handleGoogleRedirectResult, which runs before
+     bootGame() ever hides the loading screen). Without this, that confirm would render but sit
+     completely invisible behind the opaque loading overlay — the user would never see it or be
+     able to click it, so nothing could ever actually resolve. */
+  #confirm-modal{ z-index:210; }
   .modal-card{
     background:var(--bg-panel); border:1px solid var(--border-soft); border-radius:14px;
     width:100%; max-width:380px; max-height:75vh; display:flex; flex-direction:column;
@@ -959,28 +964,43 @@ async function handleGoogleRedirectResult(){
   try {
     const result = await _auth.getRedirectResult();
     if(result && result.user){
+      console.log('[Google Link] Success — linked as', result.user.email);
       showToast(`✅ Google account linked! Your progress now backs up to ${result.user.email || 'your Google account'}.`);
       render();
+    } else {
+      // Not an error, but also not a link — this boot just wasn't a return from a redirect at all.
+      console.log('[Google Link] No redirect result this boot (normal on a fresh app open).');
     }
   } catch(e){
+    console.log('[Google Link] Error code:', e.code, '| message:', e.message);
     if(e.code === 'auth/credential-already-in-use'){
       // This Google account already has a DIFFERENT, older linked identity with its own progress
-      // (e.g. they played on another device first). The right move is offering to switch to
-      // THAT account — restoring their real progress — rather than just failing silently.
-      const proceed = confirm(
-        "This Google account already has saved progress from another device. Sign in and use THAT progress instead? (This device's current save will be replaced.)"
-      );
-      if(proceed && e.credential){
-        try {
-          await _auth.signInWithCredential(e.credential);
-          window._uid = _auth.currentUser.uid;
-          await loadGame();
-          render();
-          showToast('✅ Restored progress from your Google account!');
-        } catch(err){
-          showToast('Could not restore progress: ' + err.message);
+      // (e.g. they played on another device first, or tested linking earlier). The right move is
+      // offering to switch to THAT account — restoring their real progress — rather than just
+      // failing silently. Uses the app's own modal, not native confirm() — a native browser
+      // dialog firing THIS early in boot (before the loading overlay is even hidden) is a real
+      // risk of being missed or not properly interactive, which would explain linking silently
+      // never completing even though the user did everything right on their end.
+      showConfirm(
+        'Google Account Already Linked',
+        'This Google account already has saved progress from another device. Sign in and use THAT progress instead? This device\'s current save will be replaced.',
+        async () => {
+          if(!e.credential){
+            showToast('Could not restore progress: missing credential — try linking again');
+            return;
+          }
+          try {
+            await _auth.signInWithCredential(e.credential);
+            window._uid = _auth.currentUser.uid;
+            await loadGame();
+            render();
+            showToast('✅ Restored progress from your Google account!');
+          } catch(err){
+            console.log('[Google Link] signInWithCredential failed:', err.message);
+            showToast('Could not restore progress: ' + err.message);
+          }
         }
-      }
+      );
     } else if(e.code && e.code !== 'auth/no-auth-event'){
       // 'auth/no-auth-event' just means this boot wasn't a return from a redirect — not a real error.
       showToast('Google sign-in failed: ' + e.message);
@@ -1037,7 +1057,7 @@ window.storage = {
 // Semantic version label (MAJOR.MINOR.PATCH), tracking development stages through beta.
 // Displayed in Home -> Settings so testers can confirm which build they're actually running.
 // >>> BUMP THE PATCH NUMBER HERE ON EVERY SHIP, matching the sw.js CACHE_NAME version <<<
-const GAME_VERSION = 'v0.0.79';
+const GAME_VERSION = 'v0.0.80';
 
 // Player-facing changelog, shown in the clipboard/log modal's "Change Log" tab. Most recent
 // entry FIRST. >>> ADD A NEW ENTRY HERE ON EVERY SHIP GOING FORWARD, same routine as bumping
@@ -1047,6 +1067,9 @@ const GAME_VERSION = 'v0.0.79';
 // defeating any code that's meant to be secret/unique/one-per-person. Describe what a code system
 // DOES ("added founder codes for testers") without ever naming the codes themselves. <<<
 const GAME_CHANGELOG = [
+  { version:'v0.0.80', date:'2026-07-09', changes:[
+    'Fixed a real bug: linking a Google account that already had saved progress elsewhere would silently never complete. The confirm dialog asking "use that account\'s progress instead?" was rendering completely invisible, hidden behind the loading screen (z-index ordering bug) — it could never be seen or clicked, so the account swap could never be confirmed. Also switched that dialog to the app\'s own modal system instead of a native browser confirm(), and added clearer logging so a future failure like this surfaces immediately instead of failing silently',
+  ]},
   { version:'v0.0.79', date:'2026-07-09', changes:[
     'Fixed a real bug: retained stats from prestige were being silently overwritten every time you prestiged again, instead of accumulating — meaning whatever you retained from prestige 1 was completely discarded the moment you prestiged a second time. Verified with a simulation: at realistic stat scale, the old behavior stayed flat forever while the fix correctly compounds across every prestige, same as the flat +10/prestige bonus already did',
   ]},
