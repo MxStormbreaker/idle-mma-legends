@@ -952,10 +952,29 @@ function isGoogleLinked(){
 }
 
 function linkGoogleAccount(){
-  const provider = new firebase.auth.GoogleAuthProvider();
-  _auth.currentUser.linkWithRedirect(provider).catch((e) => {
+  if(!_auth || !_auth.currentUser){
+    // If this fires, the button click did essentially nothing visible before now — this is
+    // likely why linking looked like it "did nothing": _auth.currentUser.linkWithRedirect(...)
+    // would have thrown a SYNCHRONOUS error (calling a method on null), which a plain .catch()
+    // on the returned promise can never catch, since the error happens before any promise even
+    // exists. Guarding explicitly here, with a visible toast either way, closes that gap.
+    showToast('⚠️ Not signed in yet — wait a moment and try again');
+    console.log('[Google Link] Aborted: _auth.currentUser was', _auth ? _auth.currentUser : '_auth itself missing');
+    return;
+  }
+  showToast('Opening Google sign-in…');
+  try {
+    const provider = new firebase.auth.GoogleAuthProvider();
+    _auth.currentUser.linkWithRedirect(provider).catch((e) => {
+      console.log('[Google Link] linkWithRedirect promise rejected:', e.code, e.message);
+      showToast('Could not start Google sign-in: ' + e.message);
+    });
+  } catch(e){
+    // Catches synchronous throws — e.g. GoogleAuthProvider constructor failing, or anything else
+    // that errors before the promise chain begins.
+    console.log('[Google Link] Synchronous error starting link:', e.message);
     showToast('Could not start Google sign-in: ' + e.message);
-  });
+  }
   // Page navigates away to Google's consent screen here — handleGoogleRedirectResult() picks up
   // the result on the next boot, after the browser returns to this page.
 }
@@ -1062,7 +1081,7 @@ window.storage = {
 // Semantic version label (MAJOR.MINOR.PATCH), tracking development stages through beta.
 // Displayed in Home -> Settings so testers can confirm which build they're actually running.
 // >>> BUMP THE PATCH NUMBER HERE ON EVERY SHIP, matching the sw.js CACHE_NAME version <<<
-const GAME_VERSION = 'v0.0.81';
+const GAME_VERSION = 'v0.0.82';
 
 // Player-facing changelog, shown in the clipboard/log modal's "Change Log" tab. Most recent
 // entry FIRST. >>> ADD A NEW ENTRY HERE ON EVERY SHIP GOING FORWARD, same routine as bumping
@@ -1072,6 +1091,9 @@ const GAME_VERSION = 'v0.0.81';
 // defeating any code that's meant to be secret/unique/one-per-person. Describe what a code system
 // DOES ("added founder codes for testers") without ever naming the codes themselves. <<<
 const GAME_CHANGELOG = [
+  { version:'v0.0.82', date:'2026-07-09', changes:[
+    'Fixed a likely cause of "tapping Link Google Account does nothing visible" — if the account session wasn\'t fully ready yet, the old code would throw a silent error that no toast could ever catch (a synchronous error, not a promise rejection). Now shows a clear warning if that happens, plus a "Opening Google sign-in…" confirmation the moment the flow actually starts, so it\'s obvious whether the flow began at all',
+  ]},
   { version:'v0.0.81', date:'2026-07-09', changes:[
     'Google Account linking: added an explicit profile refresh (reload()) right after a successful link, in case the locally cached account info doesn\'t immediately pick up the new link on return from Google\'s sign-in screen',
     'Added a "Check Status" button to Cloud Backup — lets you manually re-verify link status without repeating the whole sign-in flow, and tells you clearly either way instead of leaving it ambiguous',
