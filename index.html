@@ -1037,17 +1037,27 @@ window.storage = {
 // Semantic version label (MAJOR.MINOR.PATCH), tracking development stages through beta.
 // Displayed in Home -> Settings so testers can confirm which build they're actually running.
 // >>> BUMP THE PATCH NUMBER HERE ON EVERY SHIP, matching the sw.js CACHE_NAME version <<<
-const GAME_VERSION = 'v0.0.77';
+const GAME_VERSION = 'v0.0.79';
 
 // Player-facing changelog, shown in the clipboard/log modal's "Change Log" tab. Most recent
 // entry FIRST. >>> ADD A NEW ENTRY HERE ON EVERY SHIP GOING FORWARD, same routine as bumping
 // GAME_VERSION and sw.js's CACHE_NAME above — this is now a required 3rd step, not optional. <<<
+// >>> NEVER reference an actual dev/tester code STRING here (or anywhere else player-facing) —
+// this file ships to every player, so naming a code in the changelog publishes it to everyone,
+// defeating any code that's meant to be secret/unique/one-per-person. Describe what a code system
+// DOES ("added founder codes for testers") without ever naming the codes themselves. <<<
 const GAME_CHANGELOG = [
+  { version:'v0.0.79', date:'2026-07-09', changes:[
+    'Fixed a real bug: retained stats from prestige were being silently overwritten every time you prestiged again, instead of accumulating — meaning whatever you retained from prestige 1 was completely discarded the moment you prestiged a second time. Verified with a simulation: at realistic stat scale, the old behavior stayed flat forever while the fix correctly compounds across every prestige, same as the flat +10/prestige bonus already did',
+  ]},
+  { version:'v0.0.78', date:'2026-07-09', changes:[
+    'Removed dev/tester code names that had been mistakenly referenced in earlier Change Log entries — a code listed here would be visible to every player, defeating the point of a secret one-time code',
+  ]},
   { version:'v0.0.77', date:'2026-07-09', changes:[
-    'Fixed a real gap in the Founder code system: the "one code per account" rule was only enforced by a local flag that could be reset by editing save data. Added a proper server-side check tied to the account\'s Firebase ID — verified directly with a simulated attack (guessing MMAFOUNDER01 through 03 on one account) that it now blocks after the first successful claim, while still allowing different accounts to claim their own codes normally',
+    'Fixed a real gap in the Founder code system: the "one code per account" rule was only enforced by a local flag that could be reset by editing save data. Added a proper server-side check tied to the account\'s Firebase ID instead — verified with a simulated attack that repeated redemption attempts on one account now correctly get blocked after the first successful claim, while different accounts can still each claim their own code normally',
   ]},
   { version:'v0.0.76', date:'2026-07-09', changes:[
-    'Added 30 unique one-time Founder codes for early testers (MMAFOUNDER01-30) — redeeming grants a one-time kickoff bonus (+\$6,000 cash, +2,000 Teeth, 8 chest pulls, 400min speed boost) and permanently unlocks a Free Daily Tester Bonus button (+\$600, +300 Teeth, once per day forever)',
+    'Added unique one-time Founder codes for early testers — redeeming grants a one-time kickoff bonus and permanently unlocks a Free Daily Tester Bonus button',
     'Each code can only be claimed once, globally, by whoever redeems it first — enforced server-side via Firebase, not just locally',
     'Redeemed through the same Dev Code box already in Settings — no new UI to learn',
   ]},
@@ -3967,11 +3977,18 @@ function executePrestige(){
   // this is a rare, guaranteed, one-time spike as a reward for the milestone, not part of the
   // routine wins-based grind that cap is meant to bound.
   const effectiveRetainPct = superPrestigeMilestone ? (retainPct + SUPER_PRESTIGE_RETENTION_BONUS_PCT) : retainPct;
+  // BUGFIX: retainedStats used to be OVERWRITTEN here every prestige (state.prestige.retainedStats
+  // = retained), and the stat reset below used only that one-prestige-worth local value — meaning
+  // retained stats from every PRIOR prestige were silently discarded the moment you prestiged
+  // again, never actually accumulating despite being described as a persistent carryover. Now
+  // each prestige's retained portion ADDS to the running total instead of replacing it, matching
+  // how the flat +10/prestige bonus already correctly accumulates forever.
   const retained = {};
   STAT_KEYS_ALL.forEach(key => {
-    retained[key] = Math.max(0, Math.round(state.fighter.stats[key] * effectiveRetainPct));
+    const thisPrestigePortion = Math.max(0, Math.round(state.fighter.stats[key] * effectiveRetainPct));
+    state.prestige.retainedStats[key] = (state.prestige.retainedStats[key] || 0) + thisPrestigePortion;
+    retained[key] = state.prestige.retainedStats[key]; // the ACCUMULATED total, not just this prestige's slice
   });
-  state.prestige.retainedStats = retained;
 
   const surpriseNote = ironWillSurprise > 0.0005
     ? ` 🛡️ Iron Will bumped your retention from ${(previewRetainPct(winsSinceHoF)*100).toFixed(1)}% to ${(retainPct*100).toFixed(1)}%!`
