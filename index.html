@@ -678,7 +678,7 @@
   <div id="topbar">
     <div class="stat-chip gold"><span class="icon">💰</span><span id="hud-cash">0</span></div>
     <div class="stat-chip teeth"><span class="icon">🦷</span><span id="hud-teeth">0</span></div>
-    <div class="stat-chip teal"><span class="icon">⭐</span><span id="hud-level">Lv.1</span></div>
+    <button class="stat-chip" id="leaderboards-toggle-btn"><span class="icon">🏆</span></button>
     <button class="stat-chip" id="shop-toggle-btn"><span class="icon">🛍️</span></button>
     <button class="stat-chip log-toggle" id="log-toggle-btn"><span class="icon">📋</span></button>
   </div>
@@ -779,6 +779,18 @@
     </div>
   </div>
 
+  <!-- LEADERBOARDS MODAL — reachable from the top bar regardless of current tab, not tucked
+       inside the Gym/League tab anymore. -->
+  <div id="leaderboards-modal" class="modal-overlay" style="display:none;">
+    <div class="modal-card" style="max-height:85vh;">
+      <div class="modal-header">
+        <div class="modal-title">🏆 Leaderboards</div>
+        <button class="modal-close" id="leaderboards-modal-close">✕</button>
+      </div>
+      <div class="modal-body" id="leaderboards-modal-body"></div>
+    </div>
+  </div>
+
   <!-- LEVEL-UP NOTICES MODAL -->
   <div id="levelup-modal" class="modal-overlay" style="display:none;">
     <div class="modal-card">
@@ -822,18 +834,6 @@
       <div class="modal-body" id="gympreview-modal-body"></div>
     </div>
   </div>
-
-  <!-- PRESTIGE REROLL MODAL -->
-  <div id="reroll-modal" class="modal-overlay" style="display:none;">
-    <div class="modal-card">
-      <div class="modal-header">
-        <div class="modal-title">🎲 New Look?</div>
-        <button class="modal-close" id="reroll-modal-close">✕</button>
-      </div>
-      <div class="modal-body" id="reroll-modal-body"></div>
-    </div>
-  </div>
-
   <!-- SHOP MODAL -->
   <div id="shop-modal" class="modal-overlay" style="display:none;">
     <div class="modal-card" style="max-height:85vh;">
@@ -1037,12 +1037,42 @@ window.storage = {
 // Semantic version label (MAJOR.MINOR.PATCH), tracking development stages through beta.
 // Displayed in Home -> Settings so testers can confirm which build they're actually running.
 // >>> BUMP THE PATCH NUMBER HERE ON EVERY SHIP, matching the sw.js CACHE_NAME version <<<
-const GAME_VERSION = 'v0.0.70';
+const GAME_VERSION = 'v0.0.77';
 
 // Player-facing changelog, shown in the clipboard/log modal's "Change Log" tab. Most recent
 // entry FIRST. >>> ADD A NEW ENTRY HERE ON EVERY SHIP GOING FORWARD, same routine as bumping
 // GAME_VERSION and sw.js's CACHE_NAME above — this is now a required 3rd step, not optional. <<<
 const GAME_CHANGELOG = [
+  { version:'v0.0.77', date:'2026-07-09', changes:[
+    'Fixed a real gap in the Founder code system: the "one code per account" rule was only enforced by a local flag that could be reset by editing save data. Added a proper server-side check tied to the account\'s Firebase ID — verified directly with a simulated attack (guessing MMAFOUNDER01 through 03 on one account) that it now blocks after the first successful claim, while still allowing different accounts to claim their own codes normally',
+  ]},
+  { version:'v0.0.76', date:'2026-07-09', changes:[
+    'Added 30 unique one-time Founder codes for early testers (MMAFOUNDER01-30) — redeeming grants a one-time kickoff bonus (+\$6,000 cash, +2,000 Teeth, 8 chest pulls, 400min speed boost) and permanently unlocks a Free Daily Tester Bonus button (+\$600, +300 Teeth, once per day forever)',
+    'Each code can only be claimed once, globally, by whoever redeems it first — enforced server-side via Firebase, not just locally',
+    'Redeemed through the same Dev Code box already in Settings — no new UI to learn',
+  ]},
+  { version:'v0.0.75', date:'2026-07-09', changes:[
+    'Made the remaining large list-style sections collapsible: Tale of the Tape, Your Progress, Gear Loot (Fighter tab); Prestige, Tiers (Career tab); Gym Roster (Gym tab) — all default to expanded so nothing changes visually, the option just now exists',
+    'Verified gym level-up benefits (stat bonus, milestone caps, approved votes) all apply immediately to newly-joined members regardless of when the gym reached that level — confirmed via direct test, only the one-time Teeth/time-skip rewards require having been a member at the time',
+  ]},
+  { version:'v0.0.74', date:'2026-07-09', changes:[
+    'Removed the hard $50/day real-money spend cap — purchases always go through now',
+    'Added a soft $100/day overspend warning instead — once today\'s total would exceed $100, the confirm dialog adds an explicit spending-check reminder, but never blocks the purchase',
+    'Removed the now-obsolete QAUNLIMITED dev code (its entire purpose was bypassing a cap that no longer exists)',
+  ]},
+  { version:'v0.0.73', date:'2026-07-09', changes:[
+    'Added Gym Points & Upgrades — 1 point per gym level, spent via Coach/Head Coach vote (majority of current leadership to pass, 48h to resolve or auto-rejects). 5 upgrades to choose from: Power/Speed/Defense specialization, Cash Boost, and Bonus Roulette Spin, all gym-wide for every member',
+    'Gym Points is a derived value (earned levels minus approved-vote costs), not a shared mutable counter — avoids a lost-update race if two members\' clients act at the same time',
+  ]},
+  { version:'v0.0.72', date:'2026-07-09', changes:[
+    'Added Gym Level milestones (5/10/25/50/100/150/200) — permanent retention cap and Corner Bonus cap increases for every current member, giving the infinite gym level scale concrete goals',
+    'Every gym level-up now grants scaling Teeth + a flat 30-min time skip to every member who was around when it happened — verified via a membership snapshot, so joining an established gym doesn\'t retroactively unlock past rewards, and being idle when it happens doesn\'t cost you the reward either',
+    'Added a Gym Progression guide (tap the ℹ️ next to Gym Level) showing every milestone and what it unlocks',
+  ]},
+  { version:'v0.0.71', date:'2026-07-09', changes:[
+    'Removed the post-prestige "new look?" reroll prompt — Style tab now gives full manual appearance control anytime, making the surprise reroll redundant',
+    'Replaced the top-bar Level chip with a Leaderboards button (🏆) — Gym Wars, Highest Stat, and Teeth Spent leaderboards are now reachable from any tab, not just the Gym tab. Level moved to Your Progress in the Fighter tab',
+  ]},
   { version:'v0.0.70', date:'2026-07-09', changes:[
     'Fixed a real bug: the Gym tab was completely broken for everyone above Level 10 — a missing variable declaration (leagueRosterCache) caused the tab to silently fail to render, leaving the previous tab showing with no error message. Found by actually executing the render function in an isolated test rather than just reading the code',
   ]},
@@ -1232,8 +1262,8 @@ let state = {
     cash: 50,
     teeth: 5, // premium currency — earned rarely from knockouts, spent in the Shop
     everSpentReal: false, // true after ANY real-money purchase — gates the one-time Founder's Bundle
+    testerCodeRedeemed: null, // which of the 30 unique tester codes this player redeemed, if any — unlocks the daily tester bonus button forever once set
     unlockedPromoOffers: [], // promo-code-gated Shop offers unlocked so far (see VIPACCESS dev code)
-    spendCapDisabled: false, // testing-only override — see QAUNLIMITED dev code
     realPurchasesUnlocked: false, // real-money "Buy" buttons stay locked until QAPURCHASE is redeemed
     teethSpentWeekKey: '',      // local week bucket (see getWeekKey) for the Teeth Spent leaderboard
     teethSpentThisWeek: 0,      // resets when teethSpentWeekKey rolls over — tracks spend, not earnings
@@ -1321,18 +1351,25 @@ let state = {
                                                                  // a tab acknowledges/hides its
                                                                  // badge until the count changes again
     rosterExpanded: false, // Gym Roster: false = top 5 only, true = all members
+    rosterSectionExpanded: true, // Gym Roster outer section collapse — distinct from rosterExpanded above
     bulkBuyQty: 1, // 1 | 10 | 100 | 'max' — shared quantity toggle for Equipment/Home Perks/Power-Ups
     gearExpanded: true,   // Fighter tab Gear grid — collapsible instead of always open
+    tapeExpanded: true,   // Fighter tab Tale of the Tape
+    progressExpanded: true, // Fighter tab Your Progress
+    gearLootExpanded: true, // Fighter tab Gear Loot
     garageExpanded: true, // Home tab Garage grid — collapsible instead of always open
     equipmentExpanded: true,  // TRAIN tab Equipment Upgrades list
     homePerksExpanded: true,  // Home tab Home Perks list
     powerUpsExpanded: true,   // Career tab Power-Ups list
+    prestigeSectionExpanded: true, // Career tab Prestige section (wraps Power-Ups)
+    tiersSectionExpanded: true,    // Career tab Tiers section (outer — distinct from tiersExpanded, which is the show-5-vs-10 toggle within it)
     cosmeticsExpanded: true,  // Home tab Cosmetic Gear list
     questsExpanded: true,     // League tab Daily Quests list
     logModalView: 'activity', // 'activity' | 'changelog' — which tab the clipboard modal shows
     homeCosmeticsExpanded: true, // expanded by default — Style tab now leads with cosmetics
     weeklyScoreExpanded: true,  // League tab "Gym Wars Score — This Week" list
     gymWarsExpanded: true,      // League tab full Gym Wars section (Top Gyms/Growth/Players)
+    gymVotingExpanded: true,    // League tab Gym Points & Upgrades section
     teethSpendExpanded: true,   // League tab Teeth Spent Leaderboard
     powerLeaderboardExpanded: true, // League tab Power Leaderboard
     tiersExpanded: false,  // Career Tiers list: false = first 5 only, true = all 10
@@ -1387,6 +1424,7 @@ let state = {
     role: 'member',         // this player's role in their CURRENT league: head_coach|coach|trainer|member
     gymXpContributed: 0,    // lifetime Gym XP contributed to the CURRENT league (resets on switch)
     knownGymLevel: 1,       // last-fetched gym level, cached/persisted so the stat bonus still applies
+    lastClaimedGymLevel: 1, // gym level-up rewards claimed up through this level — see claimGymLevelRewards()
                              // offline without needing a live network read every combat tick
     lastPayoutWeekKey: '',   // most recent week this player's Gym Wars payout has been settled for
     lastPowerPayoutWeekKey: '', // same, but for the Power Leaderboard payout
@@ -1402,9 +1440,10 @@ let state = {
     questIds: [],           // today's quest ids — the full DAILY_QUEST_TIERS ladder
     questProgress: {},       // questId -> progress count
     questsClaimed: [],       // quest ids already claimed today
-    spendUSD: 0,             // real-money $ spent today across all IAP paths — see DAILY_SPEND_CAP_USD
-    freeSpinsUsedToday: 0,   // roulette spins granted via watching an ad — see FREE_AD_SPINS_PER_DAY
+    spendUSD: 0,             // real-money $ spent today across all IAP paths — see OVERSPEND_WARNING_USD
+    freeSpinsUsedToday: 0,   // roulette spins granted via watching an ad — see freeAdSpinsPerDay()
     rouletteSpinsToday: 0,   // ALL spins today (paid, ad, or bonus) — drives the escalating Teeth cost, see rouletteSpinCost()
+    testerBonusClaimedToday: false, // resets daily — see claimTesterDailyBonus()
     roulettePityCounter: 0,  // increments once per spin taken AT the 50-Teeth max cost — see rouletteJackpotPityBonus()
     questResetUsedToday: false, // whether today's paid quest reset has already been used
   },
@@ -1865,6 +1904,10 @@ function effectiveStats(){
   if(state.social.leagueId){
     const pct = gymLevelBonusPct();
     if(pct > 0) STAT_KEYS_ALL.forEach(key => { result[key] = Math.round((result[key] || 0) * (1 + pct)); });
+    STAT_KEYS_ALL.forEach(key => {
+      const upgradePct = gymUpgradeStatBonus(key);
+      if(upgradePct > 0) result[key] = Math.round((result[key] || 0) * (1 + upgradePct));
+    });
   }
   const cornerPct = cornerBonusPct();
   if(cornerPct > 0) STAT_KEYS_ALL.forEach(key => { result[key] = Math.round((result[key] || 0) * (1 + cornerPct)); });
@@ -1905,6 +1948,12 @@ function computeStatBreakdown(key){
       const before = running;
       running = Math.round(running * (1+pct));
       steps.push({ label:`Gym Level bonus (+${(pct*100).toFixed(1)}%)`, delta:running-before, running, type:'pct' });
+    }
+    const upgradePct = gymUpgradeStatBonus(key);
+    if(upgradePct > 0){
+      const before = running;
+      running = Math.round(running * (1+upgradePct));
+      steps.push({ label:`Gym Vote: ${GYM_UPGRADE_MENU.find(u=>u.statKey===key)?.name||'Specialization'} (+${(upgradePct*100).toFixed(0)}%)`, delta:running-before, running, type:'pct' });
     }
   }
 
@@ -2683,6 +2732,24 @@ function checkVersionUpdate(){
   scheduleSave();
 }
 
+function openLeaderboardsModal(){
+  document.getElementById('leaderboards-modal').style.display = 'flex';
+  document.getElementById('leaderboards-modal-body').innerHTML = renderGlobalLeaderboards();
+  attachContentHandlers(); // the player-stats click handlers live in the shared handler pass
+  // Same data these leaderboards always needed — previously only fetched when opening the
+  // League/Gym tab, now fetched here too since this modal is reachable independently of that tab.
+  refreshGymWars();
+  refreshAllGymLevels();
+  refreshTeethSpendLeaderboard();
+}
+
+function refreshLeaderboardsModal(){
+  const modal = document.getElementById('leaderboards-modal');
+  if(modal.style.display !== 'flex') return; // don't bother re-rendering hidden content
+  document.getElementById('leaderboards-modal-body').innerHTML = renderGlobalLeaderboards();
+  attachContentHandlers();
+}
+
 function showWelcomeBackModal(data){
   const rows = [
     { icon:'⏱️', label:'Time away', value: data.mins >= 60 ? `${(data.mins/60).toFixed(1)}h` : `${data.mins}m` },
@@ -2712,7 +2779,6 @@ let activeTab = 'fighter';
 function render(){
   document.getElementById('hud-cash').textContent = fmtNum(state.economy.cash);
   document.getElementById('hud-teeth').textContent = fmtNum(state.economy.teeth);
-  document.getElementById('hud-level').textContent = `Lv.${state.fighter.level}`;
   updateNavBadges();
   updateNavLocks();
 
@@ -3049,7 +3115,7 @@ function renderFighterTab(){
       </div>
     </div>
 
-    ${renderExpandCollapseAll(['gearExpanded'])}
+    ${renderExpandCollapseAll(['tapeExpanded','progressExpanded','gearExpanded','gearLootExpanded'])}
     <div class="panel-title">Active Loops</div>
     <div class="card loop-card compact">
       <div class="loop-icon">🥊</div>
@@ -3068,13 +3134,20 @@ function renderFighterTab(){
       </div>
     </div>
 
-    <div class="panel-title">Tale of the Tape <span style="color:var(--text-muted); font-size:11px;">(tap a stat for the full breakdown)</span></div>
+    ${renderCollapsibleHeader('Tale of the Tape <span style="color:var(--text-muted); font-size:11px; text-transform:none; letter-spacing:0;">(tap a stat for the full breakdown)</span>', 'tapeExpanded', false)}
+    ${state.ui.tapeExpanded ? `
     <div class="tape tape-2x4">
       ${renderTapeStatRow('power','Power')}${renderTapeStatRow('speed','Speed')}${renderTapeStatRow('defense','Defense')}${renderTapeStatRow('stamina','Stamina')}${renderTapeStatRow('chin','Chin')}${renderTapeStatRow('technique','Technique')}${renderTapeStatRow('slip','Slip')}${renderTapeStatRow('mental','Mental')}
     </div>
+    ` : ''}
 
-    <div class="panel-title">Your Progress <span style="color:var(--text-muted); font-size:11px;">(tap any stat to jump there)</span></div>
+    ${renderCollapsibleHeader('Your Progress <span style="color:var(--text-muted); font-size:11px; text-transform:none; letter-spacing:0;">(tap any stat to jump there)</span>', 'progressExpanded', false)}
+    ${state.ui.progressExpanded ? `
     <div class="card" style="display:grid; grid-template-columns:1fr 1fr; gap:10px;">
+      <button class="progress-stat-btn" data-jump-tab="fighter">
+        <div style="font-size:10px; color:var(--text-muted); text-transform:uppercase; letter-spacing:0.5px;">⭐ Level</div>
+        <div style="font-family:'Oswald',sans-serif; font-weight:700; font-size:14px; color:var(--champ-teal);">${state.fighter.level}</div>
+      </button>
       <button class="progress-stat-btn" data-jump-tab="career">
         <div style="font-size:10px; color:var(--text-muted); text-transform:uppercase; letter-spacing:0.5px;">🏆 Career Tier</div>
         <div style="font-family:'Oswald',sans-serif; font-weight:700; font-size:14px; color:var(--belt-gold);">${f.tier}</div>
@@ -3111,6 +3184,7 @@ function renderFighterTab(){
         <div style="font-family:'Oswald',sans-serif; font-weight:700; font-size:14px; color:var(--corner-red);">+${(cornerBonusPct()*100).toFixed(1)}% all stats</div>
       </button>
     </div>
+    ` : ''}
 
     <div class="panel-title" data-toggle-section="gearExpanded" style="cursor:pointer; display:flex; justify-content:space-between; align-items:center;">
       <span>Gear <span data-open-tier-legend style="cursor:pointer; opacity:0.7; font-size:12px;" title="Rarity tier reference">ℹ️</span></span><span style="font-size:12px;">${state.ui.gearExpanded ? '▾' : '▸'}</span>
@@ -3131,7 +3205,8 @@ function renderFighterTab(){
     </div>
     ` : ''}
 
-    <div class="panel-title">Gear Loot ${state.lootBoxes.length > 0 ? `<span style="color:var(--belt-gold);">(${state.lootBoxes.length})</span>` : ''}</div>
+    ${renderCollapsibleHeader(`Gear Loot ${state.lootBoxes.length > 0 ? `<span style="color:var(--belt-gold); text-transform:none; letter-spacing:0;">(${state.lootBoxes.length})</span>` : ''}`, 'gearLootExpanded', state.lootBoxes.length > 0)}
+    ${state.ui.gearLootExpanded ? `
     <div class="card" style="display:flex; justify-content:space-between; align-items:center; padding:10px 14px; margin-bottom:8px;">
       <div>
         <div style="font-size:13px; font-weight:600;">🔓 Auto-Open Chests</div>
@@ -3158,6 +3233,7 @@ function renderFighterTab(){
         }).join('')}
       </div>
     `}
+    ` : ''}
   `;
 }
 
@@ -3167,7 +3243,7 @@ function renderCareerTab(){
   const nextTier = TIERS.find(t => t.minWins > f.wins);
   const eligible = isPrestigeEligible();
   return `
-    ${renderExpandCollapseAll(['powerUpsExpanded'])}
+    ${renderExpandCollapseAll(['prestigeSectionExpanded','powerUpsExpanded','tiersSectionExpanded'])}
     <div class="panel-title">Career Ladder</div>
     <div class="card">
       <div style="font-family:'Oswald',sans-serif; font-size:16px; font-weight:600; color:var(--belt-gold);">${tier.name}</div>
@@ -3191,7 +3267,8 @@ function renderCareerTab(){
       <div><div style="font-family:'Oswald',sans-serif; font-size:22px; font-weight:700; color:var(--belt-gold);">${f.wins+f.losses>0?Math.round(f.wins/(f.wins+f.losses)*100):0}%</div><div style="font-size:11px; color:var(--text-muted);">Win Rate</div></div>
     </div>
 
-    <div class="panel-title">Prestige ${state.prestige.count > 0 ? `<span style="color:var(--belt-gold);">★ ${state.prestige.count}</span>` : ''}</div>
+    ${renderCollapsibleHeader(`Prestige ${state.prestige.count > 0 ? `<span style="color:var(--belt-gold); text-transform:none; letter-spacing:0;">★ ${state.prestige.count}</span>` : ''}`, 'prestigeSectionExpanded', false)}
+    ${state.ui.prestigeSectionExpanded ? `
     ${state.prestige.count > 0 ? `
       <div class="card" style="border-color:var(--belt-gold); margin-bottom:8px;">
         <div style="font-size:12px; color:var(--text-muted);">
@@ -3283,9 +3360,10 @@ function renderCareerTab(){
         }).join('')}
       ` : '');
     })()}
+    ` : ''}
 
-    <div class="panel-title">Tiers</div>
-    ${(() => {
+    ${renderCollapsibleHeader('Tiers', 'tiersSectionExpanded', false)}
+    ${state.ui.tiersSectionExpanded ? (() => {
       const currentIdx = TIERS.findIndex(t => t.name === tier.name);
       let windowStart = Math.max(0, currentIdx - 2);
       const windowEnd = Math.min(TIERS.length, windowStart + 5);
@@ -3305,7 +3383,7 @@ function renderCareerTab(){
       }).join('') + (TIERS.length > 5 ? `
         <button class="btn btn-ghost btn-block" data-toggle-tiers-expand style="margin-top:4px;">${state.ui.tiersExpanded ? '▲ Show Less' : '▼ Show All 10 Tiers'}</button>
       ` : '');
-    })()}
+    })() : ''}
   `;
 }
 
@@ -3805,9 +3883,37 @@ const RETENTION_STEP_VALUES = [0.005,0.010,0.015,0.020,0.025,0.030,0.035,0.040];
 // stays completely uncapped, so committed players can still reach effectively unlimited power
 // through sheer prestige count — that growth just doesn't come from retained stats anymore once
 // you're past this ceiling, it comes from the ever-growing flat bonus instead.
+// GYM LEVEL MILESTONES — every 5/10/25/50/100/150/200, a gym unlocks a small permanent bonus to
+// EVERY current member's retention cap or Corner Bonus cap (alternating, escalating). These are
+// LIVE/ongoing (based on current gym level + current membership) — unlike the one-time Teeth/
+// time-skip level-up rewards below, there's no historical "were you a member when it happened"
+// gate here, since non-members already get zero gym bonuses of any kind; the moment you leave,
+// this stops applying, same as the existing Gym Level stat bonus already works.
+const GYM_LEVEL_MILESTONES = [5, 10, 25, 50, 100, 150, 200];
+function gymMilestoneRetentionBonus(){
+  if(!state.social.leagueId) return 0;
+  const level = state.social.knownGymLevel || 1;
+  let bonus = 0;
+  if(level >= 5) bonus += 0.0025;
+  if(level >= 25) bonus += 0.005;
+  if(level >= 100) bonus += 0.01;
+  if(level >= 200) bonus += 0.01;
+  return bonus;
+}
+function gymMilestoneCornerBonus(){
+  if(!state.social.leagueId) return 0;
+  const level = state.social.knownGymLevel || 1;
+  let bonus = 0;
+  if(level >= 10) bonus += 0.005;
+  if(level >= 50) bonus += 0.01;
+  if(level >= 150) bonus += 0.02;
+  return bonus;
+}
+
 const RETENTION_CAP_CEILING = 0.15;
 function retentionCap(){
-  return Math.min(RETENTION_CAP_CEILING, 0.04 + Math.floor((state.prestige.count||0) / 10) * 0.005);
+  const ceiling = RETENTION_CAP_CEILING + gymMilestoneRetentionBonus();
+  return Math.min(ceiling, 0.04 + Math.floor((state.prestige.count||0) / 10) * 0.005);
 }
 
 // PREVIEW percentage — win-based curve ONLY, no Iron Will. This is what's shown on the Career
@@ -4110,7 +4216,8 @@ function applyRoulettePrize(segment){
   return '';
 }
 
-const FREE_AD_SPINS_PER_DAY = 2;
+const FREE_AD_SPINS_PER_DAY_BASE = 2;
+function freeAdSpinsPerDay(){ return FREE_AD_SPINS_PER_DAY_BASE + gymUpgradeBonusSpins(); }
 
 function spinRoulette(){
   // Bonus free spins (won from the "2 Free Spins" prize) get used first, automatically, before
@@ -4134,12 +4241,12 @@ function spinRoulette(){
 // F2P players a real reason to engage with the wheel without needing Teeth at all.
 function watchAdForFreeSpin(){
   ensureDailyReset();
-  if(state.daily.freeSpinsUsedToday >= FREE_AD_SPINS_PER_DAY){
-    showToast(`Already used today's ${FREE_AD_SPINS_PER_DAY} free ad spins — back tomorrow!`);
+  if(state.daily.freeSpinsUsedToday >= freeAdSpinsPerDay()){
+    showToast(`Already used today's ${freeAdSpinsPerDay()} free ad spins — back tomorrow!`);
     return;
   }
   state.daily.freeSpinsUsedToday++;
-  pushLog(`📺 Watched an ad for a free roulette spin (${state.daily.freeSpinsUsedToday}/${FREE_AD_SPINS_PER_DAY} today)`, 'level');
+  pushLog(`📺 Watched an ad for a free roulette spin (${state.daily.freeSpinsUsedToday}/${freeAdSpinsPerDay()} today)`, 'level');
   runRouletteSpin();
 }
 
@@ -4234,9 +4341,9 @@ function renderShopRoulette(){
       ${bonusSpins > 0 ? `🎡 SPIN — FREE (bonus spin)` : (canSpin ? `🎡 SPIN — 🦷 ${spinCost}` : 'Not Enough Teeth')}
     </button>
     ${(() => {
-      const spinsLeft = FREE_AD_SPINS_PER_DAY - (state.daily.freeSpinsUsedToday||0);
+      const spinsLeft = freeAdSpinsPerDay() - (state.daily.freeSpinsUsedToday||0);
       return `<button class="btn btn-ghost btn-block" style="margin-top:8px; border-color:var(--champ-teal); color:var(--champ-teal);" data-watch-ad-spin ${spinsLeft<=0?'disabled':''}>
-        📺 Watch Ad for Free Spin (${Math.max(0,spinsLeft)}/${FREE_AD_SPINS_PER_DAY} today)
+        📺 Watch Ad for Free Spin (${Math.max(0,spinsLeft)}/${freeAdSpinsPerDay()} today)
       </button>`;
     })()}
     <div class="panel-title" style="margin-top:16px;">This Cycle's Prizes</div>
@@ -4253,12 +4360,7 @@ function buyTeethPack(amount, costLabel){
   // Placeholder for real-money purchase — in a shipped app this would hook into a payment SDK.
   if(realPurchasesLocked()){ showToast('🔒 Real-money purchases are locked for testing'); return; }
   const price = parseFloat(costLabel.replace(/[^0-9.]/g, ''));
-  if(!canSpendRealMoney(price)){
-    showToast(`Daily spend cap reached ($${DAILY_SPEND_CAP_USD}) — try again tomorrow`);
-    return;
-  }
-  showConfirm('Confirm Purchase', `Buy ${amount} Teeth for ${costLabel}?`, () => {
-    recordRealMoneySpend(price);
+  confirmRealMoneyPurchase(price, `Buy ${amount} Teeth for ${costLabel}?`, () => {
     state.economy.teeth += amount;
     pushLog(`Purchased ${amount} 🦷 Teeth (${costLabel})`, 'level');
     showToast(`+${amount} Teeth`);
@@ -4268,17 +4370,15 @@ function buyTeethPack(amount, costLabel){
   });
 }
 
-// Central real-money spend gate. Caps cumulative spend at $50/day across EVERY real-money path
-// (Teeth Packs, Diamond in the Rough, instant ad-skip, and Cash Bundles all route through this) —
-// not just bundles. The one exception is the Founder's Bundle below, a one-time first-purchase
-// offer that's allowed to exceed the daily cap since it can, by definition, only ever fire once.
-const DAILY_SPEND_CAP_USD = 50;
-
-function canSpendRealMoney(amountUSD, { isFirstPurchaseOffer=false } = {}){
+// Real-money spend tracking — NO hard cap anymore (was $50/day, blocking further purchases
+// entirely). Replaced with a soft warning: once today's cumulative spend would exceed $100, the
+// purchase confirm dialog gets an explicit spending-check message folded in, but the purchase
+// itself is never blocked. Aimed at surfacing overspending to the player in the moment rather
+// than preventing it outright.
+const OVERSPEND_WARNING_USD = 100;
+function needsOverspendWarning(amountUSD){
   ensureDailyReset();
-  if(state.economy.spendCapDisabled) return true; // QAUNLIMITED testing override
-  if(isFirstPurchaseOffer && !state.economy.everSpentReal) return true;
-  return (state.daily.spendUSD + amountUSD) <= DAILY_SPEND_CAP_USD + 0.001; // epsilon for cent rounding
+  return (state.daily.spendUSD + amountUSD) > OVERSPEND_WARNING_USD;
 }
 
 // Real-money purchases are locked by default — every "Buy" button right now is a placeholder
@@ -4293,6 +4393,22 @@ function recordRealMoneySpend(amountUSD){
   ensureDailyReset();
   state.daily.spendUSD += amountUSD;
   state.economy.everSpentReal = true;
+}
+
+// Single entry point for every real-money purchase path — replaces the old scattered
+// "if(!canSpendRealMoney()) block, else showConfirm()" pattern at each call site. Always allows
+// the purchase through (no hard cap); folds an explicit overspend warning into the SAME confirm
+// dialog rather than stacking a second one, so it's one prompt either way, not two in a row.
+function confirmRealMoneyPurchase(price, purchaseDescription, onConfirmed){
+  if(realPurchasesLocked()){ showToast('🔒 Real-money purchases are locked for testing'); return; }
+  const overWarning = needsOverspendWarning(price);
+  const message = overWarning
+    ? `⚠️ You've spent over $${OVERSPEND_WARNING_USD} today (today's total would become $${(state.daily.spendUSD+price).toFixed(2)}). ${purchaseDescription}`
+    : purchaseDescription;
+  showConfirm(overWarning ? 'Confirm Purchase — Spending Check' : 'Confirm Purchase', message, () => {
+    recordRealMoneySpend(price);
+    onConfirmed();
+  });
 }
 
 // Scaling $10-increment bundles. Teeth/cash rewards are a PERCENTAGE of the player's current
@@ -4313,9 +4429,10 @@ const CASH_BUNDLES = [
   { key:'bundle50', price:50, label:'Legend Bundle',    icon:'👑', teethPct:2.20, teethFloor:1300, cashPct:3.20, cashFloor:3500, bankedMinutes:300, chestPulls:12 },
 ];
 
-// One-time "welcome" offer: a bigger bundle than the daily cap allows, available ONLY before the
-// player's first-ever real-money purchase (any purchase, not just this one, locks it out for
-// good) — the standard "first purchase bonus" pattern, explicitly exempted from DAILY_SPEND_CAP_USD.
+// One-time "welcome" offer, available ONLY before the player's first-ever real-money purchase
+// (any purchase, not just this one, locks it out for good) — the standard "first purchase bonus"
+// pattern. Like every other purchase now, it just goes through confirmRealMoneyPurchase() and
+// gets the same overspend warning treatment as anything else, nothing special anymore.
 const FOUNDER_BUNDLE = {
   key:'bundleFounder', price:75, label:"Founder's Welcome Bundle", icon:'🎉',
   teethPct:5.0, teethFloor:2500, cashPct:6.0, cashFloor:6000, bankedMinutes:480, chestPulls:20,
@@ -4356,19 +4473,15 @@ function renderShopBundles(){
         <div style="font-size:11px; color:var(--text-muted); margin-top:4px;">This keeps testers from farming free Teeth/cash from what will eventually be real purchases. A dev/QA code unlocks this for testing the flow itself.</div>
       </div>
     ` : ''}
-    ${state.economy.spendCapDisabled ? `
-      <div class="card" style="margin-bottom:10px; border-color:var(--corner-red);">
-        <div style="font-size:12px; color:var(--corner-red);">⚠️ Daily spend cap disabled (QAUNLIMITED testing code active)</div>
+    <div class="card" style="margin-bottom:10px; ${spent>OVERSPEND_WARNING_USD?'border-color:var(--corner-red);':''}">
+      <div style="display:flex; justify-content:space-between; align-items:center;">
+        <div style="font-size:12px; color:var(--text-muted);">Spent today</div>
+        <div style="font-family:'Oswald',sans-serif; font-weight:700; font-size:14px; color:${spent>OVERSPEND_WARNING_USD?'var(--corner-red)':'var(--belt-gold)'};">$${spent.toFixed(2)}</div>
       </div>
-    ` : `
-      <div class="card" style="margin-bottom:10px; ${spent>=DAILY_SPEND_CAP_USD?'border-color:var(--corner-red);':''}">
-        <div style="display:flex; justify-content:space-between; align-items:center;">
-          <div style="font-size:12px; color:var(--text-muted);">Daily spend cap</div>
-          <div style="font-family:'Oswald',sans-serif; font-weight:700; font-size:14px; color:${spent>=DAILY_SPEND_CAP_USD?'var(--corner-red)':'var(--belt-gold)'};">$${spent.toFixed(2)} / $${DAILY_SPEND_CAP_USD}</div>
-        </div>
-        <div class="bar-track" style="margin-top:6px;"><div class="bar-fill xp" style="width:${clamp((spent/DAILY_SPEND_CAP_USD)*100,0,100)}%"></div></div>
+      <div style="font-size:10px; color:var(--text-muted); margin-top:4px;">
+        No daily limit — purchases always go through. Past $${OVERSPEND_WARNING_USD}/day, the confirm dialog adds an explicit spending-check reminder, that's all.
       </div>
-    `}
+    </div>
     ${showFounder ? `
       <div class="panel-title">🎉 One-Time Welcome Offer</div>
       <div class="shop-item-card" style="border-left:3px solid var(--champ-teal); background:linear-gradient(135deg, var(--bg-panel-raised) 0%, rgba(45,212,191,0.08) 100%);">
@@ -4391,16 +4504,16 @@ function renderShopBundles(){
         <div class="panel-title">🎟️ Promo Unlocks</div>
         ${available.map(b => {
           const r = bundleRewardAmounts(b);
-          const wouldExceedCap = !canSpendRealMoney(b.price);
-          const btnDisabled = locked || wouldExceedCap;
+          const overWarning = needsOverspendWarning(b.price);
+          const btnDisabled = locked;
           return `
-            <div class="shop-item-card" style="border-left:3px solid var(--corner-red); ${wouldExceedCap?'opacity:0.5;':''}">
+            <div class="shop-item-card" style="border-left:3px solid var(--corner-red);">
               <div class="shop-item-icon">${b.icon}</div>
               <div class="shop-item-info">
-                <div class="shop-item-name">${b.label}</div>
+                <div class="shop-item-name">${b.label}${overWarning?' ⚠️':''}</div>
                 <div class="shop-item-desc">🦷${fmtNum(r.teeth)} • $${fmtNum(r.cash)} cash • ⚡${b.bankedMinutes}m speed boost • 🎁${b.chestPulls} chest pulls</div>
               </div>
-              <button class="shop-buy-btn real" data-buy-bundle="${b.key}" ${btnDisabled?'disabled':''}>${locked?'🔒 Locked':(wouldExceedCap?'Cap reached':`$${b.price}`)}</button>
+              <button class="shop-buy-btn real" data-buy-bundle="${b.key}" ${btnDisabled?'disabled':''}>${locked?'🔒 Locked':`$${b.price}`}</button>
             </div>
           `;
         }).join('')}
@@ -4409,18 +4522,18 @@ function renderShopBundles(){
     <div class="panel-title">Bundles</div>
     ${CASH_BUNDLES.map(b => {
       const r = bundleRewardAmounts(b);
-      const wouldExceedCap = !canSpendRealMoney(b.price);
-      const btnDisabled = locked || wouldExceedCap;
+      const overWarning = needsOverspendWarning(b.price);
+      const btnDisabled = locked;
       return `
-        <div class="shop-item-card" style="border-left:3px solid var(--belt-gold); ${wouldExceedCap?'opacity:0.5;':''}">
+        <div class="shop-item-card" style="border-left:3px solid var(--belt-gold);">
           <div class="shop-item-icon">${b.icon}</div>
           <div class="shop-item-info">
-            <div class="shop-item-name">${b.label}</div>
+            <div class="shop-item-name">${b.label}${overWarning?' ⚠️':''}</div>
             <div class="shop-item-desc">
               🦷${fmtNum(r.teeth)}${r.cash?` • $${fmtNum(r.cash)} cash`:''} • ⚡${b.bankedMinutes}m speed boost${b.chestPulls?` • 🎁${b.chestPulls} chest pulls`:''}
             </div>
           </div>
-          <button class="shop-buy-btn real" data-buy-bundle="${b.key}" ${btnDisabled?'disabled':''}>${locked?'🔒 Locked':(wouldExceedCap?'Cap reached':`$${b.price}`)}</button>
+          <button class="shop-buy-btn real" data-buy-bundle="${b.key}" ${btnDisabled?'disabled':''}>${locked?'🔒 Locked':`$${b.price}`}</button>
         </div>
       `;
     }).join('')}
@@ -4435,18 +4548,12 @@ function buyCashBundle(key){
   }
   if(realPurchasesLocked()){ showToast('🔒 Real-money purchases are locked for testing'); return; }
   if(bundle.isFirstPurchaseOffer && state.economy.everSpentReal){ showToast('Welcome offer already used'); renderShopBody(); return; }
-  if(!canSpendRealMoney(bundle.price, { isFirstPurchaseOffer: !!bundle.isFirstPurchaseOffer })){
-    showToast(`Daily spend cap reached ($${DAILY_SPEND_CAP_USD}) — try again tomorrow`);
-    return;
-  }
 
   const { teeth: previewTeeth, cash: previewCash } = bundleRewardAmounts(bundle);
-  showConfirm(
-    'Confirm Purchase',
+  confirmRealMoneyPurchase(
+    bundle.price,
     `Buy ${bundle.label} for $${bundle.price}? You'll get 🦷${fmtNum(previewTeeth)}${previewCash?`, $${fmtNum(previewCash)} cash`:''}${bundle.chestPulls?`, ${bundle.chestPulls} chest pulls`:''}, and ${bundle.bankedMinutes}m of banked speed boost.`,
     () => {
-      recordRealMoneySpend(bundle.price);
-
       const { teeth, cash } = bundleRewardAmounts(bundle);
       state.economy.teeth += teeth;
       if(cash) state.economy.cash += cash;
@@ -4596,12 +4703,7 @@ function watchAdForSpeedBoost(){
 function buyDiamondInTheRough(){
   if(state.speedBoost.noAdsOwned){ showToast('Already owned'); return; }
   if(realPurchasesLocked()){ showToast('🔒 Real-money purchases are locked for testing'); return; }
-  if(!canSpendRealMoney(14.99)){
-    showToast(`Daily spend cap reached ($${DAILY_SPEND_CAP_USD}) — try again tomorrow`);
-    return;
-  }
-  showConfirm('Confirm Purchase', 'Buy Diamond in the Rough for $14.99? Removes ads forever and permanently doubles idle/training speed.', () => {
-    recordRealMoneySpend(14.99);
+  confirmRealMoneyPurchase(14.99, 'Buy Diamond in the Rough for $14.99? Removes ads forever and permanently doubles idle/training speed.', () => {
     state.speedBoost.noAdsOwned = true;
     state.economy.teeth += 20; // small welcome bonus so the purchase feels immediately rewarding
     pushLog(`💎 Purchased Diamond in the Rough! Permanent 2x Speed + no ads, +20 🦷`, 'level');
@@ -4641,12 +4743,7 @@ function useAdSkip(method){
   if(method === 'ad' && onCooldown){ showToast('Ad skip on cooldown'); return; }
   if(method === 'money'){
     if(realPurchasesLocked()){ showToast('🔒 Real-money purchases are locked for testing'); return; }
-    if(!canSpendRealMoney(10)){
-      showToast(`Daily spend cap reached ($${DAILY_SPEND_CAP_USD}) — try again tomorrow`);
-      return;
-    }
-    showConfirm('Confirm Purchase', 'Spend $10 to instantly skip ahead 10 minutes, no cooldown?', () => {
-      recordRealMoneySpend(10);
+    confirmRealMoneyPurchase(10, 'Spend $10 to instantly skip ahead 10 minutes, no cooldown?', () => {
       executeAdSkip(method, now);
     });
     return;
@@ -4690,8 +4787,7 @@ function renderShopBody(){
 function renderShopFeatured(){
   const owned = state.speedBoost.noAdsOwned;
   const locked = realPurchasesLocked();
-  const diamondCapped = !owned && !canSpendRealMoney(14.99);
-  const realBtn = (price, capped) => locked ? { disabled:true, label:'🔒 Locked' } : { disabled:capped, label: capped ? 'Cap reached' : `$${price}` };
+  const realBtn = (price) => locked ? { disabled:true, label:'🔒 Locked' } : { disabled:false, label: `$${price}` };
   return `
     <div class="panel-title">💎 Diamond in the Rough</div>
     <div class="shop-item-card" style="border-left:3px solid var(--champ-teal); ${owned?'':'background:linear-gradient(135deg, var(--bg-panel-raised) 0%, rgba(45,212,191,0.08) 100%);'}">
@@ -4700,24 +4796,24 @@ function renderShopFeatured(){
         <div class="shop-item-name" style="color:var(--champ-teal);">No Ads + Permanent 2x Speed</div>
         <div class="shop-item-desc">Removes ads forever, permanently doubles idle/training speed, and every fight has a small chance to drop bonus Teeth.</div>
       </div>
-      <button class="shop-buy-btn real" data-buy-diamond ${(owned||locked||diamondCapped)?'disabled':''}>${owned?'Owned':realBtn('14.99', diamondCapped).label}</button>
+      <button class="shop-buy-btn real" data-buy-diamond ${(owned||locked)?'disabled':''}>${owned?'Owned':realBtn('14.99').label}</button>
     </div>
 
     <div class="panel-title">Teeth Packs</div>
     <div class="shop-item-card">
       <div class="shop-item-icon">🦷</div>
       <div class="shop-item-info"><div class="shop-item-name">50 Teeth</div><div class="shop-item-desc">Small pack</div></div>
-      <button class="shop-buy-btn real" data-buy-teeth-pack="50,$0.99" ${realBtn('0.99', !canSpendRealMoney(0.99)).disabled?'disabled':''}>${realBtn('0.99', !canSpendRealMoney(0.99)).label}</button>
+      <button class="shop-buy-btn real" data-buy-teeth-pack="50,$0.99" ${realBtn('0.99').disabled?'disabled':''}>${realBtn('0.99').label}</button>
     </div>
     <div class="shop-item-card">
       <div class="shop-item-icon">🦷</div>
       <div class="shop-item-info"><div class="shop-item-name">300 Teeth</div><div class="shop-item-desc">Best value — +20% bonus</div></div>
-      <button class="shop-buy-btn real" data-buy-teeth-pack="300,$4.99" ${realBtn('4.99', !canSpendRealMoney(4.99)).disabled?'disabled':''}>${realBtn('4.99', !canSpendRealMoney(4.99)).label}</button>
+      <button class="shop-buy-btn real" data-buy-teeth-pack="300,$4.99" ${realBtn('4.99').disabled?'disabled':''}>${realBtn('4.99').label}</button>
     </div>
     <div class="shop-item-card">
       <div class="shop-item-icon">🦷</div>
       <div class="shop-item-info"><div class="shop-item-name">700 Teeth</div><div class="shop-item-desc">+40% bonus</div></div>
-      <button class="shop-buy-btn real" data-buy-teeth-pack="700,$9.99" ${realBtn('9.99', !canSpendRealMoney(9.99)).disabled?'disabled':''}>${realBtn('9.99', !canSpendRealMoney(9.99)).label}</button>
+      <button class="shop-buy-btn real" data-buy-teeth-pack="700,$9.99" ${realBtn('9.99').disabled?'disabled':''}>${realBtn('9.99').label}</button>
     </div>
     <div class="panel-title">Gold Chest</div>
     <div class="shop-item-card">
@@ -4824,7 +4920,7 @@ function renderShopIdle(){
     <div class="shop-item-card">
       <div class="shop-item-icon">💳</div>
       <div class="shop-item-info"><div class="shop-item-name">Instant Skip — 10 min</div><div class="shop-item-desc">Real money, no cooldown</div></div>
-      <button class="shop-buy-btn real" data-adskip="money" ${(realPurchasesLocked()||!canSpendRealMoney(10))?'disabled':''}>${realPurchasesLocked() ? '🔒 Locked' : (canSpendRealMoney(10)?'$10':'Cap reached')}</button>
+      <button class="shop-buy-btn real" data-adskip="money" ${realPurchasesLocked()?'disabled':''}>${realPurchasesLocked() ? '🔒 Locked' : '$10'}</button>
     </div>
   `;
 }
@@ -4892,7 +4988,7 @@ function getHomePerkBonusPerLevel(key){
 // Applies the Home Sofa cash% bonus on top of a base cash amount. Centralized so every
 // cash-awarding code path (live win/loss, offline win/loss) stays consistent automatically.
 function applyCashGain(baseAmount){
-  return Math.round(baseAmount * (1 + homePerkBonus('cashPct') + powerUpBonus('cashPct')/100 + membershipBonusPct()/100));
+  return Math.round(baseAmount * (1 + homePerkBonus('cashPct') + powerUpBonus('cashPct')/100 + membershipBonusPct()/100 + gymUpgradeCashBonus()));
 }
 
 // Resets the Teeth Spent counter on a weekly boundary — independent of league membership, since
@@ -5374,6 +5470,7 @@ function ensureDailyReset(){
     state.daily.spendUSD = 0;
     state.daily.freeSpinsUsedToday = 0;
     state.daily.rouletteSpinsToday = 0;
+    state.daily.testerBonusClaimedToday = false;
     state.daily.roulettePityCounter = 0;
     state.daily.questResetUsedToday = false;
     // Daily affection decay — relationships need occasional upkeep, or they quietly drift.
@@ -5629,6 +5726,7 @@ async function leaveLeague(){
   state.social.role = null;
   state.social.gymXpContributed = 0;
   state.social.knownGymLevel = 1;
+  state.social.lastClaimedGymLevel = 1;
   pushLog(`👋 Left ${leagueName}.`, 'level');
   showToast(`Left ${leagueName} — browse the list to join a new gym.`);
   scheduleSave();
@@ -5679,7 +5777,8 @@ async function joinLeague(leagueId){
     state.social.bonusTenureAwardedDateKey = '';
     state.social.role = role;
     state.social.gymXpContributed = 0;
-    state.social.knownGymLevel = 1;
+    state.social.knownGymLevel = targetGymLevel;
+    state.social.lastClaimedGymLevel = targetGymLevel; // can't claim rewards for level-ups that happened before joining
     pushLog(`🏋️ Joined ${LEAGUES.find(l=>l.id===leagueId).name}${role==='head_coach'?' as Head Coach!':'!'}`, 'level');
     showToast(`Joined ${LEAGUES.find(l=>l.id===leagueId).name}${role==='head_coach'?' as Head Coach!':'!'}`);
     scheduleSave();
@@ -5879,6 +5978,7 @@ async function refreshTeethSpendLeaderboard(){
     teethSpendLeaderboardCache = { ...teethSpendLeaderboardCache, loading: false };
   }
   if(activeTab === 'league') render();
+  refreshLeaderboardsModal();
 }
 
 async function checkTeethSpendPayout(){
@@ -5989,6 +6089,7 @@ async function refreshGymWars(){
     leagueStorageOk = false;
   }
   if(activeTab === 'league') render();
+  refreshLeaderboardsModal();
 }
 
 // Lifetime level for ALL 10 gyms at once (not just the one you're in) — powers the "Gym Growth"
@@ -6011,6 +6112,7 @@ async function refreshAllGymLevels(){
     allGymLevelsCache = { ...allGymLevelsCache, loading: false };
   }
   if(activeTab === 'league') render();
+  refreshLeaderboardsModal();
 }
 
 // Settles LAST week's Gym Wars payout for this player only, once, the first time they open the
@@ -6150,6 +6252,74 @@ async function pushGymXpContribution(){
 }
 
 let leagueGymCache = { leagueId: null, totalXp: 0, level: 1, loading: false };
+
+// GYM LEVEL-UP REWARDS — every level grants scaling Teeth plus a flat 30-min time skip. Only
+// claimable by players who were ALREADY a member when the level-up happened (checked against a
+// membership snapshot logged the moment any client first detects the crossing), even if that
+// player was idle/offline at the exact moment — membership at the time is what matters, not
+// presence. See claimGymLevelRewards() below for the actual claim flow.
+function gymLevelUpReward(level){
+  return { teeth: 5 + Math.floor(level/5), skipMinutes: 30 };
+}
+
+// Called whenever ANY client detects the gym crossed into a new level — writes a ONE-TIME
+// membership snapshot for that level, first-write-wins (checked via get-before-set) so a second
+// client detecting the same crossing moments later doesn't overwrite it with a slightly-later
+// (and therefore less accurate) roster snapshot. This snapshot is the sole source of truth for
+// "who was a member when this happened," used by claimGymLevelRewards().
+async function checkAndLogGymLevelUp(leagueId, newLevel){
+  for(let lvl = 2; lvl <= newLevel; lvl++){
+    const logKey = `gym_levelup_log:${leagueId}:${lvl}`;
+    try {
+      const existing = await window.storage.get(logKey, true);
+      if(existing && existing.value) continue; // already logged by some other client — don't overwrite
+    } catch(e){ /* doesn't exist yet — proceed to log it */ }
+    try {
+      const rosterRes = await window.storage.get(`league_roster:${leagueId}`, true);
+      const roster = rosterRes && rosterRes.value ? JSON.parse(rosterRes.value) : [];
+      const memberIds = Array.isArray(roster) ? roster.map(m => m.playerId) : [];
+      await window.storage.set(logKey, JSON.stringify({ level:lvl, reachedAt:Date.now(), memberIds }), true);
+    } catch(e){ /* best-effort — another client can log it later if this fails */ }
+  }
+}
+
+// Claims banked Teeth/time-skip rewards for every level-up between lastClaimedGymLevel and the
+// current known level THAT THIS PLAYER WAS A MEMBER FOR — verified against checkAndLogGymLevelUp's
+// snapshots, not just "are you a member now." Advances lastClaimedGymLevel through the whole gap
+// regardless of eligibility per-level, so levels reached before joining are correctly skipped
+// forever rather than re-checked on every visit.
+async function claimGymLevelRewards(){
+  if(!state.social.leagueId) return;
+  const from = (state.social.lastClaimedGymLevel||1) + 1;
+  const to = state.social.knownGymLevel||1;
+  if(from > to) return;
+
+  let totalTeeth = 0, totalSkipMinutes = 0, claimedLevels = 0;
+  for(let lvl = from; lvl <= to; lvl++){
+    try {
+      const logRes = await window.storage.get(`gym_levelup_log:${state.social.leagueId}:${lvl}`, true);
+      if(logRes && logRes.value){
+        const entry = JSON.parse(logRes.value);
+        if((entry.memberIds||[]).includes(state.social.playerId)){
+          const reward = gymLevelUpReward(lvl);
+          totalTeeth += reward.teeth;
+          totalSkipMinutes += reward.skipMinutes;
+          claimedLevels++;
+        }
+      }
+    } catch(e){ /* no log entry yet for this level — treat as not-yet-claimable, will retry next visit */ }
+  }
+  state.social.lastClaimedGymLevel = to;
+  if(claimedLevels > 0){
+    state.economy.teeth += totalTeeth;
+    const result = runInstantTimeSkip(totalSkipMinutes, `${claimedLevels} gym level-up${claimedLevels===1?'':'s'}`);
+    pushLog(`🏋️ Gym leveled up! Claimed rewards for ${claimedLevels} level${claimedLevels===1?'':'s'}: +${totalTeeth} 🦷, +${totalSkipMinutes}min skip`, 'level');
+    showTimeSkipRewardModal({ minutes:totalSkipMinutes, method:null, ...result });
+    scheduleSave();
+    render();
+  }
+}
+
 // Pure aggregation for ANY league (not just the one you've joined) — used both by the cached
 // refresh below (for your own gym) and by joinLeague's cap check (for whichever gym you're
 // trying to join, which needs its level BEFORE you're a member of it).
@@ -6175,9 +6345,12 @@ async function refreshLeagueGymXp(){
     const { totalXp, level } = await aggregateGymXpForLeague(leagueId);
     leagueGymCache = { leagueId, totalXp, level, loading: false };
     if(state.social.knownGymLevel !== level){
+      const leveledUp = level > state.social.knownGymLevel;
       state.social.knownGymLevel = level;
       scheduleSave();
+      if(leveledUp) await checkAndLogGymLevelUp(leagueId, level);
     }
+    await claimGymLevelRewards(); // cheap no-op if already caught up — also catches gaps from a previous session where the claim step failed partway through
   } catch(e){
     leagueGymCache.loading = false;
   }
@@ -6360,6 +6533,180 @@ function openStoryHistoryModal(id){
         <div style="font-size:12px; color:var(--text-main); line-height:1.5; font-style:italic;">"${escapeHtml(s.text)}"</div>
       </div>
     `).join('')}
+  `;
+  document.getElementById('stat-detail-modal').style.display = 'flex';
+}
+
+// GYM POINTS & VOTING — separate from the automatic milestone bonuses above. Points are earned
+// 1 per gym level-up (derived live from knownGymLevel, never a shared mutable counter — avoids
+// the lost-update race a shared counter would have if two members' clients both incremented it
+// at once). Spending them requires a Coach/Head Coach vote, not a unilateral purchase.
+const GYM_UPGRADE_MENU = [
+  { key:'power_spec',   name:'⚡ Power Specialization',  desc:'+2% Power for every member',  cost:5,  statKey:'power'   },
+  { key:'speed_spec',   name:'💨 Speed Specialization',  desc:'+2% Speed for every member',   cost:5,  statKey:'speed'   },
+  { key:'defense_spec', name:'🛡️ Defense Specialization', desc:'+2% Defense for every member', cost:5,  statKey:'defense' },
+  { key:'cash_boost',   name:'💰 Cash Boost',            desc:'+5% cash earned for every member', cost:8, effectKey:'cashPct' },
+  { key:'bonus_spin',   name:'🎡 Bonus Roulette Spin',   desc:'+1 free roulette spin/day for every member', cost:10, effectKey:'bonusSpin' },
+];
+const GYM_VOTE_WINDOW_MS = 48*60*60*1000; // unresolved votes auto-expire (reject) after 48h
+
+function gymPointsEarned(){
+  return Math.max(0, (state.social.knownGymLevel||1) - 1); // 1 point per level past 1
+}
+
+let gymUpgradesCache = { leagueId:null, approved:[], votes:[] };
+
+async function refreshGymUpgrades(){
+  if(!state.social.leagueId) return;
+  const leagueId = state.social.leagueId;
+  try {
+    const res = await window.storage.list(`gym_vote:${leagueId}:`, true);
+    const keys = (res && res.keys) || [];
+    const votes = [];
+    for(const key of keys){
+      try {
+        const entry = await window.storage.get(key, true);
+        if(entry && entry.value) votes.push({ id:key, ...JSON.parse(entry.value) });
+      } catch(e){}
+    }
+    // Auto-resolve any vote that's timed out without a decisive majority, before computing state.
+    for(const v of votes){
+      if(!v.resolved) await maybeResolveGymVote(v);
+    }
+    const approved = votes.filter(v => v.resolved && v.approved).map(v => v.upgradeKey);
+    gymUpgradesCache = { leagueId, approved, votes };
+  } catch(e){ /* best-effort */ }
+  if(activeTab === 'league') render();
+}
+
+function gymPointsSpent(){
+  if(gymUpgradesCache.leagueId !== state.social.leagueId) return 0;
+  return gymUpgradesCache.approved.reduce((sum, key) => {
+    const upgrade = GYM_UPGRADE_MENU.find(u => u.key === key);
+    return sum + (upgrade ? upgrade.cost : 0);
+  }, 0);
+}
+
+function gymPointsAvailable(){
+  return Math.max(0, gymPointsEarned() - gymPointsSpent());
+}
+
+// Live gym-wide bonus for a given stat, from any APPROVED specialization vote.
+function gymUpgradeStatBonus(statKey){
+  if(gymUpgradesCache.leagueId !== state.social.leagueId) return 0;
+  const upgrade = GYM_UPGRADE_MENU.find(u => u.statKey === statKey && gymUpgradesCache.approved.includes(u.key));
+  return upgrade ? 0.02 : 0;
+}
+function gymUpgradeCashBonus(){
+  if(gymUpgradesCache.leagueId !== state.social.leagueId) return 0;
+  return gymUpgradesCache.approved.includes('cash_boost') ? 0.05 : 0;
+}
+function gymUpgradeBonusSpins(){
+  if(gymUpgradesCache.leagueId !== state.social.leagueId) return 0;
+  return gymUpgradesCache.approved.includes('bonus_spin') ? 1 : 0;
+}
+
+async function proposeGymUpgrade(upgradeKey){
+  if(!['head_coach','coach'].includes(state.social.role)){ showToast('Only Coaches and Head Coach can propose'); return; }
+  const upgrade = GYM_UPGRADE_MENU.find(u => u.key === upgradeKey);
+  if(!upgrade) return;
+  if(gymUpgradesCache.approved.includes(upgradeKey)){ showToast('Already approved'); return; }
+  const activeProposal = gymUpgradesCache.votes.find(v => v.upgradeKey === upgradeKey && !v.resolved);
+  if(activeProposal){ showToast('Already has an active vote'); return; }
+  if(gymPointsAvailable() < upgrade.cost){ showToast(`Need ${upgrade.cost} Gym Points (have ${gymPointsAvailable()})`); return; }
+  const voteId = 'vote_' + Date.now() + '_' + Math.random().toString(36).slice(2,8);
+  const key = `gym_vote:${state.social.leagueId}:${voteId}`;
+  try {
+    await window.storage.set(key, JSON.stringify({
+      upgradeKey, proposedBy:state.social.playerId, proposedByName:state.social.displayName,
+      createdAt:Date.now(), votes:{ [state.social.playerId]:'yes' }, resolved:false, approved:null,
+    }), true);
+    showToast(`Proposed ${upgrade.name} — voting open`);
+    refreshGymUpgrades();
+  } catch(e){ showToast('Failed to propose — try again'); }
+}
+
+async function castGymVote(voteId, choice){
+  if(!['head_coach','coach'].includes(state.social.role)){ showToast('Only Coaches and Head Coach can vote'); return; }
+  const vote = gymUpgradesCache.votes.find(v => v.id === voteId);
+  if(!vote || vote.resolved) return;
+  const updatedVotes = { ...vote.votes, [state.social.playerId]: choice };
+  try {
+    await window.storage.set(vote.id, JSON.stringify({ ...vote, votes:updatedVotes }), true);
+    showToast('Vote cast');
+    const refreshed = { ...vote, votes:updatedVotes };
+    await maybeResolveGymVote(refreshed);
+    refreshGymUpgrades();
+  } catch(e){ showToast('Failed to vote — try again'); }
+}
+
+// Resolves a vote if either a strict majority of CURRENT coaches+head-coach have voted yes
+// (approve immediately) or enough have voted no that yes can no longer reach a majority (reject
+// immediately) — or, failing either, once the 48h window has passed (auto-reject, since a stalled
+// vote shouldn't sit open forever blocking that upgrade from ever being re-proposed).
+async function maybeResolveGymVote(vote){
+  if(vote.resolved) return;
+  let eligibleCount = 0;
+  try {
+    const rosterRes = await window.storage.get(`league_roster:${state.social.leagueId}`, true);
+    const roster = rosterRes && rosterRes.value ? JSON.parse(rosterRes.value) : [];
+    eligibleCount = roster.filter(m => m.role === 'head_coach' || m.role === 'coach').length;
+  } catch(e){ return; } // can't determine eligibility right now — try again next refresh
+  if(eligibleCount === 0) return;
+
+  const yesVotes = Object.values(vote.votes).filter(v => v === 'yes').length;
+  const noVotes = Object.values(vote.votes).filter(v => v === 'no').length;
+  const majorityNeeded = Math.floor(eligibleCount/2) + 1;
+  const expired = (Date.now() - vote.createdAt) > GYM_VOTE_WINDOW_MS;
+
+  let outcome = null;
+  if(yesVotes >= majorityNeeded) outcome = true;
+  else if(noVotes >= majorityNeeded) outcome = false;
+  else if(expired) outcome = false; // stalled votes default to rejected, not stuck open forever
+
+  if(outcome !== null){
+    try {
+      await window.storage.set(vote.id, JSON.stringify({ ...vote, resolved:true, approved:outcome }), true);
+      if(outcome){
+        const upgrade = GYM_UPGRADE_MENU.find(u => u.key === vote.upgradeKey);
+        pushLog(`🗳️ Gym vote passed: ${upgrade?.name||vote.upgradeKey} approved!`, 'level');
+      }
+    } catch(e){ /* best-effort — next refresh retries */ }
+  }
+}
+
+function openGymProgressionGuide(){
+  const level = state.social.leagueId ? (state.social.knownGymLevel||1) : 1;
+  const nextMilestone = GYM_LEVEL_MILESTONES.find(m => m > level);
+  document.getElementById('stat-detail-modal-title').textContent = 'Gym Progression';
+  document.getElementById('stat-detail-modal-body').innerHTML = `
+    <div style="font-size:11px; color:var(--text-muted); margin-bottom:10px;">
+      ${state.social.leagueId
+        ? `Your gym is Level ${level}.${nextMilestone ? ` Next milestone: Level ${nextMilestone} (${nextMilestone-level} to go).` : ' All milestones reached!'}`
+        : `Join a gym to start earning these.`}
+      Every level grants scaling Teeth + a 30-min time skip to every member who was around when it happened, even if idle.
+    </div>
+    <div class="panel-title" style="margin-top:0;">Every Level</div>
+    <div class="card" style="margin-bottom:10px;">
+      <div style="font-size:12px;">🦷 Teeth: <b>5 + (level ÷ 5, rounded down)</b> — e.g. Lv.10 → +7, Lv.100 → +25</div>
+      <div style="font-size:12px; margin-top:4px;">⏩ Time Skip: <b>flat 30 minutes</b> every level, no scaling needed — it's already worth 210 Teeth at the normal rate</div>
+    </div>
+    <div class="panel-title">Milestones <span style="color:var(--text-muted); font-size:11px;">(permanent, gym-wide, while you're a member)</span></div>
+    ${GYM_LEVEL_MILESTONES.map(m => {
+      const reached = level >= m;
+      const retBonus = m===5?0.0025:m===25?0.005:m===100?0.01:m===200?0.01:0;
+      const cornerBonus = m===10?0.005:m===50?0.01:m===150?0.02:0;
+      return `
+        <div class="card" style="margin-bottom:6px; ${reached?'border-color:var(--belt-gold);':'opacity:0.55;'}">
+          <div style="display:flex; justify-content:space-between; align-items:center;">
+            <span style="font-weight:700;">${reached?'✅':'🔒'} Level ${m}</span>
+          </div>
+          <div style="font-size:11px; color:var(--text-muted); margin-top:2px;">
+            ${retBonus>0?`+${(retBonus*100).toFixed(2)}% retention cap ceiling`:''}${retBonus>0&&cornerBonus>0?' • ':''}${cornerBonus>0?`+${(cornerBonus*100).toFixed(1)}% Corner Bonus cap`:''}
+          </div>
+        </div>
+      `;
+    }).join('')}
   `;
   document.getElementById('stat-detail-modal').style.display = 'flex';
 }
@@ -6638,130 +6985,18 @@ function refreshAllLeagueData(){
   refreshGymWars();
   refreshAllGymLevels();
   refreshTeethSpendLeaderboard();
+  refreshGymUpgrades();
   checkGymWarsPayout();
   checkTeethSpendPayout();
   checkPowerLeaderboardPayout();
 }
 
-function renderLeagueTab(){
-  ensureDailyReset();
-  ensureWeeklyReset();
-
-  if(!state.social.playerId) ensurePlayerId();
-
-  const anyLeagueDataLoading = leagueRosterLoading || leagueWeeklyCache.loading || leagueGymCache.loading || leagueRosterDetailCache.loading || gymWarsCache.loading || allGymLevelsCache.loading || teethSpendLeaderboardCache.loading;
-
-  const storageBannerHtml = !leagueStorageOk ? `
-    <div class="card" style="border-color:var(--corner-red); margin-bottom:12px;">
-      <div style="font-size:12px; color:var(--corner-red); font-weight:700;">⚠️ Can't reach shared storage</div>
-      <div style="font-size:11px; color:var(--text-muted); margin-top:4px;">
-        Joining, rosters, leaderboards, Gym Wars, and invite/sync codes all need this to work and
-        won't right now. This is a platform connectivity issue, not something broken in-game —
-        your fighter, training, and everything outside the League tab is unaffected.
-      </div>
-    </div>
-  ` : '';
-
-  const syncHtml = `
-    <div class="panel-title">Sync Across Devices</div>
-    <div class="card">
-      <div style="font-size:11px; color:var(--text-muted); margin-bottom:10px;">
-        There's no real login here — no email, no Google account, nothing this artifact could
-        actually verify. This code is the honest substitute: it points at a snapshot of your save
-        in shared storage. Anyone with the code can load (or overwrite) it, so keep it private.
-      </div>
-      ${state.social.recoveryCode ? `
-        <div style="font-family:'Oswald',sans-serif; font-size:16px; font-weight:700; letter-spacing:1px; color:var(--belt-gold); text-align:center; padding:10px; background:var(--bg-panel-raised); border-radius:8px; margin-bottom:8px;">${state.social.recoveryCode}</div>
-      ` : ''}
-      <button class="btn btn-gold btn-block" data-push-recovery style="margin-bottom:10px;">${state.social.recoveryCode ? '🔄 Update Sync Code' : '🔑 Generate Sync Code'}</button>
-      <div style="font-size:11px; color:var(--text-muted); margin:10px 0 6px 0;">Restore a save from another device:</div>
-      <div style="display:flex; gap:8px;">
-        <input type="text" id="recovery-code-input" class="ob-input" style="flex:1; padding:9px 12px; font-size:13px; text-transform:uppercase;" placeholder="XXXX-XXXX-XXXX">
-        <button class="btn btn-ghost" id="recovery-code-submit" style="flex-shrink:0;">Restore</button>
-      </div>
-    </div>
-  `;
-
-  const nameCardHtml = `
-    <div class="card" style="margin-bottom:12px;">
-      ${(!state.social.displayName || state.ui.editingLeagueName) ? `
-        <div style="font-size:11px; color:var(--text-muted); margin-bottom:8px;">
-          ${state.social.displayName
-            ? "Checked against everyone else's name for uniqueness when you save."
-            : "Pick a display name to join a gym — checked against everyone else so you get a unique one. Runs on shared, unauthenticated storage, so don't use anything private."}
-        </div>
-        <div style="display:flex; gap:8px;">
-          <input type="text" id="league-name-edit-input" class="ob-input" style="flex:1; padding:9px 12px; font-size:13px;" placeholder="Display name" maxlength="20" value="${escapeAttr(state.social.displayName||'')}">
-          <button class="btn btn-primary" id="league-name-edit-submit" style="flex-shrink:0;">${state.social.displayName ? 'Save' : 'Claim Name'}</button>
-          ${state.social.displayName ? `<button class="btn btn-ghost" data-cancel-league-name style="flex-shrink:0;">✕</button>` : ''}
-        </div>
-        ${nameClaimError ? `<div style="font-size:12px; color:var(--corner-red); margin-top:8px;">${escapeHtml(nameClaimError)}</div>` : ''}
-      ` : `
-        <div style="display:flex; justify-content:space-between; align-items:center;">
-          <div style="font-size:13px; color:var(--text-muted);">Fighting as <strong style="color:var(--text-main);">${escapeHtml(state.social.displayName)}</strong></div>
-          <button class="btn btn-ghost" data-edit-league-name style="padding:6px 14px; font-size:11px;">✏️ Rename</button>
-        </div>
-      `}
-    </div>
-  `;
-
-  const anyQuestClaimable = state.daily.questIds.some(id => {
-    const quest = questDef(id);
-    return quest && questProgressValue(quest) >= quest.goal && !state.daily.questsClaimed.includes(id);
-  });
-  const questsHtml = `
-    ${renderCollapsibleHeader('Daily Quests <span style="color:var(--text-muted); font-size:11px; text-transform:none; letter-spacing:0;">(10-tier ladder, resets daily, same for everyone)</span>', 'questsExpanded', anyQuestClaimable)}
-    ${state.ui.questsExpanded ? (() => {
-      // Group by underlying counter type — tiers sharing a type read the SAME progress value
-      // (e.g. all 4 "wins" tiers watch state.daily.winsToday), so they're independently
-      // claimable checkpoints along ONE shared value, not sequential gates. Stacking them into
-      // one card per chain (instead of one full card per tier) cuts 10 cards down to 4.
-      const chains = {};
-      state.daily.questIds.forEach(id => {
-        const quest = questDef(id);
-        if(!quest) return;
-        if(!chains[quest.type]) chains[quest.type] = [];
-        chains[quest.type].push(quest);
-      });
-      return Object.entries(chains).map(([type, quests]) => {
-        const meta = QUEST_CHAIN_META[type] || { icon:'🎯', label:type };
-        const progress = questProgressValue(quests[0]);
-        const maxGoal = quests[quests.length-1].goal;
-        const pct = clamp((progress/maxGoal)*100, 0, 100);
-        const claimedCount = quests.filter(q => state.daily.questsClaimed.includes(q.id)).length;
-        return `
-          <div class="card">
-            <div style="display:flex; justify-content:space-between; align-items:center;">
-              <div style="font-size:13px; font-weight:600;">${meta.icon} ${meta.label}</div>
-              <div style="font-size:11px; color:var(--text-muted);">${claimedCount}/${quests.length} claimed</div>
-            </div>
-            <div class="bar-track" style="margin-top:10px; position:relative;">
-              <div class="bar-fill xp" style="width:${pct}%"></div>
-              ${quests.map(q => `<div style="position:absolute; top:-3px; left:${clamp((q.goal/maxGoal)*100,0,100)}%; width:2px; height:12px; background:var(--bg-panel); transform:translateX(-1px);"></div>`).join('')}
-            </div>
-            <div style="font-size:11px; color:var(--text-muted); margin-top:4px;">${fmtNum(Math.min(progress,maxGoal))} / ${fmtNum(maxGoal)}</div>
-            <div style="display:flex; flex-wrap:wrap; gap:6px; margin-top:8px;">
-              ${quests.map(q => {
-                const done = progress >= q.goal;
-                const claimed = state.daily.questsClaimed.includes(q.id);
-                const rewardParts = [];
-                if(q.rewardCash) rewardParts.push(`$${q.rewardCash}`);
-                if(q.rewardTeeth) rewardParts.push(`🦷${q.rewardTeeth}`);
-                rewardParts.push(`+${q.gymXp}XP`);
-                return `
-                  <button class="btn ${claimed ? 'btn-ghost' : (done ? 'btn-gold' : 'btn-ghost')}" style="flex:1 1 auto; font-size:10px; padding:6px 8px; ${!done&&!claimed?'opacity:0.6;':''}" data-claim-quest="${q.id}" ${(!done||claimed)?'disabled':''}>
-                    ${claimed ? `✓ ${fmtNum(q.goal)}` : (done ? `Claim: ${rewardParts.join(' ')}` : `${fmtNum(q.goal)}: ${rewardParts.join(' ')}`)}
-                  </button>
-                `;
-              }).join('')}
-            </div>
-          </div>
-        `;
-      }).join('');
-    })() : ''}
-    ${state.ui.questsExpanded ? renderDailyQuestResetButton() : ''}
-  `;
-
+// Cross-gym/global leaderboards — extracted into their own function so they're reachable from
+// the top-bar Leaderboards button regardless of which tab (or which gym) the player is currently
+// in, not just from inside the League/Gym tab. "Gym Wars Score — This Week" (your OWN gym's
+// member roster ranked by contribution) stays in the League tab since that's gym-specific
+// membership info, not a cross-gym leaderboard.
+function renderGlobalLeaderboards(){
   const gymWarsStale = gymWarsCache.weekKey !== getWeekKey();
   const gymWarsHtml = `
     ${renderCollapsibleHeader('⚔️ Gym Wars <span style="color:var(--text-muted); font-size:11px; text-transform:none; letter-spacing:0;">(this week, live across all 10 gyms)</span>', 'gymWarsExpanded', false)}
@@ -6885,6 +7120,135 @@ function renderLeagueTab(){
     ` : ''}
   `;
 
+  const anyLoading = gymWarsCache.loading || teethSpendLeaderboardCache.loading || allGymLevelsCache.loading;
+  return `
+    <button class="btn btn-ghost btn-block" data-refresh-all-leaderboards style="margin-bottom:10px;">${anyLoading ? 'Refreshing…' : '🔄 Refresh All'}</button>
+    ${gymWarsHtml}
+    ${powerLeaderboardHtml}
+    ${teethSpendHtml}
+  `;
+}
+
+function renderLeagueTab(){
+  ensureDailyReset();
+  ensureWeeklyReset();
+
+  if(!state.social.playerId) ensurePlayerId();
+
+  const anyLeagueDataLoading = leagueRosterLoading || leagueWeeklyCache.loading || leagueGymCache.loading || leagueRosterDetailCache.loading || gymWarsCache.loading || allGymLevelsCache.loading || teethSpendLeaderboardCache.loading;
+
+  const storageBannerHtml = !leagueStorageOk ? `
+    <div class="card" style="border-color:var(--corner-red); margin-bottom:12px;">
+      <div style="font-size:12px; color:var(--corner-red); font-weight:700;">⚠️ Can't reach shared storage</div>
+      <div style="font-size:11px; color:var(--text-muted); margin-top:4px;">
+        Joining, rosters, leaderboards, Gym Wars, and invite/sync codes all need this to work and
+        won't right now. This is a platform connectivity issue, not something broken in-game —
+        your fighter, training, and everything outside the League tab is unaffected.
+      </div>
+    </div>
+  ` : '';
+
+  const syncHtml = `
+    <div class="panel-title">Sync Across Devices</div>
+    <div class="card">
+      <div style="font-size:11px; color:var(--text-muted); margin-bottom:10px;">
+        There's no real login here — no email, no Google account, nothing this artifact could
+        actually verify. This code is the honest substitute: it points at a snapshot of your save
+        in shared storage. Anyone with the code can load (or overwrite) it, so keep it private.
+      </div>
+      ${state.social.recoveryCode ? `
+        <div style="font-family:'Oswald',sans-serif; font-size:16px; font-weight:700; letter-spacing:1px; color:var(--belt-gold); text-align:center; padding:10px; background:var(--bg-panel-raised); border-radius:8px; margin-bottom:8px;">${state.social.recoveryCode}</div>
+      ` : ''}
+      <button class="btn btn-gold btn-block" data-push-recovery style="margin-bottom:10px;">${state.social.recoveryCode ? '🔄 Update Sync Code' : '🔑 Generate Sync Code'}</button>
+      <div style="font-size:11px; color:var(--text-muted); margin:10px 0 6px 0;">Restore a save from another device:</div>
+      <div style="display:flex; gap:8px;">
+        <input type="text" id="recovery-code-input" class="ob-input" style="flex:1; padding:9px 12px; font-size:13px; text-transform:uppercase;" placeholder="XXXX-XXXX-XXXX">
+        <button class="btn btn-ghost" id="recovery-code-submit" style="flex-shrink:0;">Restore</button>
+      </div>
+    </div>
+  `;
+
+  const nameCardHtml = `
+    <div class="card" style="margin-bottom:12px;">
+      ${(!state.social.displayName || state.ui.editingLeagueName) ? `
+        <div style="font-size:11px; color:var(--text-muted); margin-bottom:8px;">
+          ${state.social.displayName
+            ? "Checked against everyone else's name for uniqueness when you save."
+            : "Pick a display name to join a gym — checked against everyone else so you get a unique one. Runs on shared, unauthenticated storage, so don't use anything private."}
+        </div>
+        <div style="display:flex; gap:8px;">
+          <input type="text" id="league-name-edit-input" class="ob-input" style="flex:1; padding:9px 12px; font-size:13px;" placeholder="Display name" maxlength="20" value="${escapeAttr(state.social.displayName||'')}">
+          <button class="btn btn-primary" id="league-name-edit-submit" style="flex-shrink:0;">${state.social.displayName ? 'Save' : 'Claim Name'}</button>
+          ${state.social.displayName ? `<button class="btn btn-ghost" data-cancel-league-name style="flex-shrink:0;">✕</button>` : ''}
+        </div>
+        ${nameClaimError ? `<div style="font-size:12px; color:var(--corner-red); margin-top:8px;">${escapeHtml(nameClaimError)}</div>` : ''}
+      ` : `
+        <div style="display:flex; justify-content:space-between; align-items:center;">
+          <div style="font-size:13px; color:var(--text-muted);">Fighting as <strong style="color:var(--text-main);">${escapeHtml(state.social.displayName)}</strong></div>
+          <button class="btn btn-ghost" data-edit-league-name style="padding:6px 14px; font-size:11px;">✏️ Rename</button>
+        </div>
+      `}
+    </div>
+  `;
+
+  const anyQuestClaimable = state.daily.questIds.some(id => {
+    const quest = questDef(id);
+    return quest && questProgressValue(quest) >= quest.goal && !state.daily.questsClaimed.includes(id);
+  });
+  const questsHtml = `
+    ${renderCollapsibleHeader('Daily Quests <span style="color:var(--text-muted); font-size:11px; text-transform:none; letter-spacing:0;">(10-tier ladder, resets daily, same for everyone)</span>', 'questsExpanded', anyQuestClaimable)}
+    ${state.ui.questsExpanded ? (() => {
+      // Group by underlying counter type — tiers sharing a type read the SAME progress value
+      // (e.g. all 4 "wins" tiers watch state.daily.winsToday), so they're independently
+      // claimable checkpoints along ONE shared value, not sequential gates. Stacking them into
+      // one card per chain (instead of one full card per tier) cuts 10 cards down to 4.
+      const chains = {};
+      state.daily.questIds.forEach(id => {
+        const quest = questDef(id);
+        if(!quest) return;
+        if(!chains[quest.type]) chains[quest.type] = [];
+        chains[quest.type].push(quest);
+      });
+      return Object.entries(chains).map(([type, quests]) => {
+        const meta = QUEST_CHAIN_META[type] || { icon:'🎯', label:type };
+        const progress = questProgressValue(quests[0]);
+        const maxGoal = quests[quests.length-1].goal;
+        const pct = clamp((progress/maxGoal)*100, 0, 100);
+        const claimedCount = quests.filter(q => state.daily.questsClaimed.includes(q.id)).length;
+        return `
+          <div class="card">
+            <div style="display:flex; justify-content:space-between; align-items:center;">
+              <div style="font-size:13px; font-weight:600;">${meta.icon} ${meta.label}</div>
+              <div style="font-size:11px; color:var(--text-muted);">${claimedCount}/${quests.length} claimed</div>
+            </div>
+            <div class="bar-track" style="margin-top:10px; position:relative;">
+              <div class="bar-fill xp" style="width:${pct}%"></div>
+              ${quests.map(q => `<div style="position:absolute; top:-3px; left:${clamp((q.goal/maxGoal)*100,0,100)}%; width:2px; height:12px; background:var(--bg-panel); transform:translateX(-1px);"></div>`).join('')}
+            </div>
+            <div style="font-size:11px; color:var(--text-muted); margin-top:4px;">${fmtNum(Math.min(progress,maxGoal))} / ${fmtNum(maxGoal)}</div>
+            <div style="display:flex; flex-wrap:wrap; gap:6px; margin-top:8px;">
+              ${quests.map(q => {
+                const done = progress >= q.goal;
+                const claimed = state.daily.questsClaimed.includes(q.id);
+                const rewardParts = [];
+                if(q.rewardCash) rewardParts.push(`$${q.rewardCash}`);
+                if(q.rewardTeeth) rewardParts.push(`🦷${q.rewardTeeth}`);
+                rewardParts.push(`+${q.gymXp}XP`);
+                return `
+                  <button class="btn ${claimed ? 'btn-ghost' : (done ? 'btn-gold' : 'btn-ghost')}" style="flex:1 1 auto; font-size:10px; padding:6px 8px; ${!done&&!claimed?'opacity:0.6;':''}" data-claim-quest="${q.id}" ${(!done||claimed)?'disabled':''}>
+                    ${claimed ? `✓ ${fmtNum(q.goal)}` : (done ? `Claim: ${rewardParts.join(' ')}` : `${fmtNum(q.goal)}: ${rewardParts.join(' ')}`)}
+                  </button>
+                `;
+              }).join('')}
+            </div>
+          </div>
+        `;
+      }).join('');
+    })() : ''}
+    ${state.ui.questsExpanded ? renderDailyQuestResetButton() : ''}
+  `;
+
+
   if(!state.social.leagueId){
     return `
       ${storageBannerHtml}
@@ -6908,10 +7272,7 @@ function renderLeagueTab(){
           <button class="btn btn-gold" style="padding:8px 14px; font-size:12px;" data-join-league="${lg.id}">Join</button>
         </div>
       `).join('')}
-      ${renderExpandCollapseAll(['gymWarsExpanded','powerLeaderboardExpanded','teethSpendExpanded','questsExpanded'])}
-      ${gymWarsHtml}
-      ${powerLeaderboardHtml}
-      ${teethSpendHtml}
+      ${renderExpandCollapseAll(['questsExpanded'])}
       ${questsHtml}
       ${syncHtml}
     `;
@@ -6930,7 +7291,7 @@ function renderLeagueTab(){
   const gymPrevThreshold = gymXpForLevel(gymLevel);
   const gymPct = gymXpTotal === null ? 0 : clamp(((gymXpTotal-gymPrevThreshold)/(gymNextThreshold-gymPrevThreshold))*100, 0, 100);
   const gymLevelHtml = `
-    <div class="panel-title">🏆 Gym Level <span style="color:var(--text-muted); font-size:11px;">(permanent — fueled ONLY by claimed daily quests)</span></div>
+    <div class="panel-title">🏆 Gym Level <span data-open-gym-progression style="cursor:pointer; opacity:0.7; font-size:12px;" title="Progression guide">ℹ️</span> <span style="color:var(--text-muted); font-size:11px;">(permanent — fueled ONLY by claimed daily quests)</span></div>
     <div class="card" style="border-color:var(--belt-gold); margin-bottom:8px;">
       <div style="font-size:10px; color:var(--text-muted); margin-bottom:8px;">
         Different from the Gym Wars Score further down — that one counts all activity and resets
@@ -6948,6 +7309,68 @@ function renderLeagueTab(){
         ${gymXpTotal === null ? (leagueGymCache.loading ? 'Loading Gym XP…' : 'Tap Refresh All below to load this gym\'s total Gym XP') : `${fmtNum(gymXpTotal)} / ${fmtNum(gymNextThreshold)} Gym XP to Level ${gymLevel+1}`}
       </div>
     </div>
+  `;
+
+  const canVote = ['head_coach','coach'].includes(state.social.role);
+  const activeVotes = gymUpgradesCache.votes.filter(v => !v.resolved);
+  const gymVotingHtml = `
+    ${renderCollapsibleHeader('🗳️ Gym Points & Upgrades', 'gymVotingExpanded', activeVotes.length>0)}
+    ${state.ui.gymVotingExpanded ? `
+      <div class="card" style="border-color:var(--champ-teal); margin-bottom:8px;">
+        <div style="display:flex; justify-content:space-between; align-items:center;">
+          <span style="font-size:13px;">Gym Points available</span>
+          <span style="font-family:'Oswald',sans-serif; font-weight:700; color:var(--champ-teal); font-size:16px;">${gymPointsAvailable()}</span>
+        </div>
+        <div style="font-size:10px; color:var(--text-muted); margin-top:4px;">
+          1 point per gym level. Spending requires a Coach/Head Coach vote — majority of current
+          leadership to pass, 48h to resolve or it auto-rejects. ${canVote ? '' : 'Only Coaches and Head Coach can propose or vote.'}
+        </div>
+      </div>
+      ${activeVotes.length > 0 ? `
+        <div class="panel-title" style="margin-top:4px;">Active Votes</div>
+        ${activeVotes.map(v => {
+          const upgrade = GYM_UPGRADE_MENU.find(u => u.key === v.upgradeKey);
+          const yesCount = Object.values(v.votes).filter(x=>x==='yes').length;
+          const noCount = Object.values(v.votes).filter(x=>x==='no').length;
+          const myVote = v.votes[state.social.playerId];
+          const hoursLeft = Math.max(0, Math.ceil((GYM_VOTE_WINDOW_MS - (Date.now()-v.createdAt))/3600000));
+          return `
+            <div class="card" style="margin-bottom:6px;">
+              <div style="font-weight:700; font-size:13px;">${upgrade?.name||v.upgradeKey}</div>
+              <div style="font-size:11px; color:var(--text-muted); margin-top:2px;">${upgrade?.desc||''} • proposed by ${escapeHtml(v.proposedByName||'someone')} • ${hoursLeft}h left</div>
+              <div style="font-size:11px; margin-top:6px;">✅ ${yesCount} yes • ❌ ${noCount} no</div>
+              ${canVote ? `
+                <div style="display:flex; gap:8px; margin-top:8px;">
+                  <button class="btn ${myVote==='yes'?'btn-teal':'btn-ghost'}" style="flex:1; padding:7px; font-size:11px;" data-cast-gym-vote="${v.id},yes">👍 Yes</button>
+                  <button class="btn ${myVote==='no'?'btn-teal':'btn-ghost'}" style="flex:1; padding:7px; font-size:11px;" data-cast-gym-vote="${v.id},no">👎 No</button>
+                </div>
+              ` : ''}
+            </div>
+          `;
+        }).join('')}
+      ` : ''}
+      <div class="panel-title" style="margin-top:10px;">Upgrade Menu</div>
+      ${GYM_UPGRADE_MENU.map(u => {
+        const approved = gymUpgradesCache.approved.includes(u.key);
+        const hasActiveProposal = activeVotes.some(v => v.upgradeKey === u.key);
+        return `
+          <div class="card" style="margin-bottom:6px; ${approved?'border-color:var(--belt-gold);':''}">
+            <div style="display:flex; justify-content:space-between; align-items:center;">
+              <div>
+                <div style="font-weight:700; font-size:13px;">${u.name}</div>
+                <div style="font-size:11px; color:var(--text-muted);">${u.desc}</div>
+              </div>
+              ${approved
+                ? `<span style="font-size:11px; color:var(--belt-gold); flex-shrink:0;">✅ Active</span>`
+                : canVote
+                  ? `<button class="btn btn-gold" style="flex-shrink:0; padding:7px 12px; font-size:11px;" data-propose-gym-upgrade="${u.key}" ${hasActiveProposal||gymPointsAvailable()<u.cost?'disabled':''}>${hasActiveProposal?'Voting…':`${u.cost} pts`}</button>`
+                  : `<span style="font-size:11px; color:var(--text-muted); flex-shrink:0;">${u.cost} pts</span>`
+              }
+            </div>
+          </div>
+        `;
+      }).join('')}
+    ` : ''}
   `;
 
   const roleTenureHtml = `
@@ -6976,7 +7399,8 @@ function renderLeagueTab(){
   const rosterAll = leagueRosterDetailCache.members;
   const rosterShown = state.ui.rosterExpanded ? rosterAll : rosterAll.slice(0, 5);
   const rosterHtml = `
-    <div class="panel-title">Gym Roster <span style="color:var(--text-muted); font-size:11px;">(${leagueRosterCache[league.id] ?? '…'} / ${leagueMemberCapForLevel(state.social.knownGymLevel)})</span></div>
+    ${renderCollapsibleHeader(`Gym Roster <span style="color:var(--text-muted); font-size:11px; text-transform:none; letter-spacing:0;">(${leagueRosterCache[league.id] ?? '…'} / ${leagueMemberCapForLevel(state.social.knownGymLevel)})</span>`, 'rosterSectionExpanded', false)}
+    ${state.ui.rosterSectionExpanded ? `
     <div class="card" style="margin-bottom:8px;">
       <div style="font-size:11px; color:var(--text-muted); margin-bottom:8px;">Inactive 48h+ (Trainers/Members) or 7 days+ (Coaches/Head Coach) get auto-removed on refresh.</div>
       <button class="btn btn-ghost btn-block" data-open-roles-info>ℹ️ View Roles &amp; Caps</button>
@@ -7014,6 +7438,7 @@ function renderLeagueTab(){
     })()}
     ${(!rosterStale && rosterAll.length > 5) ? `
       <button class="btn btn-ghost btn-block" data-toggle-roster-expand style="margin-top:4px;">${state.ui.rosterExpanded ? '▲ Show Less' : `▼ Show All ${rosterAll.length} Members`}</button>
+    ` : ''}
     ` : ''}
   `;
 
@@ -7053,11 +7478,13 @@ function renderLeagueTab(){
     </div>
     ${nameCardHtml}
 
-    ${renderExpandCollapseAll(['questsExpanded','weeklyScoreExpanded','gymWarsExpanded','powerLeaderboardExpanded','teethSpendExpanded'])}
+    ${renderExpandCollapseAll(['questsExpanded','weeklyScoreExpanded','gymVotingExpanded','rosterSectionExpanded'])}
 
     ${roleTenureHtml}
 
     ${gymLevelHtml}
+
+    ${gymVotingHtml}
 
     <div class="panel-title">Membership Tier</div>
     <div class="card">
@@ -7076,12 +7503,6 @@ function renderLeagueTab(){
     ${rosterHtml}
 
     ${weeklyHtml}
-
-    ${gymWarsHtml}
-
-    ${powerLeaderboardHtml}
-
-    ${teethSpendHtml}
 
     ${questsHtml}
 
@@ -7222,6 +7643,78 @@ function renderPosterDecor(posterKey, extraClass=''){
 // state.devCodesRedeemed so they can't be reused. Intended for testing/promo use, not pay-to-win.
 // None of these are shown in the Dev Code panel until AFTER a player redeems them (so browsing
 // the panel doesn't just hand out the whole list) — see renderHomeTab's Dev Code section.
+// TESTER FOUNDER CODES — 30 unique, one-time-use codes for early testers, distinct from the
+// DEV_CODES below in one key way: those are shared/public strings anyone can redeem repeatedly
+// across different accounts, these are meant to be handed out ONE PER PERSON. TWO layers of
+// enforcement, both server-side (not just local per-player tracking, which could be bypassed by
+// editing save data): (1) each CODE can only be claimed once, globally, by whoever redeems it
+// first; (2) each ACCOUNT (Firebase-derived playerId) can only ever claim ONE code, period — this
+// second check is what actually stops someone from guessing MMAFOUNDER01 through 30 on a single
+// account, since it's tied to the account itself, not a resettable local flag.
+// Redeeming: (1) a one-time kickoff bonus worth roughly $50-100 of in-game value, PLUS
+// (2) permanently unlocks a "Free Daily Tester Bonus" button worth roughly $5-10/day, forever.
+const TESTER_CODES = Array.from({length:30}, (_,i) => 'MMAFOUNDER' + String(i+1).padStart(2,'0'));
+
+const TESTER_KICKOFF_REWARD = { cash:6000, teeth:2000, chestPulls:8, bankedMinutes:400 };
+const TESTER_DAILY_REWARD = { cash:600, teeth:300 };
+
+async function redeemTesterCode(code){
+  if(!state.social.playerId){ showToast('Still connecting — try again in a moment'); return false; }
+
+  // Account-level check FIRST — this is what actually stops "guess 1-30 on one account," since
+  // it's tied to the Firebase-derived playerId, not the local testerCodeRedeemed flag (which
+  // could be reset by editing save data). A player would need a genuinely different account
+  // (fresh anonymous auth session, not just a save edit) to get a second one.
+  const accountClaimKey = `tester_account_claim:${state.social.playerId}`;
+  try {
+    const existingAccountClaim = await window.storage.get(accountClaimKey, true);
+    if(existingAccountClaim && existingAccountClaim.value){ showToast('This account has already claimed a founder code'); return false; }
+  } catch(e){ /* doesn't exist yet — good, this account hasn't claimed one */ }
+
+  const claimKey = `tester_code_claim:${code}`;
+  try {
+    const existing = await window.storage.get(claimKey, true);
+    if(existing && existing.value){ showToast('This code has already been claimed by someone else'); return false; }
+  } catch(e){ /* doesn't exist yet — good, proceed to claim it */ }
+  try {
+    await window.storage.set(claimKey, JSON.stringify({
+      claimedBy: state.social.playerId || 'unknown',
+      claimedName: state.social.displayName || state.fighter.name || 'unknown',
+      claimedAt: Date.now(),
+    }), true);
+    await window.storage.set(accountClaimKey, JSON.stringify({ code, claimedAt:Date.now() }), true);
+  } catch(e){ showToast('Couldn\'t reach the server to verify this code — try again'); return false; }
+
+  // Grant the one-time kickoff bonus.
+  state.economy.cash += TESTER_KICKOFF_REWARD.cash;
+  state.economy.teeth += TESTER_KICKOFF_REWARD.teeth;
+  if(!state.speedBoost.noAdsOwned){
+    state.speedBoost.bankedMs = Math.min(SPEED_BOOST_BANK_MAX_MS, state.speedBoost.bankedMs + TESTER_KICKOFF_REWARD.bankedMinutes*60000);
+  }
+  for(let i=0; i<TESTER_KICKOFF_REWARD.chestPulls; i++){
+    const tier = Math.floor(5 + Math.random()*6); // matches Gold Chest's tier 5-10 range
+    const item = generateLootItem(tier, null, 'reward');
+    autoResolveItem(item, false);
+  }
+  state.economy.testerCodeRedeemed = code;
+  pushLog(`🏆 Redeemed founder code ${code}! +${TESTER_KICKOFF_REWARD.cash} cash, +${TESTER_KICKOFF_REWARD.teeth} 🦷, ${TESTER_KICKOFF_REWARD.chestPulls} chest pulls, +${TESTER_KICKOFF_REWARD.bankedMinutes}min speed boost. Daily tester bonus unlocked forever!`, 'level');
+  showToast('🏆 Founder code redeemed! Thank you for testing!');
+  return true;
+}
+
+function claimTesterDailyBonus(){
+  ensureDailyReset();
+  if(!state.economy.testerCodeRedeemed){ showToast('Redeem a founder code first'); return; }
+  if(state.daily.testerBonusClaimedToday){ showToast('Already claimed today — back tomorrow!'); return; }
+  state.economy.cash += TESTER_DAILY_REWARD.cash;
+  state.economy.teeth += TESTER_DAILY_REWARD.teeth;
+  state.daily.testerBonusClaimedToday = true;
+  pushLog(`🎁 Daily tester bonus: +$${TESTER_DAILY_REWARD.cash}, +${TESTER_DAILY_REWARD.teeth} 🦷`, 'level');
+  showToast('🎁 Daily tester bonus claimed!');
+  render();
+  scheduleSave();
+}
+
 const DEV_CODES = {
   'EARLYBIRD':    { effect: () => { STAT_KEYS_ALL.forEach(k => state.fighter.stats[k] += 3); }, desc: '+3 to all stats' },
   'RINGCASH':     { effect: () => { state.economy.cash += 500; }, desc: '+$500 cash' },
@@ -7237,10 +7730,6 @@ const DEV_CODES = {
   // without grinding.
   'BOTTOMLESSPIT':{ effect: () => { state.economy.cash += 100000; }, desc: '+$100,000 cash' },
   'TEETHVAULT':   { effect: () => { state.economy.teeth += 500; }, desc: '+500 Teeth' },
-  // Testing-only: removes the $50/day real-money spend cap entirely for this save, so QA can
-  // run through every purchase path without tripping DAILY_SPEND_CAP_USD. Not something you'd
-  // want a live player redeeming — keep this one internal.
-  'QAUNLIMITED':  { effect: () => { state.economy.spendCapDisabled = true; }, desc: 'Removes the $50/day real-money spend cap (testing only)' },
   // Testing-only: unlocks the real-money purchase buttons at all. Every "Buy" button is currently
   // a placeholder that grants the reward for free (no Play Billing wired up yet) — locking this
   // behind a code by default means real testers (Closed/Open Testing, or Production once live)
@@ -7249,9 +7738,18 @@ const DEV_CODES = {
   'QAPURCHASE':   { effect: () => { state.economy.realPurchasesUnlocked = true; }, desc: 'Unlocks real-money purchase buttons (testing only)' },
 };
 
-function redeemDevCode(rawCode){
+async function redeemDevCode(rawCode){
   const code = rawCode.trim().toUpperCase();
   if(!code){ showToast('Enter a code first'); return; }
+
+  if(TESTER_CODES.includes(code)){
+    if(state.economy.testerCodeRedeemed){ showToast('You\'ve already redeemed a founder code'); return; }
+    showToast('Verifying code…');
+    const success = await redeemTesterCode(code);
+    if(success){ render(); scheduleSave(); }
+    return;
+  }
+
   if(!DEV_CODES[code]){ showToast('Invalid code'); return; }
   if(state.devCodesRedeemed.includes(code)){ showToast('Code already redeemed'); return; }
   DEV_CODES[code].effect();
@@ -7490,6 +7988,16 @@ function renderHomeTab(){
         `;
       })()}
     </div>
+
+    ${state.economy.testerCodeRedeemed ? `
+      <div class="panel-title">🏆 Founder Perks <span style="color:var(--text-muted); font-size:11px;">(unlocked via ${state.economy.testerCodeRedeemed})</span></div>
+      <div class="card" style="border-color:var(--belt-gold);">
+        <div style="font-size:11px; color:var(--text-muted); margin-bottom:8px;">Thanks for testing! One free bonus every day, forever.</div>
+        <button class="btn ${state.daily.testerBonusClaimedToday?'btn-ghost':'btn-gold'} btn-block" data-claim-tester-bonus ${state.daily.testerBonusClaimedToday?'disabled':''}>
+          ${state.daily.testerBonusClaimedToday ? '✅ Claimed Today — Back Tomorrow' : `🎁 Claim Daily Bonus (+$${TESTER_DAILY_REWARD.cash}, +${TESTER_DAILY_REWARD.teeth} 🦷)`}
+        </button>
+      </div>
+    ` : ''}
 
   `;
 }
@@ -8474,7 +8982,10 @@ function companionCurrentStageIndex(def, progress){
 // nothing at all for the earlier stages. This adds real, ongoing incentive to invest in every
 // relationship, not just whichever one you pick as a partner.
 const CORNER_STAGE_BONUS_PCT = [0,0.0007,0.0022,0.0043,0.0071,0.0103,0.0141,0.0183,0.023,0.0281,0.0336,0.0395,0.0458,0.0525,0.0595,0.0669,0.0747,0.0828,0.0912,0.1]; // Stranger..Devoted (20 tiers) — doubled from 5%/25% max to match the much harder curve above
-const CORNER_BONUS_CAP_PCT = 0.5;
+const CORNER_BONUS_CAP_PCT = 0.5; // base cap — see cornerBonusCap() for the gym-milestone-adjusted effective cap
+function cornerBonusCap(){
+  return CORNER_BONUS_CAP_PCT + gymMilestoneCornerBonus();
+}
 
 function cornerBonusPct(){
   let total = 0;
@@ -8484,7 +8995,7 @@ function cornerBonusPct(){
     const idx = companionCurrentStageIndex(def, progress);
     total += CORNER_STAGE_BONUS_PCT[idx] || 0;
   });
-  return Math.min(CORNER_BONUS_CAP_PCT, total);
+  return Math.min(cornerBonusCap(), total);
 }
 
 function companionNextStage(def, progress){
@@ -8707,7 +9218,7 @@ function renderCompanionsTab(){
       </div>
       <div style="font-size:11px; color:var(--text-muted); margin-top:6px;">
         Every companion contributes a stat bonus based on how close you are, stacking across
-        everyone in your corner (not just your partner) — capped at +${(CORNER_BONUS_CAP_PCT*100).toFixed(0)}%.
+        everyone in your corner (not just your partner) — capped at +${(cornerBonusCap()*100).toFixed(1)}%${gymMilestoneCornerBonus()>0?' (includes a gym milestone bonus)':''}.
       </div>
       <div style="display:grid; grid-template-columns:1fr 1fr; gap:4px 12px; margin-top:8px; font-size:10px; color:var(--text-muted);">
         ${['Stranger','Noticed','Acquaintance','Familiar','Friendly','Comfortable','Close Friend','Confidant','Trusted Friend','Invested','Warming Up','Flirtatious','Mutual Spark','Drawn Together','Close','Inseparable','Smitten','Dating','Deeply Committed','Devoted'].map((label,i) => `
@@ -8951,6 +9462,12 @@ function attachContentHandlers(){
       openTierLegend();
     });
   });
+  document.querySelectorAll('[data-open-gym-progression]').forEach(el => {
+    el.addEventListener('click', (e) => {
+      e.stopPropagation();
+      openGymProgressionGuide();
+    });
+  });
   document.querySelectorAll('[data-open-story-history]').forEach(el => {
     el.addEventListener('click', () => openStoryHistoryModal(el.dataset.openStoryHistory));
   });
@@ -8993,7 +9510,6 @@ function attachContentHandlers(){
     prestigeBtn.addEventListener('click', () => {
       showConfirm('Prestige Now?', `This resets your career, cash, gear, and Corner relationship progress — but keeps power-ups and cosmetics, adds a permanent +${PRESTIGE_STAT_BONUS_PER_PRESTIGE} to all stats, and carries forward a percentage of your current stats based on wins since Hall of Fame.`, () => {
         executePrestige();
-        offerPrestigeReroll();
       });
     });
   }
@@ -9097,6 +9613,10 @@ function attachContentHandlers(){
       if(e.key === 'Enter'){ redeemDevCode(devCodeInput.value); devCodeInput.value = ''; }
     });
   }
+  const claimTesterBonusBtn = document.querySelector('[data-claim-tester-bonus]');
+  if(claimTesterBonusBtn){
+    claimTesterBonusBtn.addEventListener('click', claimTesterDailyBonus);
+  }
   document.querySelectorAll('[data-join-league]').forEach(btn => {
     btn.addEventListener('click', (e) => {
       e.stopPropagation(); // don't also trigger the parent card's data-preview-gym
@@ -9142,6 +9662,24 @@ function attachContentHandlers(){
   if(refreshAllBtn){
     refreshAllBtn.addEventListener('click', () => { showToast('Refreshing…'); refreshAllLeagueData(); });
   }
+  const refreshAllLeaderboardsBtn = document.querySelector('[data-refresh-all-leaderboards]');
+  if(refreshAllLeaderboardsBtn){
+    refreshAllLeaderboardsBtn.addEventListener('click', () => {
+      showToast('Refreshing…');
+      refreshGymWars();
+      refreshAllGymLevels();
+      refreshTeethSpendLeaderboard();
+    });
+  }
+  document.querySelectorAll('[data-propose-gym-upgrade]').forEach(btn => {
+    btn.addEventListener('click', () => proposeGymUpgrade(btn.dataset.proposeGymUpgrade));
+  });
+  document.querySelectorAll('[data-cast-gym-vote]').forEach(btn => {
+    btn.addEventListener('click', () => {
+      const [voteId, choice] = btn.dataset.castGymVote.split(',');
+      castGymVote(voteId, choice);
+    });
+  });
   const rosterExpandBtn = document.querySelector('[data-toggle-roster-expand]');
   if(rosterExpandBtn){
     rosterExpandBtn.addEventListener('click', () => { state.ui.rosterExpanded = !state.ui.rosterExpanded; render(); });
@@ -9497,6 +10035,13 @@ function openShopToTab(tab){
   document.getElementById('shop-modal').style.display = 'flex';
 }
 document.getElementById('shop-toggle-btn').addEventListener('click', () => openShopToTab('featured'));
+document.getElementById('leaderboards-toggle-btn').addEventListener('click', openLeaderboardsModal);
+document.getElementById('leaderboards-modal-close').addEventListener('click', () => {
+  document.getElementById('leaderboards-modal').style.display = 'none';
+});
+document.getElementById('leaderboards-modal').addEventListener('click', (e) => {
+  if(e.target.id === 'leaderboards-modal') document.getElementById('leaderboards-modal').style.display = 'none';
+});
 document.getElementById('shop-modal-close').addEventListener('click', () => {
   document.getElementById('shop-modal').style.display = 'none';
 });
@@ -9603,22 +10148,13 @@ document.getElementById('gympreview-modal').addEventListener('click', (e) => {
   if(e.target.id === 'gympreview-modal') document.getElementById('gympreview-modal').style.display = 'none';
 });
 
-/* ---------------------------- PRESTIGE REROLL MODAL ---------------------------- */
-document.getElementById('reroll-modal-close').addEventListener('click', () => {
-  document.getElementById('reroll-modal').style.display = 'none';
-});
-document.getElementById('reroll-modal').addEventListener('click', (e) => {
-  if(e.target.id === 'reroll-modal') document.getElementById('reroll-modal').style.display = 'none';
-});
-
 /* ---------------------------- ONBOARDING ---------------------------- */
 let selectedGender = null;
 let selectedOrientation = null;
 
 let rolledAppearance = null;
 
-// Shared by onboarding's rollAppearance() and the post-prestige reroll prompt — one place that
-// knows how to generate a full random look, rather than duplicating the field list in two spots.
+// Used by onboarding's rollAppearance() to generate a full random look for character creation.
 function generateRandomAppearance(){
   const build = BUILD_KEYS[Math.floor(Math.random()*BUILD_KEYS.length)];
   const bodyShapeKeys = Object.keys(BODY_SHAPES); // all 5 available regardless of gender — player's own choice
@@ -9647,49 +10183,10 @@ function rollAppearance(){
   renderRandoPreview();
 }
 
-// Post-prestige "new look?" prompt — deliberately OPTIONAL rather than auto-applied. Prestige
-// already resets stats/gear/tier; forcing a new random appearance on top risks feeling like a
-// loss for anyone attached to their fighter's current look, rather than a bonus. Only overwrites
-// the "look randomizer" fields (build/shape/skin/hair/eyes/tattoo) — leaves gloves/shoes/jewelry/
-// poster/premium cosmetics alone, since those are separate purchase-driven choices, not part of
-// what a random reroll should touch.
-let prestigeRerollCandidate = null;
-function offerPrestigeReroll(){
-  prestigeRerollCandidate = generateRandomAppearance();
-  renderPrestigeRerollPreview();
-  document.getElementById('reroll-modal').style.display = 'flex';
-}
-function renderPrestigeRerollPreview(){
-  const body = document.getElementById('reroll-modal-body');
-  body.innerHTML = `
-    <div style="font-size:12px; color:var(--text-muted); text-align:center; margin-bottom:10px;">
-      Your career just reset — want a fresh look to go with it? Totally optional.
-    </div>
-    <svg viewBox="0 0 140 190" style="width:140px; height:190px; display:block; margin:0 auto;">${renderFighterRig('idle', prestigeRerollCandidate)}</svg>
-    <div style="text-align:center; font-size:12px; color:var(--champ-teal); margin:8px 0;">
-      ${BODY_SHAPES[prestigeRerollCandidate.bodyShape]?.label || prestigeRerollCandidate.bodyShape} • ${prestigeRerollCandidate.traitLabel}
-    </div>
-    <button class="btn btn-gold btn-block" id="reroll-again-btn" style="margin-bottom:8px;">🎲 Reroll Again</button>
-    <button class="btn btn-teal btn-block" id="reroll-use-btn" style="margin-bottom:8px;">Use This Look</button>
-    <button class="btn btn-ghost btn-block" id="reroll-keep-btn">Keep My Current Look</button>
-  `;
-  document.getElementById('reroll-again-btn').addEventListener('click', offerPrestigeReroll);
-  document.getElementById('reroll-use-btn').addEventListener('click', () => {
-    const c = prestigeRerollCandidate;
-    Object.assign(state.fighter.appearance, {
-      build: c.build, bodyShape: c.bodyShape, skin: c.skin, gear: c.gear, tattoo: c.tattoo,
-      traitLabel: c.traitLabel, hairStyle: c.hairStyle, hairColor: c.hairColor,
-      eyeColor: c.eyeColor, eyeStyle: c.eyeStyle,
-    });
-    document.getElementById('reroll-modal').style.display = 'none';
-    render();
-    scheduleSave();
-    showToast('New look applied!');
-  });
-  document.getElementById('reroll-keep-btn').addEventListener('click', () => {
-    document.getElementById('reroll-modal').style.display = 'none';
-  });
-}
+// Post-prestige "new look?" prompt REMOVED — Style tab now gives full manual appearance control
+// anytime (body/face/hair/jewelry/outfit color, live preview, hex picker), so a surprise random
+// reroll immediately after prestiging was redundant with functionality players can already reach
+// directly whenever they want.
 
 function renderRandoPreview(){
   const svg = document.getElementById('rando-svg');
