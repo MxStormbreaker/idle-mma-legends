@@ -987,6 +987,10 @@ function handleGoogleAlreadyInUse(e){
 // dependency entirely: the result comes back as a direct promise in the SAME page load, no
 // "did we just return from a redirect" detection needed at all.
 function linkGoogleAccount(){
+  if(!state.economy.googleLinkUnlocked){
+    showToast('🔒 Google linking is locked in this build — use Sync Across Devices instead');
+    return;
+  }
   if(!_auth || !_auth.currentUser){
     showToast('⚠️ Not signed in yet — wait a moment and try again');
     console.log('[Google Link] Aborted: _auth.currentUser was', _auth ? _auth.currentUser : '_auth itself missing');
@@ -1093,7 +1097,7 @@ window.storage = {
 // Semantic version label (MAJOR.MINOR.PATCH), tracking development stages through beta.
 // Displayed in Home -> Settings so testers can confirm which build they're actually running.
 // >>> BUMP THE PATCH NUMBER HERE ON EVERY SHIP, matching the sw.js CACHE_NAME version <<<
-const GAME_VERSION = 'v0.0.83';
+const GAME_VERSION = 'v0.0.85';
 
 // Player-facing changelog, shown in the clipboard/log modal's "Change Log" tab. Most recent
 // entry FIRST. >>> ADD A NEW ENTRY HERE ON EVERY SHIP GOING FORWARD, same routine as bumping
@@ -1103,6 +1107,12 @@ const GAME_VERSION = 'v0.0.83';
 // defeating any code that's meant to be secret/unique/one-per-person. Describe what a code system
 // DOES ("added founder codes for testers") without ever naming the codes themselves. <<<
 const GAME_CHANGELOG = [
+  { version:'v0.0.85', date:'2026-07-09', changes:[
+    'Locked Google Account linking behind a dev/QA code — local device saves plus Sync Across Devices already fully cover backup needs, so the known-broken linking flow no longer shows up to regular testers at all',
+  ]},
+  { version:'v0.0.84', date:'2026-07-09', changes:[
+    'Cloud Backup now clearly points to the Sync Code system as a working alternative while Google linking has a known issue — testers aren\'t left without any backup option in the meantime',
+  ]},
   { version:'v0.0.83', date:'2026-07-09', changes:[
     'Switched Google Account linking from a redirect-based flow to a popup-based one — confirmed via Firebase\'s own Users table that redirect was never actually completing (a known rough edge with that approach specifically inside TWAs, since it depends on session state surviving a full page navigation out to Google and back). Popup returns the result directly in the same page load, no "did we just return from a redirect" detection needed at all',
   ]},
@@ -1344,6 +1354,7 @@ let state = {
     testerCodeRedeemed: null, // which of the 30 unique tester codes this player redeemed, if any — unlocks the daily tester bonus button forever once set
     unlockedPromoOffers: [], // promo-code-gated Shop offers unlocked so far (see VIPACCESS dev code)
     realPurchasesUnlocked: false, // real-money "Buy" buttons stay locked until QAPURCHASE is redeemed
+    googleLinkUnlocked: false, // Google Account linking stays locked (known issue) until QAGOOGLELINK is redeemed
     teethSpentWeekKey: '',      // local week bucket (see getWeekKey) for the Teeth Spent leaderboard
     teethSpentThisWeek: 0,      // resets when teethSpentWeekKey rolls over — tracks spend, not earnings
     lastTeethSpendPayoutWeekKey: '', // most recent week this player's rebate has been settled for
@@ -7822,6 +7833,7 @@ const DEV_CODES = {
   // can't accidentally farm free Teeth/cash from what will eventually be actual paid purchases.
   // Redeem this ONLY on your own dev/QA devices.
   'QAPURCHASE':   { effect: () => { state.economy.realPurchasesUnlocked = true; }, desc: 'Unlocks real-money purchase buttons (testing only)' },
+  'QAGOOGLELINK': { effect: () => { state.economy.googleLinkUnlocked = true; }, desc: 'Unlocks Google Account linking — known issue in this build, dev/testing only' },
 };
 
 async function redeemDevCode(rawCode){
@@ -8043,14 +8055,22 @@ function renderHomeTab(){
       ${isGoogleLinked() ? `
         <div style="font-size:11px; color:var(--champ-teal); margin-top:6px;">✅ Linked as ${escapeHtml(_auth.currentUser.email || 'your Google account')}</div>
         <div style="font-size:11px; color:var(--text-muted); margin-top:4px;">Your progress survives reinstalls and works across any device you sign into.</div>
-      ` : `
+      ` : state.economy.googleLinkUnlocked ? `
         <div style="font-size:11px; color:var(--text-muted); margin-top:6px;">
           Right now your save only lives on this device — uninstalling or switching phones loses it.
-          Link a Google account to back it up for real, no downside: you keep playing exactly as
-          you are, this just adds a safety net.
+          Linking a Google account is the long-term plan for backing it up automatically, but that flow
+          has a known issue in the current build and may not complete. In the meantime, use the
+          <b>Sync Across Devices</b> code below — it does the same job (works right now, no Google
+          account needed) and takes 10 seconds.
         </div>
-        <button class="btn btn-teal btn-block" style="margin-top:8px;" data-link-google>Link Google Account</button>
+        <button class="btn btn-teal btn-block" style="margin-top:8px;" data-link-google>Link Google Account (known issue)</button>
         <button class="btn btn-ghost btn-block" style="margin-top:6px; font-size:11px;" data-check-google-link>🔄 Already linked? Check status</button>
+      ` : `
+        <div style="font-size:11px; color:var(--text-muted); margin-top:6px;">
+          Right now your save lives safely on this device — uninstalling or switching phones is the
+          only thing that would lose it. Use the <b>Sync Across Devices</b> code below any time you
+          want a backup or need to move to a new device — takes 10 seconds, no account needed.
+        </div>
       `}
     </div>
 
